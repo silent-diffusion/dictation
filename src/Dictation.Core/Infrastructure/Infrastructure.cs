@@ -73,7 +73,7 @@ public static class AppPaths
 
 public static class AppInfo
 {
-    public const string Name = "Local Dictation";
+    public const string Name = "Oberton";
     public const string Publisher = "silent-diffusion";
     public const string Repository = "silent-diffusion/dictation";
     public const string RepositoryUrl = "https://github.com/" + Repository;

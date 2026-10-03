@@ -1,0 +1,25 @@
+<!-- Oberton palette: dark. Keys must match the other palette file; use them with DynamicResource so the theme can switch at runtime. -->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <SolidColorBrush x:Key="Ob.Window" Color="#18181A"/> <!-- Page background -->
+    <SolidColorBrush x:Key="Ob.Sidebar" Color="#121214"/> <!-- Sidebar background -->
+    <SolidColorBrush x:Key="Ob.Card" Color="#222225"/> <!-- Cards and inputs -->
+    <SolidColorBrush x:Key="Ob.Border" Color="#34343A"/> <!-- Card and control outlines -->
+    <SolidColorBrush x:Key="Ob.Divider" Color="#2A2A2E"/> <!-- Lines inside cards -->
+    <SolidColorBrush x:Key="Ob.Text" Color="#EDEBE7"/> <!-- Body text -->
+    <SolidColorBrush x:Key="Ob.Muted" Color="#A39F98"/> <!-- Secondary text (4.5:1 on every background) -->
+    <SolidColorBrush x:Key="Ob.Strong" Color="#EDEBE7"/> <!-- Primary buttons, checked switches, active chips -->
+    <SolidColorBrush x:Key="Ob.OnStrong" Color="#18181A"/> <!-- Text on Ob.Strong -->
+    <SolidColorBrush x:Key="Ob.Subtle" Color="#2A2A2E"/> <!-- Status panel, slider tracks -->
+    <SolidColorBrush x:Key="Ob.Hover" Color="#232327"/> <!-- Hovered list rows -->
+    <SolidColorBrush x:Key="Ob.Selected" Color="#2C2C31"/> <!-- Selected list rows -->
+    <SolidColorBrush x:Key="Ob.Track" Color="#46464D"/> <!-- Unchecked switch track -->
+    <SolidColorBrush x:Key="Ob.Thumb" Color="#EDEBE7"/> <!-- Unchecked switch thumb -->
+    <SolidColorBrush x:Key="Ob.Mark" Color="#2C2C31"/> <!-- Background of the app mark -->
+    <SolidColorBrush x:Key="Ob.Record" Color="#E5533A"/> <!-- The record light: the only accent color -->
+    <SolidColorBrush x:Key="Ob.Ok" Color="#5BB57E"/> <!-- Ready status -->
+    <SolidColorBrush x:Key="Ob.Busy" Color="#E0A030"/> <!-- Starting / not ready status -->
+    <SolidColorBrush x:Key="Ob.Error" Color="#F97066"/> <!-- Error text -->
+    <SolidColorBrush x:Key="Ob.DiffRemoved" Color="#77736C"/> <!-- Words the AI removed (struck through) -->
+    <SolidColorBrush x:Key="Ob.DiffAdded" Color="#F4A68C"/> <!-- Words the AI added -->
+</ResourceDictionary>

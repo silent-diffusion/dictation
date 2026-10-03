@@ -11,7 +11,8 @@ using Dictation.Core.Settings;
 
 namespace Dictation.Core.Text;
 
-public sealed record ProcessResult(string Text, bool Modified, string? Warning);
+/// <param name="SafetyNet">True when the model's output was rejected as implausible and the raw text was kept.</param>
+public sealed record ProcessResult(string Text, bool Modified, string? Warning, bool SafetyNet = false);
 
 /// <summary>Turns a raw transcript into a processed one according to a profile. Backend-agnostic.</summary>
 public interface ITextProcessor
@@ -241,7 +242,7 @@ public sealed class OllamaTextProcessor : ITextProcessor
             {
                 Log.Warn($"Rejected model output ({reason}); using raw text for this part.");
                 return new ProcessResult(raw.Trim(), false,
-                    "The AI returned an unexpected result, so your original words were inserted unchanged.");
+                    "The AI's edit failed the safety net, so your original words were inserted unchanged.", SafetyNet: true);
             }
             output.Add(cleaned);
         }

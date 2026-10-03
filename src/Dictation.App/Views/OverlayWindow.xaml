@@ -3,37 +3,120 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         Topmost="True" ShowInTaskbar="False" ShowActivated="False" Focusable="False"
-        ResizeMode="NoResize" SizeToContent="Height" Width="600"
-        ThemeMode="None" Title="Dictation overlay">
-    <Border Margin="14" CornerRadius="16" Background="#F2202026" Padding="18,12,18,14"
-            BorderBrush="#33FFFFFF" BorderThickness="1">
+        ResizeMode="NoResize" SizeToContent="WidthAndHeight" UseLayoutRounding="True"
+        ThemeMode="None" Title="Oberton overlay" FontFamily="Segoe UI Variable Text, Segoe UI">
+    <!-- Always dark, whatever the app theme, so it reads on top of any window. Its background opacity is a setting. -->
+    <Window.Resources>
+        <Style x:Key="PillButton" TargetType="Button">
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="Background" Value="#1AFFFFFF"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="Height" Value="32"/>
+            <Setter Property="Padding" Value="14,0"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="16" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.85"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.7"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="AccentPill" TargetType="Button" BasedOn="{StaticResource PillButton}">
+            <Setter Property="Background" Value="#D9381E"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+        </Style>
+        <Style x:Key="OutlinePill" TargetType="Button" BasedOn="{StaticResource PillButton}">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderBrush" Value="#38FFFFFF"/>
+            <Setter Property="BorderThickness" Value="1"/>
+        </Style>
+        <Style x:Key="GhostPill" TargetType="Button" BasedOn="{StaticResource PillButton}">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="#C8FFFFFF"/>
+        </Style>
+    </Window.Resources>
+
+    <Border x:Name="Card" Margin="16" CornerRadius="28" Padding="18,8,8,8" Background="#E0161618"
+            BorderBrush="#1FFFFFFF" BorderThickness="1">
         <Border.Effect>
-            <DropShadowEffect BlurRadius="20" ShadowDepth="3" Opacity="0.5"/>
+            <DropShadowEffect BlurRadius="24" ShadowDepth="4" Opacity="0.35"/>
         </Border.Effect>
-        <StackPanel>
-            <Grid>
+        <StackPanel x:Name="Body" Width="440">
+            <Grid MinHeight="40">
                 <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-                <Ellipse x:Name="Dot" Width="10" Height="10" Fill="#FF5A5A" VerticalAlignment="Center" Margin="0,0,10,0"/>
-                <TextBlock x:Name="StatusText" Grid.Column="1" Foreground="White" FontSize="13" FontWeight="SemiBold"
-                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
-                <TextBlock x:Name="ProfileText" Grid.Column="2" Foreground="#B0FFFFFF" FontSize="12"
-                           VerticalAlignment="Center" Margin="12,0,8,0"/>
-                <StackPanel Grid.Column="3" Orientation="Horizontal">
-                    <Button x:Name="RawButton" Content="Insert original" Visibility="Collapsed"
-                            Padding="8,2" Margin="0,0,6,0" FontSize="11" Click="Raw_Click" Focusable="False"/>
-                    <Button x:Name="CancelButton" Content="✕" Width="26" Height="26" Padding="0"
-                            Click="Cancel_Click" Focusable="False" ToolTip="Cancel" Visibility="Collapsed"/>
-                </StackPanel>
+
+                <!-- Status indicator: one of these is visible at a time -->
+                <Grid x:Name="Indicator" Width="16" Height="16" VerticalAlignment="Center" Margin="0,0,12,0">
+                    <Ellipse x:Name="RecDot" Width="10" Height="10" Fill="#E5533A"/>
+                    <Grid x:Name="Spinner" Width="16" Height="16" RenderTransformOrigin="0.5,0.5" Visibility="Collapsed">
+                        <Grid.RenderTransform>
+                            <RotateTransform x:Name="SpinnerRotation"/>
+                        </Grid.RenderTransform>
+                        <Ellipse Width="14" Height="14" Stroke="#33FFFFFF" StrokeThickness="2"/>
+                        <Path Data="M 8,1 A 7,7 0 0 1 15,8" Stroke="White" StrokeThickness="2"
+                              StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                    </Grid>
+                    <Path x:Name="CheckIcon" Data="M 2.5,8.5 L 6.2,12 L 13.5,4.5" Stroke="White" StrokeThickness="1.8"
+                          StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Visibility="Collapsed"/>
+                    <Path x:Name="WarnIcon" Data="M 8,1.8 L 14.8,14 L 1.2,14 Z M 8,6.5 L 8,9.6 M 8,11.8 L 8,11.9"
+                          Stroke="#F4A68C" StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                          StrokeLineJoin="Round" Visibility="Collapsed"/>
+                </Grid>
+
+                <TextBlock x:Name="TitleText" Grid.Column="1" Foreground="White" FontSize="14" FontWeight="SemiBold"
+                           VerticalAlignment="Center"/>
+
+                <Grid Grid.Column="2" Margin="12,0" VerticalAlignment="Center">
+                    <StackPanel x:Name="Wave" Orientation="Horizontal" Height="28" Visibility="Collapsed"/>
+                    <TextBlock x:Name="SubtitleText" Foreground="#B3FFFFFF" FontSize="13" VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis"/>
+                    <StackPanel x:Name="Dots" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                Visibility="Collapsed"/>
+                </Grid>
+
+                <Border x:Name="Chip" Grid.Column="3" CornerRadius="12" BorderBrush="#2EFFFFFF" BorderThickness="1"
+                        Padding="10,3" VerticalAlignment="Center" Margin="0,0,8,0" Visibility="Collapsed">
+                    <TextBlock x:Name="ChipText" Foreground="#B8FFFFFF" FontSize="12"/>
+                </Border>
+
+                <Button x:Name="CancelButton" Grid.Column="4" Style="{StaticResource PillButton}" Width="36" Height="36"
+                        Padding="0" Click="Cancel_Click" ToolTip="Cancel" AutomationProperties.Name="Cancel dictation"
+                        Visibility="Collapsed">
+                    <Path Data="M 1,1 L 11,11 M 11,1 L 1,11" Stroke="White" StrokeThickness="1.6"
+                          StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                </Button>
             </Grid>
-            <TextBlock x:Name="TranscriptText" Foreground="White" FontSize="16" TextWrapping="Wrap"
-                       MaxHeight="96" Margin="0,8,0,0" LineHeight="22"/>
-            <ProgressBar x:Name="Level" Height="4" Minimum="0" Maximum="1" Margin="0,10,0,0" Foreground="#6FD16F"
-                         Background="#22FFFFFF" BorderThickness="0"/>
+
+            <TextBlock x:Name="BodyText" Foreground="White" FontSize="15" LineHeight="22" TextWrapping="Wrap"
+                       Margin="0,4,10,6" MaxHeight="112" Visibility="Collapsed"/>
+
+            <DockPanel x:Name="Actions" Margin="0,4,0,6" LastChildFill="False" Visibility="Collapsed">
+                <Button x:Name="InsertButton" Style="{StaticResource AccentPill}" Click="Insert_Click"/>
+                <Button Style="{StaticResource OutlinePill}" Content="Use original" Margin="8,0,0,0" Click="Raw_Click"/>
+                <Button DockPanel.Dock="Right" Style="{StaticResource GhostPill}" Content="Discard   Esc" Margin="0,0,4,0"
+                        Click="Cancel_Click"/>
+            </DockPanel>
         </StackPanel>
     </Border>
 </Window>

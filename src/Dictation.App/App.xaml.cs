@@ -48,9 +48,10 @@ public partial class App : Application
         };
         TaskScheduler.UnobservedTaskException += (_, a) => { Log.Error("Unobserved task exception", a.Exception); a.SetObserved(); };
 
-        Log.Info("=== Local Dictation starting ===");
+        Log.Info("=== Oberton starting ===");
         Services = new AppServices();
         var s = Services;
+        ThemeManager.Apply(s.Settings.Current.Theme);
 
         // First run (or an interrupted setup): download the runtimes and models before anything else.
         if (!RuntimeInstaller.IsInstalled)
@@ -76,10 +77,10 @@ public partial class App : Application
         s.Settings.Changed += OnSettingsChanged;
         s.Profiles.ActiveChanged += () =>
         {
-            _tray?.SetTooltip($"Local Dictation · {s.Profiles.Active.Name}");
+            _tray?.SetTooltip($"{AppInfo.Name} · {s.Profiles.Active.Name}");
             _ = s.Llm.WarmUpAsync(s.Profiles.Active.Model);
         };
-        _tray.SetTooltip($"Local Dictation · {s.Profiles.Active.Name}");
+        _tray.SetTooltip($"{AppInfo.Name} · {s.Profiles.Active.Name}");
         Autostart.Apply(s.Settings.Current.StartWithWindows);
 
         var minimized = e.Args.Contains("--minimized");
@@ -110,7 +111,7 @@ public partial class App : Application
             var info = await new UpdateService().CheckAsync();
             if (info == null) return;
             AvailableUpdate = info;
-            _overlay?.ShowMessage($"Local Dictation {info.Version.ToString(3)} is available. Open Settings > About & Updates to install it.", NoticeLevel.Info);
+            _overlay?.ShowMessage($"{AppInfo.Name} {info.Version.ToString(3)} is available. Open Settings > About & updates to install it.", NoticeLevel.Info);
         }
         catch (Exception ex) { Log.Warn("Startup update check failed: " + ex.Message); }
     }
@@ -129,6 +130,7 @@ public partial class App : Application
         var c = Services.Controller;
         var overlay = _overlay!;
         overlay.CancelRequested += () => c.Cancel();
+        overlay.InsertRequested += () => c.Toggle(); // in preview, the hotkey and the Insert button do the same thing
         overlay.InsertRawRequested += () => c.InsertRawInstead();
         c.StateChanged += state =>
         {
@@ -140,9 +142,11 @@ public partial class App : Application
             else Hotkeys.Unregister(HkEscape);
 
             if (!Services.Settings.Current.ShowOverlay && state != DictationState.Confirming) return;
-            overlay.ShowState(state, Services.Profiles.Active.Name, c.PreviewText);
+            var profile = Services.Profiles.Active;
+            var model = string.IsNullOrWhiteSpace(profile.Model) ? Services.Settings.Current.Llm.DefaultModel : profile.Model;
+            overlay.ShowState(state, profile.Name, c.PendingRaw, c.PreviewText, model);
         };
-        c.PartialTranscript += t => { if (Services.Settings.Current.ShowOverlay) overlay.SetTranscript(t); };
+        c.Inserted += r => { if (Services.Settings.Current.ShowOverlay) overlay.ShowReceipt(r); };
         c.AudioLevel += l => overlay.SetLevel(l);
         c.Notice += (msg, level) => overlay.ShowMessage(msg, level);
     }
@@ -157,8 +161,9 @@ public partial class App : Application
         if (e1 != null) errors.Add(e1);
         var e2 = Hotkeys.Register(HkCycle, st.CycleProfileHotkey, () =>
         {
-            Services.Profiles.CycleActive();
-            _overlay?.ShowMessage("Profile: " + Services.Profiles.Active.Name, NoticeLevel.Info);
+            var profiles = Services.Profiles;
+            profiles.CycleActive();
+            _overlay?.ShowProfile(profiles.Active.Name, profiles.Profiles.IndexOf(profiles.Active), profiles.Profiles.Count);
         });
         if (e2 != null) errors.Add(e2);
         HotkeyError = errors.Count == 0 ? null : string.Join("\n", errors);
@@ -174,6 +179,7 @@ public partial class App : Application
         var st = Services.Settings.Current;
         if (_lastHotkeys != st.Hotkey + "|" + st.CycleProfileHotkey) ApplyHotkeys();
         Autostart.Apply(st.StartWithWindows);
+        ThemeManager.Apply(st.Theme);
     }
 
     /// <summary>Called by the Speech page when the user presses "Apply and restart engine".</summary>
@@ -201,7 +207,7 @@ public partial class App : Application
         _ = Services.Speech.DisposeAsync();
         Services.OllamaHost.Stop();
         _main?.ForceClose();
-        Log.Info("=== Local Dictation exiting ===");
+        Log.Info("=== Oberton exiting ===");
         Shutdown();
     }
 }
@@ -213,6 +219,6 @@ static class ServiceExtensions
         Application.Current.Dispatcher.BeginInvoke(() =>
         {
             ((App)Application.Current).ShowMain();
-            System.Windows.MessageBox.Show(message, "Local Dictation", MessageBoxButton.OK, MessageBoxImage.Warning);
+            System.Windows.MessageBox.Show(message, AppInfo.Name, MessageBoxButton.OK, MessageBoxImage.Warning);
         });
 }

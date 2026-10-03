@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Media;
 using Dictation.Core.Infrastructure;
 using Dictation.Core.Setup;
 
@@ -10,19 +11,28 @@ public partial class SetupWindow : Window
     CancellationTokenSource? _cts;
     bool _running, _done;
 
+    public sealed record PlanItem(string Name, string What);
+
     public SetupWindow()
     {
         InitializeComponent();
         var gpu = RuntimeInstaller.HasNvidiaGpu();
         var (whisper, llm, _) = RuntimeInstaller.DefaultsFor(gpu);
-        Intro.Text =
-            "Local Dictation runs entirely on this computer. Before first use it needs to download its speech engine, " +
-            "AI runtime and models. This happens once; afterwards no internet connection is needed.";
-        HardwareText.Text = gpu ? "NVIDIA graphics card found — using GPU acceleration." : "No NVIDIA graphics card found — using the CPU.";
-        PlanText.Text =
-            $"Downloads about {RuntimeInstaller.EstimatedDownloadGb(gpu):0.#} GB into {AppPaths.Root}. " +
-            $"Speech model: {whisper}. AI model: {llm}." +
-            (gpu ? "" : " On the CPU, expect roughly 5–10 seconds of processing after each dictation. You can pick faster or more accurate models later in Settings.");
+        Intro.Text = "One download and you can talk into any app. After this, Oberton works offline: " +
+                     "no accounts, no cloud, no telemetry.";
+        HardwareText.Text = gpu
+            ? "NVIDIA graphics card found, so speech runs on the GPU."
+            : "No NVIDIA graphics card found, so speech runs on the CPU (a few seconds slower).";
+        if (!gpu) HardwareIcon.Data = Geometry.Parse("M 9,3 L 9,10.5 M 9,14 L 9,14.1"); // an "i"-style note instead of a check
+        if (!gpu) HardwareIcon.SetResourceReference(System.Windows.Shapes.Shape.StrokeProperty, "Ob.Muted");
+        PlanList.ItemsSource = new[]
+        {
+            new PlanItem("Speech engine", gpu ? "faster-whisper + CUDA runtime" : "faster-whisper"),
+            new PlanItem("Speech model", whisper),
+            new PlanItem("Cleanup model", llm + " via Ollama"),
+        };
+        PlanText.Text = $"About {RuntimeInstaller.EstimatedDownloadGb(gpu):0.#} GB in total, saved to {AppPaths.Root}." +
+                        (gpu ? "" : " On the CPU, expect roughly 5–10 seconds of processing after each dictation.");
         if (File.Exists(AppPaths.PythonExe) || File.Exists(AppPaths.OllamaExe))
             StartButton.Content = "Continue setup";
     }
@@ -53,7 +63,7 @@ public partial class SetupWindow : Window
             DetailText.Text = $"Press {App.Services.Settings.Current.Hotkey} in any app to start dictating, and press it again to stop.";
             Bar.IsIndeterminate = false;
             Bar.Value = 1;
-            StartButton.Content = "Start using Local Dictation";
+            StartButton.Content = "Start using Oberton";
             StartButton.IsEnabled = true;
             CancelButton.Visibility = Visibility.Collapsed;
         }
