@@ -2,7 +2,7 @@ using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
-using System.Windows.Media;
+using System.Windows.Shapes;
 using System.Windows.Threading;
 using Dictation.Core.Settings;
 
@@ -19,6 +19,8 @@ public partial class MainWindow : Window
         DataContext = s.Status;
         s.Status.PropertyChanged += (_, _) => UpdateDots();
         UpdateDots();
+        s.Settings.Changed += UpdateCycleHint;
+        UpdateCycleHint();
         ProfileList.ItemsSource = s.Profiles.Profiles;
         ProfileList.SelectedItem = s.Profiles.Active;
         s.Profiles.Profiles.CollectionChanged += (_, e) =>
@@ -34,8 +36,15 @@ public partial class MainWindow : Window
     void UpdateDots()
     {
         var s = App.Services.Status;
-        SpeechDot.Fill = new SolidColorBrush(s.SpeechOk ? Color.FromRgb(0x4C, 0xAF, 0x50) : Color.FromRgb(0xE0, 0xA0, 0x30));
-        AiDot.Fill = new SolidColorBrush(s.AiOk ? Color.FromRgb(0x4C, 0xAF, 0x50) : Color.FromRgb(0xE0, 0xA0, 0x30));
+        // Resource references (not brushes) so the dots follow a theme switch.
+        SpeechDot.SetResourceReference(Shape.FillProperty, s.SpeechOk ? "Ob.Ok" : "Ob.Busy");
+        AiDot.SetResourceReference(Shape.FillProperty, s.AiOk ? "Ob.Ok" : "Ob.Busy");
+    }
+
+    void UpdateCycleHint()
+    {
+        var hotkey = App.Services.Settings.Current.CycleProfileHotkey;
+        CycleHint.Text = string.IsNullOrEmpty(hotkey) ? "" : hotkey + " cycles";
     }
 
     void ProfileList_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -52,6 +61,7 @@ public partial class MainWindow : Window
         Host.Content = item.Tag switch
         {
             "General" => new GeneralPage(),
+            "Appearance" => new AppearancePage(),
             "Hotkeys" => new HotkeysPage(),
             "Speech" => new SpeechPage(),
             "Models" => new ModelsPage(),

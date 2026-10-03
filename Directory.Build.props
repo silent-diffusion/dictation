@@ -2,7 +2,7 @@
   <!-- Release builds override Version from the git tag (e.g. v1.2.0 -> 1.2.0). -->
   <PropertyGroup>
     <Version>1.0.0</Version>
-    <Product>Local Dictation</Product>
+    <Product>Oberton</Product>
     <Company>silent-diffusion</Company>
     <Authors>silent-diffusion</Authors>
     <Copyright>Copyright (c) 2026 silent-diffusion</Copyright>

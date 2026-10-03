@@ -4,6 +4,9 @@ namespace Dictation.Core.Settings;
 
 public enum InsertionMode { Auto, Typing, Clipboard }
 
+/// <summary>System follows the Windows app theme; Light and Dark override it.</summary>
+public enum AppTheme { System, Light, Dark }
+
 public sealed class AsrSettings
 {
     public string Engine { get; set; } = "faster-whisper";
@@ -40,6 +43,9 @@ public sealed class AppSettings
     public bool StartWithWindows { get; set; }
     public bool MinimizeToTray { get; set; } = true;
     public bool ShowOverlay { get; set; } = true;
+    public AppTheme Theme { get; set; } = AppTheme.System;
+    /// <summary>Opacity of the overlay's background (its text stays fully opaque). 0.6 to 1.</summary>
+    public double OverlayOpacity { get; set; } = 0.88;
     public InsertionMode Insertion { get; set; } = InsertionMode.Auto;
     /// <summary>In Auto mode, text longer than this (or containing line breaks) is pasted instead of typed.</summary>
     public int TypingMaxChars { get; set; } = 400;

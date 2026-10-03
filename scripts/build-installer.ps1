@@ -1,4 +1,4 @@
-# Builds dist\LocalDictation-Setup-<version>.exe locally - the same thing the Release GitHub Action does.
+# Builds dist\Oberton-Setup-<version>.exe locally - the same thing the Release GitHub Action does.
 # Uses a portable Inno Setup in tools\inno (downloaded on first use).
 param([string]$Version = "1.0.0")
 $ErrorActionPreference = "Stop"
@@ -18,4 +18,4 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Copy-Item "$root\inference" "$pub\inference" -Recurse
 Get-ChildItem "$pub\inference" -Recurse -Directory -Filter __pycache__ | Remove-Item -Recurse -Force
 & $iscc "/DMyAppVersion=$Version" "/DSourceDir=..\publish" "$root\installer\LocalDictation.iss" | Select-Object -Last 3
-Write-Host "Installer: $root\dist\LocalDictation-Setup-$Version.exe"
+Write-Host "Installer: $root\dist\Oberton-Setup-$Version.exe"

@@ -5,7 +5,7 @@ $appHome = if ($env:DICTATION_ROOT) { $env:DICTATION_ROOT } else { "$env:LOCALAP
 $env:OLLAMA_MODELS = "$appHome\models\ollama"
 $env:OLLAMA_HOST = "127.0.0.1:11435"
 $ollama = "$appHome\runtime\ollama\ollama.exe"
-if (-not (Test-Path $ollama)) { throw "Ollama not found at $ollama - start Local Dictation once to finish its setup." }
+if (-not (Test-Path $ollama)) { throw "Ollama not found at $ollama - start Oberton once to finish its setup." }
 $running = $false
 try { Invoke-RestMethod "http://127.0.0.1:11435/api/version" | Out-Null; $running = $true } catch {}
 $p = $null

@@ -24,6 +24,15 @@ public sealed class SessionRecord
     public string Summary => $"{Time:HH:mm:ss}  {ProfileName}  ·  {Target}";
 }
 
+/// <summary>What happened to a dictation that was inserted, for the overlay's receipt.</summary>
+/// <param name="Elapsed">From the stop press until the text was in place.</param>
+/// <param name="SafetyNet">The AI's edit was rejected by the profile's safety net, so the raw text was inserted.</param>
+public sealed record InsertReceipt(string Raw, string Inserted, TimeSpan Elapsed, bool SafetyNet)
+{
+    public int Words => Inserted.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
+    public bool Edited => Inserted != Raw;
+}
+
 /// <summary>
 /// The dictation state machine: hotkey → mic → recognizer → (LLM) → insert.
 /// Must be used from the UI thread (it awaits on the captured context so clipboard access stays on an STA thread).
@@ -38,23 +47,31 @@ public sealed class DictationController
     readonly SettingsService _settings;
     readonly ProfileService _profiles;
     readonly Stopwatch _recordClock = new();
+    readonly Stopwatch _finishClock = new();
     CancellationTokenSource? _sessionCts;
     CancellationTokenSource? _maxDuration;
     InsertionTarget _target = InsertionTarget.Capture();
     string _pendingProcessed = "";
     string _pendingRaw = "";
     SessionRecord? _pendingRecord;
+    bool _pendingSafetyNet;
     bool _micWarned;
 
     public DictationState State { get; private set; } = DictationState.Idle;
     public string LivePartial { get; private set; } = "";
     public string PreviewText => _pendingProcessed;
+    /// <summary>The raw transcript of the dictation being cleaned up or previewed.</summary>
+    public string PendingRaw => _pendingRaw;
+    /// <summary>How long the current (or last) recording ran.</summary>
+    public TimeSpan RecordingTime => _recordClock.Elapsed;
     public ObservableCollection<SessionRecord> History { get; } = new();
 
     public event Action<DictationState>? StateChanged;
     public event Action<string>? PartialTranscript;
     public event Action<float>? AudioLevel;
     public event Action<string, NoticeLevel>? Notice;
+    /// <summary>Raised after text was inserted, once the state is back to Idle.</summary>
+    public event Action<InsertReceipt>? Inserted;
 
     public DictationController(IAudioCapture mic, ISpeechRecognizer asr, ITextProcessor llm, TextInserter inserter,
         SettingsService settings, ProfileService profiles)
@@ -153,6 +170,8 @@ public sealed class DictationController
     {
         _maxDuration?.Cancel();
         _mic.Stop();
+        _recordClock.Stop();
+        _finishClock.Restart();
         var ct = _sessionCts?.Token ?? CancellationToken.None;
         SetState(DictationState.Transcribing);
 
@@ -166,6 +185,8 @@ public sealed class DictationController
 
         var profile = _profiles.Active;
         var processed = raw;
+        _pendingRaw = raw;
+        _pendingSafetyNet = false;
         if (profile.AutoProcess)
         {
             SetState(DictationState.Processing);
@@ -173,7 +194,9 @@ public sealed class DictationController
             {
                 var result = await _llm.ProcessAsync(raw, profile, ct);
                 processed = result.Text;
-                if (result.Warning != null) Notice?.Invoke(result.Warning, NoticeLevel.Warning);
+                // A safety-net rejection is reported on the receipt instead of as a separate notice.
+                if (result.SafetyNet) _pendingSafetyNet = true;
+                else if (result.Warning != null) Notice?.Invoke(result.Warning, NoticeLevel.Warning);
             }
             catch (UserFacingException e)
             {
@@ -193,6 +216,7 @@ public sealed class DictationController
 
         if (profile.ShowPreview)
         {
+            _finishClock.Stop(); // time spent reading the preview isn't processing time
             SetState(DictationState.Confirming);
             return;
         }
@@ -213,10 +237,12 @@ public sealed class DictationController
     {
         SetState(DictationState.Inserting);
         var rec = _pendingRecord;
+        InsertReceipt? receipt = null;
         try
         {
             await _inserter.InsertAsync(text, _target, _sessionCts?.Token ?? CancellationToken.None);
             if (rec != null) { rec.Processed = text; rec.Inserted = true; }
+            receipt = new InsertReceipt(_pendingRaw, text, _finishClock.Elapsed, _pendingSafetyNet);
         }
         catch (UserFacingException e)
         {
@@ -233,8 +259,10 @@ public sealed class DictationController
             }
             _pendingRecord = null;
             _pendingProcessed = _pendingRaw = "";
+            _pendingSafetyNet = false;
             SetState(DictationState.Idle);
         }
+        if (receipt != null) Inserted?.Invoke(receipt);
     }
 
     /// <summary>Esc / ✕: abandon whatever is in progress without inserting anything.</summary>

@@ -1,30 +1,62 @@
 <Window x:Class="Dictation.App.Views.SetupWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Local Dictation – Setup" Width="620" SizeToContent="Height" ResizeMode="NoResize"
-        WindowStartupLocation="CenterScreen">
-    <StackPanel Margin="32,28,32,28">
-        <TextBlock Text="Welcome to Local Dictation" FontSize="24" FontWeight="SemiBold"/>
-        <TextBlock x:Name="Intro" TextWrapping="Wrap" Margin="0,10,0,0" Opacity="0.85"/>
+        Title="Oberton setup" Width="640" SizeToContent="Height" ResizeMode="NoResize"
+        WindowStartupLocation="CenterScreen" Background="{DynamicResource Ob.Window}"
+        FontFamily="{StaticResource Ob.Ui}">
+    <StackPanel Margin="44,40,44,32" TextElement.Foreground="{DynamicResource Ob.Text}">
+        <Border Width="44" Height="44" CornerRadius="12" Background="{DynamicResource Ob.Mark}" HorizontalAlignment="Left">
+            <Ellipse Width="12" Height="12" Fill="{DynamicResource Ob.Record}"/>
+        </Border>
+        <TextBlock Text="Dictation that never leaves your PC" FontSize="28" FontWeight="SemiBold" Margin="0,18,0,0"
+                   TextWrapping="Wrap"/>
+        <TextBlock x:Name="Intro" TextWrapping="Wrap" FontSize="15" LineHeight="22" Margin="0,8,0,0"
+                   Foreground="{DynamicResource Ob.Muted}"/>
 
-        <Border Margin="0,18,0,0" Padding="14" CornerRadius="8" BorderThickness="1" BorderBrush="#33808080">
+        <Border Style="{StaticResource Card}" Margin="0,24,0,0">
             <StackPanel>
-                <TextBlock x:Name="HardwareText" FontWeight="SemiBold"/>
-                <TextBlock x:Name="PlanText" TextWrapping="Wrap" Margin="0,6,0,0" Opacity="0.8"/>
+                <DockPanel Margin="18,14">
+                    <Path x:Name="HardwareIcon" Data="M 2.5,9.5 L 6.5,13.5 L 15,4.5" Stroke="{DynamicResource Ob.Ok}"
+                          StrokeThickness="1.8" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                          Width="18" Height="18" Margin="0,0,12,0" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="HardwareText" FontSize="14" TextWrapping="Wrap" VerticalAlignment="Center"/>
+                </DockPanel>
+                <ItemsControl x:Name="PlanList" Focusable="False">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border BorderBrush="{DynamicResource Ob.Divider}" BorderThickness="0,1,0,0" Padding="18,11">
+                                <StackPanel>
+                                    <TextBlock Text="{Binding Name}" FontSize="14"/>
+                                    <TextBlock Text="{Binding What}" Style="{StaticResource MonoLabel}" FontSize="12" Margin="0,2,0,0"/>
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <Border x:Name="ProgressPanel" BorderBrush="{DynamicResource Ob.Divider}" BorderThickness="0,1,0,0"
+                        Padding="18,14" Visibility="Collapsed">
+                    <StackPanel>
+                        <TextBlock x:Name="StepText" FontSize="13" FontWeight="SemiBold"/>
+                        <ProgressBar x:Name="Bar" Height="6" Margin="0,8,0,0" Minimum="0" Maximum="1"/>
+                        <TextBlock x:Name="DetailText" Margin="0,6,0,0" FontSize="12" TextWrapping="Wrap"
+                                   Foreground="{DynamicResource Ob.Muted}"/>
+                    </StackPanel>
+                </Border>
             </StackPanel>
         </Border>
 
-        <StackPanel x:Name="ProgressPanel" Margin="0,20,0,0" Visibility="Collapsed">
-            <TextBlock x:Name="StepText" FontWeight="SemiBold"/>
-            <ProgressBar x:Name="Bar" Height="8" Margin="0,8,0,0" Minimum="0" Maximum="1"/>
-            <TextBlock x:Name="DetailText" Margin="0,6,0,0" Opacity="0.7" TextWrapping="Wrap"/>
-        </StackPanel>
+        <TextBlock x:Name="ErrorText" Margin="0,16,0,0" TextWrapping="Wrap" Foreground="{DynamicResource Ob.Error}"
+                   Visibility="Collapsed"/>
 
-        <TextBlock x:Name="ErrorText" Margin="0,16,0,0" TextWrapping="Wrap" Foreground="IndianRed" Visibility="Collapsed"/>
-
-        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,24,0,0">
-            <Button x:Name="CancelButton" Content="Quit" Padding="18,7" Margin="0,0,10,0" Click="Cancel_Click"/>
-            <Button x:Name="StartButton" Content="Download and set up" Padding="18,7" Click="Start_Click" IsDefault="True"/>
-        </StackPanel>
+        <DockPanel Margin="0,24,0,0">
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0,0,0">
+                <Button x:Name="CancelButton" Content="Quit" Style="{StaticResource QuietButton}" MinHeight="40" Margin="0,0,10,0"
+                        Click="Cancel_Click"/>
+                <Button x:Name="StartButton" Content="Set up" Style="{StaticResource PrimaryButton}" MinHeight="40"
+                        Click="Start_Click" IsDefault="True"/>
+            </StackPanel>
+            <TextBlock x:Name="PlanText" TextWrapping="Wrap" FontSize="12" VerticalAlignment="Center"
+                       Foreground="{DynamicResource Ob.Muted}"/>
+        </DockPanel>
     </StackPanel>
 </Window>

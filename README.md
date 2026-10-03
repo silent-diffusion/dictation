@@ -1,6 +1,8 @@
-# Local Dictation
+# Oberton
 
-A fully local, AI-assisted dictation app for Windows.
+A fully local, AI-assisted dictation app for Windows. (Formerly *Local Dictation*.)
+
+The name is German for *overtone*: the AI adds a layer of polish on top of your own voice.
 
 **Press a hotkey → speak → press it again → cleaned-up text appears at your cursor, in any app.**
 
@@ -12,7 +14,7 @@ A fully local, AI-assisted dictation app for Windows.
 
 ## Install
 
-1. Download **`LocalDictation-Setup-x.y.z.exe`** from the [latest release](https://github.com/silent-diffusion/dictation/releases/latest).
+1. Download **`Oberton-Setup-x.y.z.exe`** from the [latest release](https://github.com/silent-diffusion/dictation/releases/latest).
 2. Run it. Windows may show *"Windows protected your PC"* because the installer isn't code-signed yet - click **More info → Run anyway**.
    No administrator rights are needed; it installs just for your user account.
 3. On first launch the app downloads its speech engine, AI runtime and models (one time, needs internet):
@@ -31,11 +33,11 @@ The app lives in the system tray; closing the window keeps it running.
 ### Updating
 
 *Settings → About & Updates → Check for updates* (or the tray menu). If there's a newer release it downloads the installer
-and updates in place; your settings, profiles and downloaded models are kept. You can also turn on *Check for updates when Local Dictation starts*.
+and updates in place; your settings, profiles and downloaded models are kept. You can also turn on *Check for updates when Oberton starts*.
 
 ### Uninstalling
 
-*Windows Settings → Apps → Local Dictation → Uninstall*. You'll be asked whether to also delete the downloaded models and settings.
+*Windows Settings → Apps → Oberton → Uninstall*. You'll be asked whether to also delete the downloaded models and settings.
 
 ### Where things are
 
@@ -46,15 +48,20 @@ and updates in place; your settings, profiles and downloaded models are kept. Yo
 | `%LOCALAPPDATA%\LocalDictation\models` | Whisper and language models |
 | `%LOCALAPPDATA%\LocalDictation\data` | `settings.json`, `profiles.json`, `logs\` |
 
+The folder keeps its pre-rename name so updates from Local Dictation 1.x keep your models and settings.
+
 ---
 
 ## Using it
 
 * **Hotkey** (default `Ctrl+Space`, change under *Hotkeys*): start/stop. `Ctrl+Alt+P` cycles profiles.
-* **Overlay**: bottom-center, always on top, never steals focus. Shows status, live raw transcript, mic level, active profile. `✕` cancels.
+* **Overlay**: a pill at the bottom center of the screen, always on top, never steals focus. Small while you talk (timer, level meter, active profile, `✕` cancels);
+  it grows to show your transcript while the AI tidies it, then shows a short receipt with the AI's edits (removed words struck through).
+  If the safety net rejects the AI's edit, the receipt says so. Its opacity is a setting under *Appearance*.
+* **Appearance**: follows the Windows light/dark setting, or pick Light or Dark.
 * **Profiles** (sidebar): *Light Cleanup*, *Grammar & Clarity*, *Natural Phrasing*, *Custom*, plus your own. Edit the prompt, pick a model, toggle
-  *auto-process*, *show processed text before inserting* (hotkey inserts, `Esc` discards, "Insert original" inserts raw), *preserve paragraphs*, *remove fillers*.
-  The **Try it** box runs a profile on sample text so you can tune prompts without dictating.
+  *auto-process*, *preview before inserting* (shows the edits; hotkey or *Insert* inserts, `Esc` discards, *Use original* inserts raw), *preserve paragraphs*, *remove fillers*.
+  The **Try it** panel runs a profile on sample text and shows what it changed, so you can tune prompts without dictating.
 * **History**: the last 25 dictations, raw next to processed, in memory only. "Insert raw into the last app" is the manual undo-to-raw.
 * If the AI fails, is unreachable, or returns something implausible (empty, summarised, rambling), your **raw words are inserted instead** - dictation is never lost.
 
@@ -144,7 +151,7 @@ Test hooks: `DICTATION_FAKE_AUDIO=<16 kHz mono wav>` speaks a file instead of th
 git tag v1.2.3
 git push origin v1.2.3
 ```
-The *Release* workflow tests, builds `LocalDictation-Setup-1.2.3.exe` and publishes the GitHub release. Installed copies see it under *Check for updates*.
+The *Release* workflow tests, builds `Oberton-Setup-1.2.3.exe` and publishes the GitHub release. Installed copies see it under *Check for updates*.
 
 ---
 
@@ -162,7 +169,7 @@ With more VRAM, `qwen3:4b-instruct-2507-q4_K_M` gives noticeably better edits.
 |---|---|
 | First-run setup fails | check your internet connection and click *Continue setup* - it resumes where it stopped |
 | Hotkey does nothing / overlay says "already used" | another app owns the shortcut → *Hotkeys* page, pick another |
-| Text isn't inserted into an elevated (admin) app | Windows blocks input between privilege levels → run Local Dictation as administrator too |
+| Text isn't inserted into an elevated (admin) app | Windows blocks input between privilege levels → run Oberton as administrator too |
 | Cleanup is slow | see the GPU memory guide above |
 | Mic meter flat | *Audio* page → pick another mic; Windows *Privacy & security → Microphone* must allow desktop apps |
 | Anything else | `%LOCALAPPDATA%\LocalDictation\data\logs\dictation.log` (*Advanced → Open logs*) |

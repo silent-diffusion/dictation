@@ -1,10 +1,11 @@
-; Inno Setup script for Local Dictation.
+; Inno Setup script for Oberton (formerly Local Dictation).
 ; Build: scripts\build-installer.ps1 (locally) or the Release GitHub Action (on a v* tag).
 ; Installs per-user (no admin prompt) to %LOCALAPPDATA%\LocalDictation\app. Runtimes, models and settings live
 ; next to it in %LOCALAPPDATA%\LocalDictation and are downloaded by the app on first launch, so updates are small
-; and keep everything the user has set up.
+; and keep everything the user has set up. The folder, exe and AppId keep their pre-rename names
+; so that updating from Local Dictation 1.x replaces it in place.
 
-#define MyAppName "Local Dictation"
+#define MyAppName "Oberton"
 #define MyAppExe "LocalDictation.exe"
 #ifndef MyAppVersion
   #define MyAppVersion "1.0.0"
@@ -29,7 +30,7 @@ DisableProgramGroupPage=yes
 DefaultGroupName={#MyAppName}
 PrivilegesRequired=lowest
 OutputDir=..\dist
-OutputBaseFilename=LocalDictation-Setup-{#MyAppVersion}
+OutputBaseFilename=Oberton-Setup-{#MyAppVersion}
 SetupIconFile=..\src\Dictation.App\Assets\app.ico
 UninstallDisplayIcon={app}\{#MyAppExe}
 UninstallDisplayName={#MyAppName}
@@ -53,6 +54,9 @@ Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription
 [InstallDelete]
 ; Remove files from the previous version so nothing stale is left behind (settings/models live elsewhere).
 Type: filesandordirs; Name: "{app}\*"
+; Shortcuts from before the rename to Oberton.
+Type: files; Name: "{autoprograms}\Local Dictation.lnk"
+Type: files; Name: "{autodesktop}\Local Dictation.lnk"
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "__pycache__\*,*.pdb"

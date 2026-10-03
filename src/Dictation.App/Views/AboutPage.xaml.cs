@@ -60,7 +60,7 @@ public partial class AboutPage : UserControl
         try
         {
             var path = await _updates.DownloadAsync(_info, new Progress<double>(f => Bar.Value = f));
-            StatusText.Text = "Installing… Local Dictation will restart by itself.";
+            StatusText.Text = "Installing… Oberton will restart by itself.";
             UpdateService.LaunchInstaller(path);
             await Task.Delay(800);
             ((App)Application.Current).Quit();
