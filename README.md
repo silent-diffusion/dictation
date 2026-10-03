@@ -63,7 +63,8 @@ The folder keeps its pre-rename name so updates from Local Dictation 1.x keep yo
   dictated mid-sentence isn't capitalized or given a period, and missing spaces are added. Works in apps that expose their text
   (Word, browsers, most text boxes); turn it off under *Settings › General*. That text is never stored, logged or sent to the AI.
 * **Type as you speak**: finished sentences appear in the app about every 5 seconds while you talk (cleaned up piece by piece).
-  When you press the hotkey again, the whole recording is transcribed and cleaned in one final pass that replaces them. The
+  Each piece is transcribed once; when you press the hotkey again, only the speech after the last piece is transcribed, and
+  the AI cleans up all the pieces together in one final pass that replaces them. The
   replacement only happens after Oberton confirms, through Windows accessibility, that the text before the cursor is exactly
   what it typed; otherwise that text is kept and only the rest is added. `Esc` takes the typed text back the same way.
   Turn it off under *Settings › General*; profiles that preview before inserting don't use it.

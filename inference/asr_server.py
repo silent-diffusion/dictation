@@ -270,18 +270,20 @@ class Session:
             np.save(os.environ["DICTATION_DEBUG_DUMP"], audio)
         text = tail = ""
         loop = asyncio.get_running_loop()
-        if len(audio) >= SAMPLE_RATE * 0.3:
+        rest = audio[self.committed:]
+        if self.live and self.committed:
+            # Live mode: the committed pieces are already transcribed, so only the speech after the last one is
+            # decoded. The final transcript is those pieces plus this tail; nothing is transcribed twice.
+            if len(rest) >= SAMPLE_RATE * 0.3:
+                prompt = " ".join(p for p in (self.prompt, self.committed_text[-200:]) if p) or None
+                async with self.gpu_lock:
+                    tail = await loop.run_in_executor(None, self.engine.transcribe, rest, True, self.language, prompt)
+            text = (self.committed_text + " " + tail).strip()
+        elif len(audio) >= SAMPLE_RATE * 0.3:
             async with self.gpu_lock:
                 text = await loop.run_in_executor(
                     None, self.engine.transcribe, audio, True, self.language, self.prompt)
-        rest = audio[self.committed:]
-        if self.live and self.committed and len(rest) >= SAMPLE_RATE * 0.3:
-            # Live mode: also the speech after the last committed piece, in case the app can't run the final pass.
-            prompt = " ".join(p for p in (self.prompt, self.committed_text[-200:]) if p) or None
-            async with self.gpu_lock:
-                tail = await loop.run_in_executor(None, self.engine.transcribe, rest, True, self.language, prompt)
-        elif self.live and not self.committed:
-            tail = text
+            tail = text if self.live else ""
         secs = len(audio) / SAMPLE_RATE
         self.chunks, self.samples, self.committed = [], 0, 0  # discard audio
         await self.send({"type": "final", "text": text, "tail": tail, "seconds": round(secs, 2),
