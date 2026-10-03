@@ -10,6 +10,30 @@
             <Setter Property="BorderBrush" Value="#33808080"/>
             <Setter Property="ClipToBounds" Value="True"/>
         </Style>
+        <!-- One spot on the miniature screen of the position picker -->
+        <Style x:Key="PositionCell" TargetType="RadioButton">
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Grid Background="Transparent">
+                            <Border x:Name="Pill" Width="34" Height="10" CornerRadius="5" Background="{DynamicResource Ob.Track}"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Pill" Property="Background" Value="{DynamicResource Ob.Muted}"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Pill" Property="Background" Value="{DynamicResource Ob.Strong}"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="Pill" Property="Width" Value="40"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </UserControl.Resources>
     <ScrollViewer VerticalScrollBarVisibility="Auto">
         <StackPanel Margin="40,32,40,40" MaxWidth="820" HorizontalAlignment="Left">
@@ -97,8 +121,37 @@
                         <Slider x:Name="OpacitySlider" Minimum="0.6" Maximum="1" Value="{Binding OverlayOpacity}"
                                 TickFrequency="0.02" IsSnapToTickEnabled="True" Margin="0,6,0,10"
                                 AutomationProperties.Name="Overlay opacity"/>
+                        <Border Style="{StaticResource Divider}" Margin="0,2,0,12"/>
+                        <DockPanel>
+                            <TextBlock x:Name="PositionName" DockPanel.Dock="Right" FontSize="12" Foreground="{DynamicResource Ob.Muted}"/>
+                            <TextBlock Text="Position"/>
+                        </DockPanel>
+                        <!-- A miniature screen; click where the overlay should sit -->
+                        <Border Width="220" Height="124" Margin="0,8,0,12" HorizontalAlignment="Left" CornerRadius="8"
+                                BorderThickness="1" BorderBrush="{DynamicResource Ob.Border}" Background="{DynamicResource Ob.Window}">
+                            <UniformGrid x:Name="PositionGrid" Rows="3" Columns="3" Margin="4" AutomationProperties.Name="Overlay position">
+                                <RadioButton GroupName="Position" Style="{StaticResource PositionCell}" Tag="TopLeft" ToolTip="Top left"
+                                             AutomationProperties.Name="Top left" Checked="Position_Checked"/>
+                                <RadioButton GroupName="Position" Style="{StaticResource PositionCell}" Tag="TopCenter" ToolTip="Top center"
+                                             AutomationProperties.Name="Top center" Checked="Position_Checked"/>
+                                <RadioButton GroupName="Position" Style="{StaticResource PositionCell}" Tag="TopRight" ToolTip="Top right"
+                                             AutomationProperties.Name="Top right" Checked="Position_Checked"/>
+                                <RadioButton GroupName="Position" Style="{StaticResource PositionCell}" Tag="MiddleLeft" ToolTip="Middle left"
+                                             AutomationProperties.Name="Middle left" Checked="Position_Checked"/>
+                                <RadioButton GroupName="Position" Style="{StaticResource PositionCell}" Tag="Center" ToolTip="Center"
+                                             AutomationProperties.Name="Center" Checked="Position_Checked"/>
+                                <RadioButton GroupName="Position" Style="{StaticResource PositionCell}" Tag="MiddleRight" ToolTip="Middle right"
+                                             AutomationProperties.Name="Middle right" Checked="Position_Checked"/>
+                                <RadioButton GroupName="Position" Style="{StaticResource PositionCell}" Tag="BottomLeft" ToolTip="Bottom left"
+                                             AutomationProperties.Name="Bottom left" Checked="Position_Checked"/>
+                                <RadioButton GroupName="Position" Style="{StaticResource PositionCell}" Tag="BottomCenter" ToolTip="Bottom center"
+                                             AutomationProperties.Name="Bottom center" Checked="Position_Checked"/>
+                                <RadioButton GroupName="Position" Style="{StaticResource PositionCell}" Tag="BottomRight" ToolTip="Bottom right"
+                                             AutomationProperties.Name="Bottom right" Checked="Position_Checked"/>
+                            </UniformGrid>
+                        </Border>
                         <TextBlock Style="{StaticResource Caption}" FontSize="12" Margin="0"
-                                   Text="The overlay sits at the bottom center of the screen. It stays dark in both themes so it reads on top of any window. The preview approval always shows, even with the overlay off."/>
+                                   Text="The overlay stays dark in both themes so it reads on top of any window. The preview approval always shows, even with the overlay off."/>
                     </StackPanel>
 
                     <!-- Live preview of the pill over some placeholder text -->

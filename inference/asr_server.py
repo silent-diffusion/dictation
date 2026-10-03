@@ -54,6 +54,9 @@ log = logging.getLogger("asr")
 SAMPLE_RATE = 16000
 
 
+MIN_SPEECH_SECONDS = 0.3  # less speech than this after the VAD counts as "nothing was said"
+
+
 def has_content(text):
     return any(c.isalnum() for c in text)
 
@@ -101,7 +104,8 @@ class FasterWhisperEngine:
         raise RuntimeError(f"Speech model could not be loaded: {last}")
 
     def _decode(self, audio, beam, vad, language, prompt, temperature):
-        segs, _ = self.model.transcribe(
+        """Returns (text, seconds of speech the VAD kept, or None when the VAD was off)."""
+        segs, info = self.model.transcribe(
             audio,
             language=language or None,
             beam_size=beam,
@@ -111,15 +115,21 @@ class FasterWhisperEngine:
             initial_prompt=prompt or None,
             temperature=temperature,
         )
-        return " ".join(s.text.strip() for s in segs).strip()
+        text = " ".join(s.text.strip() for s in segs).strip()
+        return text, (getattr(info, "duration_after_vad", None) if vad else None)
 
     def transcribe(self, audio, final, language, prompt):
-        text = clean(self._decode(audio, 5 if final else 1, True, language, prompt, [0.0, 0.2, 0.4]))
+        raw, speech = self._decode(audio, 5 if final else 1, True, language, prompt, [0.0, 0.2, 0.4])
+        text = clean(raw)
+        if speech is not None and speech < MIN_SPEECH_SECONDS:
+            # The VAD heard no speech. Decoding anyway (or retrying without the VAD) is exactly how Whisper
+            # produces phantom "Thank you." / "Thanks for watching." on silence, so return nothing.
+            return ""
         if final and not has_content(text):
             # Whisper sometimes emits only "..." on long/odd audio. Retry without VAD / with different decoding,
             # and as a last resort return nothing rather than junk.
             for beam, vad in ((1, False), (5, False)):
-                text = clean(self._decode(audio, beam, vad, language, prompt, [0.0, 0.3, 0.6]))
+                text = clean(self._decode(audio, beam, vad, language, prompt, [0.0, 0.3, 0.6])[0])
                 if has_content(text):
                     break
             else:

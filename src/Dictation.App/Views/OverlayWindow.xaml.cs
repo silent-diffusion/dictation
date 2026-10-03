@@ -14,13 +14,15 @@ using Dictation.Core.Text;
 namespace Dictation.App.Views;
 
 /// <summary>
-/// The pill at the bottom center of the screen. Small while you talk; it grows only when it has text to show
+/// The pill (bottom center of the screen by default; the position is a setting). Small while you talk; it grows only when it has text to show
 /// (the cleanup, a preview, a receipt, a message). It is created with WS_EX_NOACTIVATE so it can never take
 /// keyboard focus away from the application being dictated into.
 /// </summary>
 public partial class OverlayWindow : Window
 {
-    const double CompactWidth = 440, WideWidth = 470, NarrowWidth = 360;
+    const double CompactWidth = 440, WideWidth = 470, NarrowWidth = 360, CompareWidth = 640;
+    /// <summary>The "Inserted" receipt is dimmed so it doesn't compete with the text; hovering brings it back.</summary>
+    const double ReceiptDim = 0.55;
     const int WaveBars = 30;
 
     static readonly Brush Muted = Freeze(new SolidColorBrush(Color.FromArgb(0xB3, 0xFF, 0xFF, 0xFF)));
@@ -38,7 +40,9 @@ public partial class OverlayWindow : Window
     readonly double[] _levels = new double[WaveBars];
     DictationState _state = DictationState.Idle;
     string _hotkey = "";
-    bool _pinnedByState, _previewShown;
+    bool _pinnedByState;
+    InsertReceipt? _receipt; // set while the receipt is showing
+    bool _compareOpen;
 
     public event Action? CancelRequested;
     public event Action? InsertRequested;
@@ -73,8 +77,21 @@ public partial class OverlayWindow : Window
     void Reposition()
     {
         var wa = SystemParameters.WorkArea; // DIPs, primary monitor
-        Left = wa.Left + (wa.Width - ActualWidth) / 2;
-        Top = wa.Bottom - ActualHeight - 8; // the window's 16 px shadow margin puts the pill ~24 px above the taskbar
+        const double edge = 8; // plus the window's 16 px shadow margin: the pill sits ~24 px from the screen edge
+        var pos = (int)App.Services.Settings.Current.OverlayPosition; // row by row: 0-2 top, 3-5 middle, 6-8 bottom
+        var (column, row) = (pos % 3, pos / 3);
+        Left = column switch
+        {
+            0 => wa.Left + edge,
+            1 => wa.Left + (wa.Width - ActualWidth) / 2,
+            _ => wa.Right - ActualWidth - edge,
+        };
+        Top = row switch
+        {
+            0 => wa.Top + edge,
+            1 => wa.Top + (wa.Height - ActualHeight) / 2,
+            _ => wa.Bottom - ActualHeight - edge,
+        };
     }
 
     void Display(double width, bool expanded)
@@ -83,6 +100,7 @@ public partial class OverlayWindow : Window
         Card.CornerRadius = new CornerRadius(expanded ? 20 : 28);
         var opacity = Math.Clamp(App.Services.Settings.Current.OverlayOpacity, 0.6, 1.0);
         Card.Background = new SolidColorBrush(Color.FromArgb((byte)Math.Round(opacity * 255), 0x16, 0x16, 0x18));
+        Opacity = 1;
         _hideTimer.Stop();
         if (!IsVisible) Show();
         Reposition();
@@ -105,7 +123,11 @@ public partial class OverlayWindow : Window
         RecDot.Opacity = 1;
         RecDot.Fill = RecordFill;
         Wave.Visibility = Dots.Visibility = Chip.Visibility = CancelButton.Visibility = Visibility.Collapsed;
-        BodyText.Visibility = Actions.Visibility = Visibility.Collapsed;
+        BodyText.Visibility = Actions.Visibility = Compare.Visibility = Visibility.Collapsed;
+        _receipt = null;
+        _compareOpen = false;
+        Card.Cursor = null;
+        CancelButton.ToolTip = "Cancel";
         BodyText.Foreground = Brushes.White;
         BodyText.Inlines.Clear();
         TitleText.Inlines.Clear();
@@ -166,7 +188,6 @@ public partial class OverlayWindow : Window
                 break;
 
             case DictationState.Recording:
-                _previewShown = false;
                 RecDot.Visibility = Visibility.Visible;
                 RecDot.BeginAnimation(OpacityProperty, new DoubleAnimation(1, 0.35, TimeSpan.FromMilliseconds(700))
                     { AutoReverse = true, RepeatBehavior = RepeatBehavior.Forever });
@@ -201,7 +222,6 @@ public partial class OverlayWindow : Window
                 break;
 
             case DictationState.Confirming:
-                _previewShown = true;
                 CheckIcon.Visibility = Visibility.Visible;
                 TitleText.Text = "Ready to insert";
                 ShowChip(profileName);
@@ -220,16 +240,20 @@ public partial class OverlayWindow : Window
         Display(width, expanded);
     }
 
-    /// <summary>After text was inserted: a short receipt, with the AI's edits when there were any to see.</summary>
+    /// <summary>After text was inserted: a small, dimmed receipt. Hover to see it clearly; click it to compare
+    /// what you said with the AI's edit side by side.</summary>
     public void ShowReceipt(InsertReceipt r)
     {
         ResetView();
+        _receipt = r;
+        Card.Cursor = System.Windows.Input.Cursors.Hand;
         if (r.SafetyNet)
         {
             WarnIcon.Stroke = WarnStroke;
             WarnIcon.Visibility = Visibility.Visible;
-            TitleText.Text = "Original words inserted";
-            ShowBody("The AI's edit changed too much (or came back empty), so your words went in unchanged. You can adjust the safety net on the profile's page.");
+            TitleText.Text = r.Edited ? "Partly edited" : "Original words inserted";
+            ShowBody(r.Note ?? "The AI's edit changed too much (or came back empty), so your words went in unchanged. " +
+                     "You can adjust the safety net on the profile's page.");
             Display(WideWidth, expanded: true);
             HideAfter(TimeSpan.FromSeconds(6));
             return;
@@ -238,19 +262,52 @@ public partial class OverlayWindow : Window
         CheckIcon.Visibility = Visibility.Visible;
         TitleText.Text = "Inserted";
         SubtitleText.Text = $"{r.Words} {(r.Words == 1 ? "word" : "words")} · {r.Elapsed.TotalSeconds:0.0} s";
-        var diff = WordDiff.Compute(r.Raw, r.Inserted);
-        if (r.Edited && !_previewShown && WordDiff.HasChanges(diff))
-        {
-            DiffText.Render(BodyText, diff, DiffRemoved, DiffAdded, maxWords: 60);
-            BodyText.Visibility = Visibility.Visible;
-            Display(WideWidth, expanded: true);
-            HideAfter(TimeSpan.FromSeconds(Math.Clamp(r.Words / 3.5, 3, 8)));
-        }
-        else
-        {
-            Display(NarrowWidth, expanded: false);
-            HideAfter(TimeSpan.FromSeconds(2.5));
-        }
+        Display(NarrowWidth, expanded: false);
+        Opacity = ReceiptDim;
+        HideAfter(TimeSpan.FromSeconds(3));
+    }
+
+    void OpenCompare(InsertReceipt r)
+    {
+        _compareOpen = true;
+        BodyText.Visibility = Visibility.Collapsed;
+        CompareRaw.Text = r.Raw;
+        DiffText.Render(CompareEdited, WordDiff.Compute(r.Raw, r.Inserted.Trim()), DiffRemoved, DiffAdded);
+        Compare.Visibility = Visibility.Visible;
+        CancelButton.Visibility = Visibility.Visible; // closes the receipt
+        CancelButton.ToolTip = "Close";
+        Card.Cursor = null;
+        Display(CompareWidth, expanded: true);
+    }
+
+    void Card_MouseEnter(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        if (_receipt == null) return;
+        _hideTimer.Stop(); // stays while the pointer is on it
+        Opacity = 1;
+    }
+
+    void Card_MouseLeave(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        if (_receipt == null) return;
+        if (!_compareOpen && !_receipt.SafetyNet) Opacity = ReceiptDim;
+        HideAfter(TimeSpan.FromSeconds(_compareOpen ? 4 : 2));
+    }
+
+    void Card_MouseLeftButtonUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (_receipt != null && !_compareOpen) OpenCompare(_receipt);
+    }
+
+    /// <summary>Settings › Appearance changed the position: flash the pill where it will appear.</summary>
+    public void ShowPositionPreview()
+    {
+        if (_pinnedByState) return;
+        ResetView();
+        RecDot.Visibility = Visibility.Visible;
+        TitleText.Text = "Dictation appears here";
+        Display(NarrowWidth, expanded: false);
+        HideAfter(TimeSpan.FromSeconds(1.5));
     }
 
     /// <summary>The cycle-profile hotkey was pressed.</summary>
@@ -330,7 +387,11 @@ public partial class OverlayWindow : Window
         return "…" + (sp > 0 && sp < 40 ? tail[(sp + 1)..] : tail);
     }
 
-    void Cancel_Click(object sender, RoutedEventArgs e) => CancelRequested?.Invoke();
+    void Cancel_Click(object sender, RoutedEventArgs e)
+    {
+        if (_receipt != null) { _hideTimer.Stop(); Hide(); return; } // closing a receipt, not cancelling a dictation
+        CancelRequested?.Invoke();
+    }
     void Insert_Click(object sender, RoutedEventArgs e) => InsertRequested?.Invoke();
     void Raw_Click(object sender, RoutedEventArgs e) => InsertRawRequested?.Invoke();
 }

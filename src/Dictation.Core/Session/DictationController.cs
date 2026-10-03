@@ -26,8 +26,10 @@ public sealed class SessionRecord
 
 /// <summary>What happened to a dictation that was inserted, for the overlay's receipt.</summary>
 /// <param name="Elapsed">From the stop press until the text was in place.</param>
-/// <param name="SafetyNet">The AI's edit was rejected by the profile's safety net, so the raw text was inserted.</param>
-public sealed record InsertReceipt(string Raw, string Inserted, TimeSpan Elapsed, bool SafetyNet)
+/// <param name="SafetyNet">The profile's safety net rejected the AI's edit of all or part of the text,
+/// so those parts were inserted as spoken.</param>
+/// <param name="Note">What the safety net did, for the receipt.</param>
+public sealed record InsertReceipt(string Raw, string Inserted, TimeSpan Elapsed, bool SafetyNet, string? Note = null)
 {
     public int Words => Inserted.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
     public bool Edited => Inserted != Raw;
@@ -51,11 +53,14 @@ public sealed class DictationController
     CancellationTokenSource? _sessionCts;
     CancellationTokenSource? _maxDuration;
     InsertionTarget _target = InsertionTarget.Capture();
+    Task<InsertionContext?> _context = Task.FromResult<InsertionContext?>(null);
     string _pendingProcessed = "";
     string _pendingRaw = "";
     SessionRecord? _pendingRecord;
     bool _pendingSafetyNet;
+    string? _pendingNote;
     bool _micWarned;
+    float _peakLevel; // loudest input level of the current recording, for SpeechGuard
 
     public DictationState State { get; private set; } = DictationState.Idle;
     public string LivePartial { get; private set; } = "";
@@ -76,7 +81,12 @@ public sealed class DictationController
     {
         _mic = mic; _asr = asr; _llm = llm; _inserter = inserter; _settings = settings; _profiles = profiles;
         _mic.DataAvailable += chunk => { if (State == DictationState.Recording) _asr.AcceptAudio(chunk); };
-        _mic.LevelChanged += l => { if (State == DictationState.Recording) AudioLevel?.Invoke(l); };
+        _mic.LevelChanged += l =>
+        {
+            if (State != DictationState.Recording) return;
+            if (l > _peakLevel) _peakLevel = l;
+            AudioLevel?.Invoke(l);
+        };
         _mic.SilenceDetected += () =>
         {
             if (State == DictationState.Recording && !_micWarned)
@@ -134,8 +144,13 @@ public sealed class DictationController
     async Task StartAsync()
     {
         _target = InsertionTarget.Capture(); // remember where the text should go
+        // Read the text around the caret now, while the target app still has focus; used only when inserting.
+        _context = _settings.Current.MatchSurroundingText
+            ? InsertionContext.CaptureAsync(TimeSpan.FromMilliseconds(400))
+            : Task.FromResult<InsertionContext?>(null);
         LivePartial = "";
         _micWarned = false;
+        _peakLevel = 0;
         _sessionCts = new CancellationTokenSource();
         SetState(DictationState.Starting);
 
@@ -174,8 +189,10 @@ public sealed class DictationController
         SetState(DictationState.Transcribing);
 
         var raw = OutputSanitizer.CollapseDots(await _asr.StopAsync(ct));
-        if (!OutputSanitizer.HasContent(raw))
+        if (SpeechGuard.ShouldDiscard(raw, _recordClock.Elapsed, _peakLevel))
         {
+            if (OutputSanitizer.HasContent(raw))
+                Log.Info($"Discarded a likely phantom transcript ({raw.Length} chars, {_recordClock.Elapsed.TotalSeconds:0.0} s, peak {_peakLevel:0.00})");
             SetState(DictationState.Idle);
             Notice?.Invoke("I didn't catch anything. Try again.", NoticeLevel.Info);
             return;
@@ -185,6 +202,7 @@ public sealed class DictationController
         var processed = raw;
         _pendingRaw = raw;
         _pendingSafetyNet = false;
+        _pendingNote = null;
         if (profile.AutoProcess)
         {
             SetState(DictationState.Processing);
@@ -193,7 +211,7 @@ public sealed class DictationController
                 var result = await _llm.ProcessAsync(raw, profile, ct);
                 processed = result.Text;
                 // A safety-net rejection is reported on the receipt instead of as a separate notice.
-                if (result.SafetyNet) _pendingSafetyNet = true;
+                if (result.SafetyNet) { _pendingSafetyNet = true; _pendingNote = result.Warning; }
                 else if (result.Warning != null) Notice?.Invoke(result.Warning, NoticeLevel.Warning);
             }
             catch (UserFacingException e)
@@ -238,9 +256,10 @@ public sealed class DictationController
         InsertReceipt? receipt = null;
         try
         {
+            text = ContextFit.Apply(text, await _context);
             await _inserter.InsertAsync(text, _target, _sessionCts?.Token ?? CancellationToken.None);
             if (rec != null) { rec.Processed = text; rec.Inserted = true; }
-            receipt = new InsertReceipt(_pendingRaw, text, _finishClock.Elapsed, _pendingSafetyNet);
+            receipt = new InsertReceipt(_pendingRaw, text, _finishClock.Elapsed, _pendingSafetyNet, _pendingNote);
         }
         catch (UserFacingException e)
         {
