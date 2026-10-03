@@ -1,6 +1,7 @@
 using Dictation.Core.Infrastructure;
 using Dictation.Core.Speech;
 using NAudio.Wave;
+using NAudio.Wave.SampleProviders;
 
 namespace Dictation.Core.Reading;
 
