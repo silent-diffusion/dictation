@@ -3,6 +3,7 @@ using System.Windows;
 using Dictation.App.Services;
 using Dictation.App.Views;
 using Dictation.Core.Infrastructure;
+using Dictation.Core.Insertion;
 using Dictation.Core.Session;
 using Dictation.Core.Setup;
 
@@ -15,11 +16,12 @@ public partial class App : Application
     /// <summary>Set when a hotkey could not be registered; shown on the Hotkeys page.</summary>
     public static string? HotkeyError { get; private set; }
 
-    const int HkToggle = 1, HkCycle = 2, HkEscape = 3;
+    const int HkToggle = 1, HkCycle = 2, HkEscape = 3, HkSpeak = 4;
     Mutex? _single;
     EventWaitHandle? _showEvent;
     TrayIcon? _tray;
     OverlayWindow? _overlay;
+    ReaderWindow? _reader;
     MainWindow? _main;
     string _lastHotkeys = "", _lastAsr = "";
     bool _quitting;
@@ -68,6 +70,7 @@ public partial class App : Application
 
         Hotkeys = new HotkeyManager();
         _overlay = new OverlayWindow();
+        _reader = new ReaderWindow();
         _main = new MainWindow();
         _tray = new TrayIcon(s.Profiles, () => s.Controller.Toggle(), ShowMain, () => ShowPage("About"), Quit);
 
@@ -157,7 +160,7 @@ public partial class App : Application
     void ApplyHotkeys()
     {
         var st = Services.Settings.Current;
-        _lastHotkeys = st.Hotkey + "|" + st.CycleProfileHotkey;
+        _lastHotkeys = HotkeysKey(st);
         _overlay?.SetHotkeyText(st.Hotkey);
         var errors = new List<string>();
         var e1 = Hotkeys.Register(HkToggle, st.Hotkey, () => Services.Controller.Toggle());
@@ -169,6 +172,8 @@ public partial class App : Application
             _overlay?.ShowProfile(profiles.Active.Name, profiles.Profiles.IndexOf(profiles.Active), profiles.Profiles.Count);
         });
         if (e2 != null) errors.Add(e2);
+        var e3 = Hotkeys.Register(HkSpeak, st.SpeakHotkey, OnSpeakHotkey);
+        if (e3 != null) errors.Add(e3);
         HotkeyError = errors.Count == 0 ? null : string.Join("\n", errors);
         if (HotkeyError != null)
         {
@@ -180,10 +185,33 @@ public partial class App : Application
     void OnSettingsChanged()
     {
         var st = Services.Settings.Current;
-        if (_lastHotkeys != st.Hotkey + "|" + st.CycleProfileHotkey) ApplyHotkeys();
+        if (_lastHotkeys != HotkeysKey(st)) ApplyHotkeys();
         Autostart.Apply(st.StartWithWindows);
         ThemeManager.Apply(st.Theme);
     }
+
+    static string HotkeysKey(Dictation.Core.Settings.AppSettings st) => st.Hotkey + "|" + st.CycleProfileHotkey + "|" + st.SpeakHotkey;
+
+    /// <summary>Read aloud hotkey: read the selection; with nothing selected, offer the clipboard. Pressed again, stops.</summary>
+    async void OnSpeakHotkey()
+    {
+        var reader = _reader!;
+        if (reader.IsBusy) { reader.Stop(); return; }
+        string text;
+        try { text = await SelectionReader.GetSelectedTextAsync(); }
+        catch (Exception e)
+        {
+            Log.Warn("Reading the selection failed: " + e.Message);
+            text = "";
+        }
+        if (text.Length > 0) { reader.Read(text); return; }
+        var clipboard = SelectionReader.ClipboardText();
+        if (clipboard.Length > 0) { reader.AskToReadClipboard(clipboard); return; }
+        _overlay?.ShowMessage($"Select some text, then press {Services.Settings.Current.SpeakHotkey} to hear it read aloud.", NoticeLevel.Info);
+    }
+
+    /// <summary>Read aloud from the app itself (the "Try it" button in settings).</summary>
+    public void ReadAloud(string text) => _reader?.Read(text);
 
     /// <summary>Called by the Speech page when the user presses "Apply and restart engine".</summary>
     public static async Task RestartSpeechAsync()
@@ -207,6 +235,8 @@ public partial class App : Application
         Hotkeys.Dispose();
         _tray?.Dispose();
         Services.Mic.Dispose();
+        _reader?.Stop();
+        _ = Services.Tts.DisposeAsync();
         _ = Services.Speech.DisposeAsync();
         Services.OllamaHost.Stop();
         _main?.ForceClose();

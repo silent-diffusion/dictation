@@ -11,7 +11,7 @@ public partial class SettingsPage : UserControl
         Show(section);
     }
 
-    /// <summary>Open a section by its tag (General, Hotkeys, Audio, Speech, Models, Appearance, Advanced, About).</summary>
+    /// <summary>Open a section by its tag (General, Hotkeys, Audio, Speech, Models, ReadAloud, Appearance, Advanced, About).</summary>
     public void Show(string section)
     {
         foreach (var item in Nav.Items.OfType<ListBoxItem>())
@@ -27,6 +27,7 @@ public partial class SettingsPage : UserControl
             "Audio" => new AudioPage(),
             "Speech" => new SpeechPage(),
             "Models" => new ModelsPage(),
+            "ReadAloud" => new ReadAloudPage(),
             "Appearance" => new AppearancePage(),
             "Advanced" => new AdvancedPage(),
             "About" => new AboutPage(),

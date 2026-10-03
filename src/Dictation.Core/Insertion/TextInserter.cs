@@ -221,7 +221,7 @@ public sealed class TextInserter
         Native.Send(new[] { Native.Key(Native.VK_BACK, 0, 0), Native.Key(Native.VK_BACK, 0, Native.KEYEVENTF_KEYUP) });
     }
 
-    static async Task WaitForModifiersReleasedAsync(CancellationToken ct)
+    internal static async Task WaitForModifiersReleasedAsync(CancellationToken ct)
     {
         // The dictation hotkey's own modifiers may still be down; they would turn typed text into shortcuts.
         for (var i = 0; i < 40; i++)

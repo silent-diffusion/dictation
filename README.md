@@ -5,6 +5,7 @@ A fully local, AI-assisted dictation app for Windows. (Formerly *Local Dictation
 The name is German for *overtone*: the AI adds a layer of polish on top of your own voice.
 
 **Press a hotkey → speak → press it again → cleaned-up text appears at your cursor, in any app.**
+**Select text → press `Ctrl+Shift+Space` → hear it read aloud by a natural local voice.**
 
 * Speech recognition: Whisper (via faster-whisper), GPU-accelerated on NVIDIA cards, CPU everywhere else.
 * Cleanup: a small local language model (default `qwen2.5:3b`) served by Ollama, driven by editable **profiles**.
@@ -70,6 +71,10 @@ The folder keeps its pre-rename name so updates from Local Dictation 1.x keep yo
   Turn it off under *Settings › General*; profiles that preview before inserting don't use it.
 * **No phantom text**: very short or silent recordings insert nothing, so Whisper's habit of hearing "Thank you." in silence never reaches your document.
 * **Long dictation** is cleaned up a few sentences at a time (small models stay faithful on short passages), and the safety net applies to each piece separately.
+* **Read aloud** (`Ctrl+Shift+Space`): reads the selected text in any app with Kokoro, a high-quality voice that runs on
+  your PC. With nothing selected, it offers to read your clipboard. The player has play/pause, back and forward 15 seconds,
+  slower/faster, the time left, and the sentence being read with the current word highlighted. Pick the voice and the base
+  speed under *Settings › Read aloud*. The voice (about 370 MB) downloads the first time you use it.
 * **Settings** (bottom of the sidebar): grouped into Dictation, Speech & AI, Look & feel and App. **Appearance** follows the
   Windows light/dark setting, or pick Light or Dark.
 * **Profiles** (sidebar): *Light Cleanup*, *Grammar & Clarity*, *Natural Phrasing*, *Custom*, plus your own. Edit the prompt, pick a model, toggle

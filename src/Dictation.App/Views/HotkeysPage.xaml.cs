@@ -18,6 +18,7 @@ public partial class HotkeysPage : UserControl
         var s = App.Services.Settings.Current;
         ToggleBox.Text = s.Hotkey;
         CycleBox.Text = string.IsNullOrEmpty(s.CycleProfileHotkey) ? "(none)" : s.CycleProfileHotkey;
+        SpeakBox.Text = string.IsNullOrEmpty(s.SpeakHotkey) ? "(none)" : s.SpeakHotkey;
         ShowStatus();
     }
 
@@ -56,6 +57,22 @@ public partial class HotkeysPage : UserControl
         var text = Capture(e);
         if (text == null) return;
         App.Services.Settings.Current.CycleProfileHotkey = text;
+        App.Services.Settings.Save();
+        Refresh();
+    }
+
+    void Speak_KeyDown(object sender, KeyEventArgs e)
+    {
+        var text = Capture(e);
+        if (text == null) return;
+        App.Services.Settings.Current.SpeakHotkey = text;
+        App.Services.Settings.Save();
+        Refresh();
+    }
+
+    void ResetSpeak_Click(object sender, RoutedEventArgs e)
+    {
+        App.Services.Settings.Current.SpeakHotkey = "Ctrl+Shift+Space";
         App.Services.Settings.Save();
         Refresh();
     }
