@@ -61,6 +61,7 @@ public sealed class DictationController
     string? _pendingNote;
     bool _micWarned;
     float _peakLevel; // loudest input level of the current recording, for SpeechGuard
+    LiveInsertion? _live; // "type as you speak" for the current dictation, when enabled
 
     public DictationState State { get; private set; } = DictationState.Idle;
     public string LivePartial { get; private set; } = "";
@@ -68,6 +69,8 @@ public sealed class DictationController
     /// <summary>The raw transcript of the dictation being cleaned up or previewed.</summary>
     public string PendingRaw => _pendingRaw;
     public ObservableCollection<SessionRecord> History { get; } = new();
+    /// <summary>Text was typed while speaking, so the cleanup now is the final pass over it.</summary>
+    public bool IsLive => _live?.HasTyped == true;
 
     public event Action<DictationState>? StateChanged;
     public event Action<string>? PartialTranscript;
@@ -95,6 +98,11 @@ public sealed class DictationController
                 Notice?.Invoke("The microphone is silent. Check Windows microphone privacy settings or pick another mic.", NoticeLevel.Warning);
             }
         };
+        // Live mode: finished pieces arrive on the recognizer's thread; type them from the UI thread, in order.
+        _asr.Committed += t => System.Windows.Application.Current?.Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (State is DictationState.Recording or DictationState.Transcribing) _live?.Add(t);
+        }));
         _asr.PartialTranscript += t =>
         {
             if (State != DictationState.Recording) return;
@@ -135,6 +143,8 @@ public sealed class DictationController
         _mic.Stop();
         _asr.Cancel();
         _maxDuration?.Cancel();
+        _live?.Stop(); // whatever was typed live stays
+        _live = null;
         if (e is UserFacingException) Log.Warn("Dictation failed: " + e.Message);
         else Log.Error("Dictation failed", e);
         SetState(DictationState.Idle);
@@ -161,7 +171,12 @@ public sealed class DictationController
             await _asr.InitializeAsync(_sessionCts.Token);
         }
 
-        _asr.Start();
+        var profile = _profiles.Active;
+        // Live typing needs the text to go straight in, so it is off for profiles that preview before inserting.
+        _live = _settings.Current.TypeWhileSpeaking && !profile.ShowPreview
+            ? new LiveInsertion(_inserter, _llm, _target, profile, _context)
+            : null;
+        _asr.Start(live: _live != null);
         _mic.Start(_settings.Current.MicrophoneName);
         _recordClock.Restart();
         SetState(DictationState.Recording);
@@ -189,7 +204,8 @@ public sealed class DictationController
         SetState(DictationState.Transcribing);
 
         var raw = OutputSanitizer.CollapseDots(await _asr.StopAsync(ct));
-        if (SpeechGuard.ShouldDiscard(raw, _recordClock.Elapsed, _peakLevel))
+        if (_live != null) await _live.DrainAsync(); // let pieces already on their way finish typing
+        if (_live?.HasTyped != true && SpeechGuard.ShouldDiscard(raw, _recordClock.Elapsed, _peakLevel))
         {
             if (OutputSanitizer.HasContent(raw))
                 Log.Info($"Discarded a likely phantom transcript ({raw.Length} chars, {_recordClock.Elapsed.TotalSeconds:0.0} s, peak {_peakLevel:0.00})");
@@ -205,7 +221,7 @@ public sealed class DictationController
         _pendingNote = null;
         if (profile.AutoProcess)
         {
-            SetState(DictationState.Processing);
+            SetState(DictationState.Processing); // with live typing, this is the final pass over the whole recording
             try
             {
                 var result = await _llm.ProcessAsync(raw, profile, ct);
@@ -230,7 +246,7 @@ public sealed class DictationController
             Target = string.IsNullOrEmpty(_target.ProcessName) ? "unknown app" : _target.ProcessName,
         };
 
-        if (profile.ShowPreview)
+        if (profile.ShowPreview && !IsLive) // the profile may have been switched mid-dictation
         {
             _finishClock.Stop(); // time spent reading the preview isn't processing time
             SetState(DictationState.Confirming);
@@ -256,8 +272,19 @@ public sealed class DictationController
         InsertReceipt? receipt = null;
         try
         {
-            text = ContextFit.Apply(text, await _context);
-            await _inserter.InsertAsync(text, _target, _sessionCts?.Token ?? CancellationToken.None);
+            var ct = _sessionCts?.Token ?? CancellationToken.None;
+            if (_live?.HasTyped == true)
+            {
+                // Replace what was typed while speaking with the final pass over the whole recording.
+                var (inserted, note) = await _live.FinishAsync(text, _asr.FinalTail, ct);
+                text = inserted;
+                _pendingNote = note ?? _pendingNote;
+            }
+            else
+            {
+                text = ContextFit.Apply(text, await _context);
+                await _inserter.InsertAsync(text, _target, ct);
+            }
             if (rec != null) { rec.Processed = text; rec.Inserted = true; }
             receipt = new InsertReceipt(_pendingRaw, text, _finishClock.Elapsed, _pendingSafetyNet, _pendingNote);
         }
@@ -277,6 +304,7 @@ public sealed class DictationController
             _pendingRecord = null;
             _pendingProcessed = _pendingRaw = "";
             _pendingSafetyNet = false;
+            _live = null;
             SetState(DictationState.Idle);
         }
         if (receipt != null) Inserted?.Invoke(receipt);
@@ -300,6 +328,13 @@ public sealed class DictationController
                 _sessionCts?.Cancel();
                 break;
             default: return;
+        }
+        if (_live != null)
+        {
+            // Take back what was typed while speaking (only if it can be confirmed in place).
+            var live = _live;
+            _live = null;
+            _ = live.RemoveTypedAsync();
         }
         _pendingRecord = null;
         _pendingProcessed = _pendingRaw = "";

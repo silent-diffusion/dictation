@@ -54,6 +54,9 @@ public sealed class AppSettings
     /// <summary>Read a sentence or two around the cursor (locally, via UI Automation) to fix capitalization,
     /// trailing periods and spacing when inserting into the middle of existing text.</summary>
     public bool MatchSurroundingText { get; set; } = true;
+    /// <summary>Type finished sentences into the app while still speaking (about every 5 seconds), then replace
+    /// them with one final cleaned-up pass when dictation stops.</summary>
+    public bool TypeWhileSpeaking { get; set; } = true;
     /// <summary>In Auto mode, text longer than this (or containing line breaks) is pasted instead of typed.</summary>
     public int TypingMaxChars { get; set; } = 400;
     public int MaxRecordingSeconds { get; set; } = 600;
