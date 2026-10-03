@@ -62,8 +62,6 @@ public sealed class DictationController
     public string PreviewText => _pendingProcessed;
     /// <summary>The raw transcript of the dictation being cleaned up or previewed.</summary>
     public string PendingRaw => _pendingRaw;
-    /// <summary>How long the current (or last) recording ran.</summary>
-    public TimeSpan RecordingTime => _recordClock.Elapsed;
     public ObservableCollection<SessionRecord> History { get; } = new();
 
     public event Action<DictationState>? StateChanged;
