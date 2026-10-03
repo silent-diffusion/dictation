@@ -1,0 +1,27 @@
+<UserControl x:Class="Dictation.App.Views.GeneralPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="32,24,32,32" MaxWidth="760" HorizontalAlignment="Left">
+            <TextBlock Text="General" Style="{StaticResource SectionTitle}"/>
+            <TextBlock Style="{StaticResource Caption}"
+                       Text="Everything runs on this computer. No audio or text is ever sent anywhere, and there is no telemetry."/>
+
+            <CheckBox Content="Start with Windows (minimized to the tray)" IsChecked="{Binding StartWithWindows}" Margin="0,4"/>
+            <CheckBox Content="Keep running in the tray when the window is closed" IsChecked="{Binding MinimizeToTray}" Margin="0,4"/>
+            <CheckBox Content="Show the floating dictation overlay" IsChecked="{Binding ShowOverlay}" Margin="0,4"/>
+            <CheckBox Content="Keep the last 25 dictations (raw + processed) in memory for the History page" IsChecked="{Binding KeepHistory}" Margin="0,4"/>
+            <TextBlock Style="{StaticResource Caption}" Margin="22,0,0,0"
+                       Text="History is held in memory only and is discarded when the app exits."/>
+
+            <TextBlock Text="Text insertion method" Style="{StaticResource FieldLabel}"/>
+            <ComboBox x:Name="InsertionBox" SelectedItem="{Binding Insertion}" Width="220" HorizontalAlignment="Left"/>
+            <TextBlock Style="{StaticResource Caption}" Margin="0,4,0,0"
+                       Text="Auto pastes the text (your clipboard is saved and restored afterwards) - the most reliable method in every kind of app. Typing sends keystrokes instead and never touches the clipboard, but is slower. Typing is also used automatically if pasting fails. Per-app overrides: AppOverrides in data\settings.json."/>
+
+
+            <TextBlock Text="Maximum length of one dictation (seconds)" Style="{StaticResource FieldLabel}"/>
+            <TextBox Text="{Binding MaxRecordingSeconds, UpdateSourceTrigger=LostFocus}" Width="120" HorizontalAlignment="Left"/>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

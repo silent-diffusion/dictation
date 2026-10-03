@@ -1,0 +1,39 @@
+<UserControl x:Class="Dictation.App.Views.ModelsPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="32,24,32,32" MaxWidth="760" HorizontalAlignment="Left">
+            <TextBlock Text="AI Models" Style="{StaticResource SectionTitle}"/>
+            <TextBlock Style="{StaticResource Caption}"
+                       Text="Text cleanup uses a local language model served by Ollama on this PC (loopback only). Each profile can pick its own model."/>
+            <TextBlock x:Name="StatusText" FontWeight="SemiBold"/>
+
+            <TextBlock Text="Default model" Style="{StaticResource FieldLabel}"/>
+            <ComboBox x:Name="ModelBox" IsEditable="True" Text="{Binding Llm.DefaultModel, UpdateSourceTrigger=LostFocus}" Width="300" HorizontalAlignment="Left"/>
+
+            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                <Button Content="Refresh list" Padding="12,6" Margin="0,0,8,0" Click="Refresh_Click"/>
+                <Button Content="Load default model now" Padding="12,6" Click="Load_Click"/>
+            </StackPanel>
+
+            <TextBlock Text="Installed models" Style="{StaticResource FieldLabel}"/>
+            <TextBlock x:Name="InstalledText" TextWrapping="Wrap"/>
+            <TextBlock Style="{StaticResource Caption}" Margin="0,6,0,0"
+                       Text="Install more with  scripts\pull-model.ps1 &lt;name&gt;  (for example llama3.2:3b, qwen2.5:7b, phi4-mini). Downloading is the only time internet is used. With 6 GB of GPU memory, 3–4B models run fully on the GPU alongside speech recognition."/>
+
+            <TextBlock Text="Runtime endpoint" Style="{StaticResource FieldLabel}"/>
+            <TextBox Text="{Binding Llm.Endpoint, UpdateSourceTrigger=LostFocus}" Width="300" HorizontalAlignment="Left"/>
+            <TextBlock Style="{StaticResource Caption}" Margin="0,4,0,0"
+                       Text="Must be a local address (127.0.0.1 / localhost) — other addresses are rejected to guarantee nothing leaves this machine."/>
+
+            <CheckBox Content="Start the bundled Ollama automatically" IsChecked="{Binding Llm.AutoStartRuntime}" Margin="0,10,0,0"/>
+
+            <TextBlock Text="Keep model loaded for" Style="{StaticResource FieldLabel}"/>
+            <TextBox Text="{Binding Llm.KeepAlive, UpdateSourceTrigger=LostFocus}" Width="100" HorizontalAlignment="Left"/>
+            <TextBlock Style="{StaticResource Caption}" Margin="0,4,0,0" Text="e.g. 30m, 2h, or -1 to keep it loaded permanently (fastest, uses GPU memory)."/>
+
+            <TextBlock Text="Give up after (seconds)" Style="{StaticResource FieldLabel}"/>
+            <TextBox Text="{Binding Llm.TimeoutSeconds, UpdateSourceTrigger=LostFocus}" Width="100" HorizontalAlignment="Left"/>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

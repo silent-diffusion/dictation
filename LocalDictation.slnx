@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Dictation.App/Dictation.App.csproj" />
+    <Project Path="src/Dictation.Core/Dictation.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Dictation.Tests/Dictation.Tests.csproj" />
+  </Folder>
+</Solution>

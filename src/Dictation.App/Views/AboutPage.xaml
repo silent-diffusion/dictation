@@ -1,0 +1,29 @@
+<UserControl x:Class="Dictation.App.Views.AboutPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="32,24,32,32" MaxWidth="760" HorizontalAlignment="Left">
+            <TextBlock Text="About &amp; Updates" Style="{StaticResource SectionTitle}"/>
+            <TextBlock x:Name="VersionText" FontSize="15" Margin="0,4,0,0"/>
+            <TextBlock Style="{StaticResource Caption}" Margin="0,4,0,0">
+                <Run Text="Free and open source (MIT license). "/>
+                <Hyperlink x:Name="RepoLink" Click="Repo_Click">Project page on GitHub</Hyperlink>
+            </TextBlock>
+
+            <TextBlock Text="Updates" Style="{StaticResource FieldLabel}" Margin="0,20,0,4"/>
+            <StackPanel Orientation="Horizontal">
+                <Button x:Name="CheckButton" Content="Check for updates" Padding="16,7" Click="Check_Click"/>
+                <Button x:Name="InstallButton" Content="Download and install" Padding="16,7" Margin="10,0,0,0"
+                        Visibility="Collapsed" Click="Install_Click"/>
+            </StackPanel>
+            <ProgressBar x:Name="Bar" Height="6" Margin="0,12,0,0" Minimum="0" Maximum="1" Width="360"
+                         HorizontalAlignment="Left" Visibility="Collapsed"/>
+            <TextBlock x:Name="StatusText" Margin="0,10,0,0" TextWrapping="Wrap"/>
+            <TextBlock x:Name="NotesText" Margin="0,8,0,0" TextWrapping="Wrap" Opacity="0.75" MaxHeight="220"/>
+
+            <CheckBox Content="Check for updates when Local Dictation starts" IsChecked="{Binding CheckUpdatesOnStartup}" Margin="0,18,0,0"/>
+            <TextBlock Style="{StaticResource Caption}" Margin="22,2,0,0"
+                       Text="Checking contacts github.com only to read the list of releases. Nothing about you or your dictation is sent. Updating keeps your settings, profiles and downloaded models."/>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

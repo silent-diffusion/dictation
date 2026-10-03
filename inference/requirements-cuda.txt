@@ -1,0 +1,3 @@
+# Extra CUDA 12 libraries for NVIDIA GPUs (installed only when an NVIDIA GPU is detected).
+nvidia-cublas-cu12==12.9.2.10
+nvidia-cudnn-cu12==9.27.0.42

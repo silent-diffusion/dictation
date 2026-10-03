@@ -1,0 +1,30 @@
+<Window x:Class="Dictation.App.Views.SetupWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Local Dictation – Setup" Width="620" SizeToContent="Height" ResizeMode="NoResize"
+        WindowStartupLocation="CenterScreen">
+    <StackPanel Margin="32,28,32,28">
+        <TextBlock Text="Welcome to Local Dictation" FontSize="24" FontWeight="SemiBold"/>
+        <TextBlock x:Name="Intro" TextWrapping="Wrap" Margin="0,10,0,0" Opacity="0.85"/>
+
+        <Border Margin="0,18,0,0" Padding="14" CornerRadius="8" BorderThickness="1" BorderBrush="#33808080">
+            <StackPanel>
+                <TextBlock x:Name="HardwareText" FontWeight="SemiBold"/>
+                <TextBlock x:Name="PlanText" TextWrapping="Wrap" Margin="0,6,0,0" Opacity="0.8"/>
+            </StackPanel>
+        </Border>
+
+        <StackPanel x:Name="ProgressPanel" Margin="0,20,0,0" Visibility="Collapsed">
+            <TextBlock x:Name="StepText" FontWeight="SemiBold"/>
+            <ProgressBar x:Name="Bar" Height="8" Margin="0,8,0,0" Minimum="0" Maximum="1"/>
+            <TextBlock x:Name="DetailText" Margin="0,6,0,0" Opacity="0.7" TextWrapping="Wrap"/>
+        </StackPanel>
+
+        <TextBlock x:Name="ErrorText" Margin="0,16,0,0" TextWrapping="Wrap" Foreground="IndianRed" Visibility="Collapsed"/>
+
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,24,0,0">
+            <Button x:Name="CancelButton" Content="Quit" Padding="18,7" Margin="0,0,10,0" Click="Cancel_Click"/>
+            <Button x:Name="StartButton" Content="Download and set up" Padding="18,7" Click="Start_Click" IsDefault="True"/>
+        </StackPanel>
+    </StackPanel>
+</Window>

@@ -1,0 +1,74 @@
+<UserControl x:Class="Dictation.App.Views.ProfilePage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="32,24,32,32" MaxWidth="860" HorizontalAlignment="Stretch">
+            <TextBox Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" FontSize="24" FontWeight="SemiBold"
+                     BorderThickness="0" Background="Transparent" Padding="0,2" ToolTip="Click to rename"/>
+            <TextBox Text="{Binding Description, UpdateSourceTrigger=PropertyChanged}" Opacity="0.7"
+                     BorderThickness="0" Background="Transparent" Padding="0,2" TextWrapping="Wrap" ToolTip="Description"/>
+
+            <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
+                <Button x:Name="ActiveButton" Padding="14,6" Margin="0,0,8,0" Click="SetActive_Click">
+                    <Button.Style>
+                        <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                            <Setter Property="Content" Value="Use this profile"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsActive}" Value="True">
+                                    <Setter Property="Content" Value="✓ Active profile"/>
+                                    <Setter Property="IsEnabled" Value="False"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                </Button>
+                <Button Padding="14,6" Margin="0,0,8,0" Click="MakeDefault_Click">
+                    <Button.Style>
+                        <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                            <Setter Property="Content" Value="Make default"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsDefault}" Value="True">
+                                    <Setter Property="Content" Value="✓ Default"/>
+                                    <Setter Property="IsEnabled" Value="False"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                </Button>
+                <Button Content="Delete" Padding="14,6" Click="Delete_Click"/>
+            </StackPanel>
+
+            <TextBlock Text="Prompt" Style="{StaticResource FieldLabel}"/>
+            <TextBlock Style="{StaticResource Caption}" Margin="0,0,0,6"
+                       Text="Instructions sent to the local AI model along with your transcript. It is told to reply with only the edited text."/>
+            <TextBox Text="{Binding Prompt, UpdateSourceTrigger=PropertyChanged}" AcceptsReturn="True" TextWrapping="Wrap"
+                     MinHeight="220" VerticalScrollBarVisibility="Auto" FontFamily="Segoe UI" Padding="8"/>
+
+            <TextBlock Text="AI model for this profile" Style="{StaticResource FieldLabel}"/>
+            <ComboBox x:Name="ModelBox" IsEditable="True" Text="{Binding Model, UpdateSourceTrigger=LostFocus}" MaxWidth="360" HorizontalAlignment="Left" MinWidth="260"/>
+            <TextBlock Style="{StaticResource Caption}" Margin="0,4,0,0"
+                       Text="Leave empty to use the default model (Settings → AI Models). Models must be installed in Ollama."/>
+
+            <TextBlock Text="Options" Style="{StaticResource FieldLabel}"/>
+            <CheckBox Content="Automatically process after dictation" IsChecked="{Binding AutoProcess}" Margin="0,2"/>
+            <CheckBox Content="Show processed text before inserting" IsChecked="{Binding ShowPreview}" Margin="0,2"/>
+            <CheckBox Content="Preserve paragraph breaks" IsChecked="{Binding PreserveParagraphs}" Margin="0,2"/>
+            <CheckBox Content="Remove filler words" IsChecked="{Binding RemoveFillers}" Margin="0,2"/>
+
+            <TextBlock Text="Safety net" Style="{StaticResource FieldLabel}"/>
+            <StackPanel Orientation="Horizontal">
+                <Slider Minimum="0.1" Maximum="0.9" Value="{Binding MaxChangeRatio}" Width="240" TickFrequency="0.1" IsSnapToTickEnabled="True"/>
+                <TextBlock Margin="12,0,0,0" VerticalAlignment="Center"
+                           Text="{Binding MaxChangeRatio, StringFormat='Reject AI output that changes length by more than ±{0:P0}'}"/>
+            </StackPanel>
+            <TextBlock Style="{StaticResource Caption}" Margin="0,4,0,0"
+                       Text="If the model answers, summarizes or rambles instead of editing, your original words are inserted instead."/>
+
+            <TextBlock Text="Try it" Style="{StaticResource FieldLabel}"/>
+            <TextBox x:Name="TestInput" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="64" Padding="8"
+                     Text="um so yesterday I I went to the the store and and bought uh three apples no wait four apples"/>
+            <Button x:Name="RunButton" Content="Run profile on sample" Margin="0,8,0,0" Padding="14,6" HorizontalAlignment="Left" Click="Run_Click"/>
+            <TextBox x:Name="TestOutput" IsReadOnly="True" TextWrapping="Wrap" MinHeight="64" Padding="8" Margin="0,8,0,0"/>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

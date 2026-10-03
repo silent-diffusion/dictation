@@ -1,0 +1,17 @@
+<UserControl x:Class="Dictation.App.Views.AudioPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <StackPanel Margin="32,24,32,32" MaxWidth="760" HorizontalAlignment="Left">
+        <TextBlock Text="Audio" Style="{StaticResource SectionTitle}"/>
+        <TextBlock Style="{StaticResource Caption}"
+                   Text="Audio is held in memory only while you dictate and is discarded afterwards. Recordings are never saved or uploaded."/>
+
+        <TextBlock Text="Microphone" Style="{StaticResource FieldLabel}"/>
+        <ComboBox x:Name="MicBox" Width="400" HorizontalAlignment="Left" SelectionChanged="Mic_Changed"/>
+
+        <TextBlock Text="Input level" Style="{StaticResource FieldLabel}"/>
+        <ProgressBar x:Name="Level" Height="10" Minimum="0" Maximum="1" Width="400" HorizontalAlignment="Left"/>
+        <TextBlock x:Name="Hint" Style="{StaticResource Caption}" Margin="0,8,0,0"
+                   Text="Speak to see the meter move. If it stays flat, choose another microphone or check Windows Settings → Privacy &amp; security → Microphone."/>
+    </StackPanel>
+</UserControl>

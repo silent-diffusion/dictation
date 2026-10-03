@@ -1,0 +1,6 @@
+# Speech engine (CPU or GPU). Versions pinned to the tested set so every install is identical.
+faster-whisper==1.2.1
+ctranslate2==4.8.2
+websockets==17.1
+numpy==2.5.3
+huggingface-hub==1.33.0

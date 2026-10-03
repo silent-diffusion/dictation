@@ -1,0 +1,14 @@
+# local toolchain, runtimes and models (downloaded, never committed)
+tools/
+runtime/
+models/
+data/
+app/
+publish/
+dist/
+# build output
+bin/
+obj/
+__pycache__/
+*.log
+*.err

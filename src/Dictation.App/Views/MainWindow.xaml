@@ -1,0 +1,76 @@
+<Window x:Class="Dictation.App.Views.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Local Dictation" Width="1080" Height="740" MinWidth="820" MinHeight="560"
+        WindowStartupLocation="CenterScreen">
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="B2V"/>
+        <Style x:Key="StatusDot" TargetType="Ellipse">
+            <Setter Property="Width" Value="8"/>
+            <Setter Property="Height" Value="8"/>
+            <Setter Property="Fill" Value="#E0A030"/>
+            <Setter Property="Margin" Value="0,0,8,0"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+    </Window.Resources>
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="250"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- Sidebar -->
+        <DockPanel Grid.Column="0" LastChildFill="True">
+            <StackPanel DockPanel.Dock="Bottom" Margin="16,8,16,14">
+                <StackPanel Orientation="Horizontal" Margin="0,2">
+                    <Ellipse x:Name="SpeechDot" Style="{StaticResource StatusDot}"/>
+                    <TextBlock Text="{Binding Speech}" FontSize="11.5" TextTrimming="CharacterEllipsis" ToolTip="{Binding Speech}"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Margin="0,2">
+                    <Ellipse x:Name="AiDot" Style="{StaticResource StatusDot}"/>
+                    <TextBlock Text="{Binding Ai}" FontSize="11.5" TextTrimming="CharacterEllipsis" ToolTip="{Binding Ai}"/>
+                </StackPanel>
+            </StackPanel>
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <StackPanel>
+                    <TextBlock Text="PROFILES" Style="{StaticResource NavHeader}"/>
+                    <ListBox x:Name="ProfileList" BorderThickness="0" Background="Transparent" Margin="8,0"
+                             SelectionChanged="ProfileList_SelectionChanged">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="4,3">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis"/>
+                                    <TextBlock Grid.Column="1" Text="● active" FontSize="11" Foreground="#4CAF50" Margin="8,0,0,0"
+                                               Visibility="{Binding IsActive, Converter={StaticResource B2V}}"/>
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <Button Content="＋  New Profile" Margin="16,6,16,0" HorizontalAlignment="Stretch" Click="NewProfile_Click"/>
+
+                    <TextBlock Text="SETTINGS" Style="{StaticResource NavHeader}" Margin="16,22,0,4"/>
+                    <ListBox x:Name="NavList" BorderThickness="0" Background="Transparent" Margin="8,0"
+                             SelectionChanged="NavList_SelectionChanged">
+                        <ListBoxItem Content="General" Tag="General" Padding="8,6"/>
+                        <ListBoxItem Content="Hotkeys" Tag="Hotkeys" Padding="8,6"/>
+                        <ListBoxItem Content="Speech Recognition" Tag="Speech" Padding="8,6"/>
+                        <ListBoxItem Content="AI Models" Tag="Models" Padding="8,6"/>
+                        <ListBoxItem Content="Audio" Tag="Audio" Padding="8,6"/>
+                        <ListBoxItem Content="History" Tag="History" Padding="8,6"/>
+                        <ListBoxItem Content="Advanced" Tag="Advanced" Padding="8,6"/>
+                        <ListBoxItem Content="About &amp; Updates" Tag="About" Padding="8,6"/>
+                    </ListBox>
+                </StackPanel>
+            </ScrollViewer>
+        </DockPanel>
+
+        <!-- Content -->
+        <Border Grid.Column="1" BorderBrush="#22808080" BorderThickness="1,0,0,0">
+            <ContentPresenter x:Name="Host"/>
+        </Border>
+    </Grid>
+</Window>

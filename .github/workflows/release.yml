@@ -1,0 +1,51 @@
+name: Release
+
+# Push a tag like v1.2.0 and this builds the installer and publishes it as a GitHub release.
+# The app's "Check for updates" button reads these releases.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Read version from tag
+        shell: pwsh
+        run: |
+          $v = '${{ github.ref_name }}'.TrimStart('v')
+          if ($v -notmatch '^\d+\.\d+\.\d+$') { throw "Tag must look like v1.2.3 (got ${{ github.ref_name }})" }
+          "VERSION=$v" >> $env:GITHUB_ENV
+
+      - name: Test
+        run: dotnet test tests/Dictation.Tests -c Release
+
+      - name: Publish app (self-contained)
+        shell: pwsh
+        run: |
+          dotnet publish src/Dictation.App/Dictation.App.csproj -c Release -r win-x64 --self-contained true -p:Version=$env:VERSION -o publish
+          Copy-Item inference publish/inference -Recurse
+
+      - name: Build installer (Inno Setup)
+        shell: pwsh
+        run: |
+          function Find-Iscc { Get-ChildItem "${env:ProgramFiles(x86)}\Inno Setup *\ISCC.exe", "$env:ProgramFiles\Inno Setup *\ISCC.exe" -ErrorAction SilentlyContinue | Select-Object -First 1 }
+          if (-not (Find-Iscc)) { choco install innosetup -y --no-progress }
+          $iscc = (Find-Iscc).FullName
+          Write-Host "Using $iscc"
+          & $iscc "/DMyAppVersion=$env:VERSION" "/DSourceDir=..\publish" installer\LocalDictation.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+
+      - name: Create GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" "dist/LocalDictation-Setup-$env:VERSION.exe" --title "Local Dictation $env:VERSION" --generate-notes
