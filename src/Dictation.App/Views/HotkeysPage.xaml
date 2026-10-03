@@ -21,6 +21,13 @@
                 <Button Content="Clear" Margin="8,0,0,0" Padding="12,6" Click="ClearCycle_Click"/>
             </StackPanel>
 
+            <TextBlock Text="Read selected text aloud" Style="{StaticResource FieldLabel}"/>
+            <StackPanel Orientation="Horizontal">
+                <TextBox x:Name="SpeakBox" IsReadOnly="True" Width="240" Padding="8,6" IsReadOnlyCaretVisible="False"
+                         PreviewKeyDown="Speak_KeyDown" GotKeyboardFocus="Box_Focus"/>
+                <Button Content="Reset" Margin="8,0,0,0" Padding="12,6" Click="ResetSpeak_Click"/>
+            </StackPanel>
+
             <TextBlock x:Name="StatusText" Margin="0,16,0,0" TextWrapping="Wrap"/>
             <TextBlock Style="{StaticResource Caption}" Margin="0,16,0,0"
                        Text="Tip: Ctrl+Space can clash with some editors and input-method switchers. If it doesn't fire, pick another combination such as Ctrl+Alt+D or F9."/>

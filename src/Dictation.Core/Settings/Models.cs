@@ -40,6 +40,13 @@ public sealed class AppSettings
 {
     public string Hotkey { get; set; } = "Ctrl+Space";
     public string CycleProfileHotkey { get; set; } = "Ctrl+Alt+P";
+    /// <summary>Read the selected text aloud (or offer the clipboard when nothing is selected).</summary>
+    public string SpeakHotkey { get; set; } = "Ctrl+Shift+Space";
+    /// <summary>Kokoro voice id, e.g. af_heart.</summary>
+    public string TtsVoice { get; set; } = "af_heart";
+    /// <summary>Default reading speed, 0.5 to 2.0. The reader's +/− buttons change it for one reading only.</summary>
+    public double TtsBaseSpeed { get; set; } = 1.0;
+    public int TtsPort { get; set; } = 8766;
     public string? MicrophoneName { get; set; }
     public string? ActiveProfileId { get; set; }
     public string? DefaultProfileId { get; set; }

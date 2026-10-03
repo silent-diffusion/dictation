@@ -24,6 +24,9 @@ public sealed class RuntimeInstaller
     const string PythonUrl = "https://github.com/astral-sh/python-build-standalone/releases/download/20261003/cpython-3.12.15%2B20261003-x86_64-pc-windows-msvc-install_only.tar.gz";
     const string OllamaUrl = "https://github.com/ollama/ollama/releases/download/v0.35.1/ollama-windows-amd64.zip";
     const int Steps = 6;
+    // Read aloud: Kokoro v1.0 (Apache 2.0), full-precision model for the best voice quality.
+    const string KokoroModelUrl = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx";
+    const string KokoroVoicesUrl = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin";
 
     readonly SettingsService _settings;
     readonly OllamaHost _ollama;
@@ -164,6 +167,57 @@ public sealed class RuntimeInstaller
         JsonStore.Save(Marker, new { installedAt = DateTime.Now, appVersion = AppInfo.VersionText, nvidiaGpu = gpu, speechModel = whisper, aiModel = llm });
         Log.Info("Runtime setup complete");
         Report(progress, 6, "Done", 1, "");
+    }
+
+    public static string KokoroDir => Path.Combine(AppPaths.ModelsDir, "kokoro");
+    public static string KokoroModel => Path.Combine(KokoroDir, "kokoro-v1.0.onnx");
+    public static string KokoroVoices => Path.Combine(KokoroDir, "voices-v1.0.bin");
+    static string SitePackages => Path.Combine(Path.GetDirectoryName(AppPaths.PythonExe)!, "Lib", "site-packages");
+
+    /// <summary>Read aloud is ready: its Python package and both model files are present.</summary>
+    public static bool ReadAloudInstalled =>
+        File.Exists(KokoroModel) && File.Exists(KokoroVoices) && Directory.Exists(Path.Combine(SitePackages, "kokoro_onnx"));
+
+    /// <summary>Approximate one-time download for Read aloud, in MB.</summary>
+    public const int ReadAloudDownloadMb = 370;
+
+    /// <summary>
+    /// Read aloud is installed on first use rather than during setup: the voice package into the private Python,
+    /// and the Kokoro model and voices into models\kokoro. Resumable like the main setup.
+    /// </summary>
+    public async Task InstallReadAloudAsync(IProgress<SetupProgress> progress, CancellationToken ct)
+    {
+        const int total = 3;
+        void Step(int step, string title, double? f, string detail = "") => progress.Report(new SetupProgress(step, total, title, f, detail));
+        if (!File.Exists(AppPaths.PythonExe))
+            throw new UserFacingException("Oberton's speech engine isn't set up yet, so Read aloud can't be installed. Restart Oberton to finish setup.");
+        Directory.CreateDirectory(KokoroDir);
+
+        if (!File.Exists(UvExe))
+        {
+            var zip = Path.Combine(AppPaths.RuntimeDir, "uv.zip");
+            await DownloadAsync(UvUrl, zip, f => Step(1, "Downloading Python tools", f), ct);
+            ZipFile.ExtractToDirectory(zip, Path.GetDirectoryName(UvExe)!, true);
+            File.Delete(zip);
+        }
+        if (!Directory.Exists(Path.Combine(SitePackages, "kokoro_onnx")))
+        {
+            var pyDir = Path.GetDirectoryName(AppPaths.PythonExe)!;
+            await RunToolAsync(UvExe, new[]
+                {
+                    "pip", "install", "--python", AppPaths.PythonExe, "--system", "--break-system-packages",
+                    "-r", Path.Combine(AppPaths.InferenceDir, "requirements-tts.txt"),
+                },
+                UvEnvironment(), pyDir, 60, f => Step(1, "Installing the voice engine", f), "Installing the voice engine", ct);
+            try { var cache = Path.Combine(AppPaths.RuntimeDir, "uv-cache"); if (Directory.Exists(cache)) Directory.Delete(cache, true); }
+            catch (Exception e) { Log.Warn("Could not remove uv-cache: " + e.Message); }
+        }
+        if (!File.Exists(KokoroModel))
+            await DownloadAsync(KokoroModelUrl, KokoroModel, f => Step(2, "Downloading the voice model", f, "About 325 MB"), ct);
+        if (!File.Exists(KokoroVoices))
+            await DownloadAsync(KokoroVoicesUrl, KokoroVoices, f => Step(3, "Downloading the voices", f, "About 28 MB"), ct);
+        Log.Info("Read aloud installed");
+        Step(3, "Done", 1);
     }
 
     static void Report(IProgress<SetupProgress> p, int step, string title, double? fraction, string detail) =>

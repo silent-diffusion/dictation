@@ -34,6 +34,8 @@ public sealed class AppServices
     public ITextProcessor Llm { get; }
     public TextInserter Inserter { get; }
     public DictationController Controller { get; }
+    /// <summary>Read aloud's voice (Kokoro); its process starts on first use.</summary>
+    public KokoroSpeech Tts { get; }
     public AppStatus Status { get; } = new();
 
     public AppServices()
@@ -44,6 +46,7 @@ public sealed class AppServices
         Llm = new OllamaTextProcessor(Settings, OllamaHost);
         Inserter = new TextInserter(Settings);
         Controller = new DictationController(Mic, Speech, Llm, Inserter, Settings, Profiles);
+        Tts = new KokoroSpeech(Settings);
 
         var d = Application.Current.Dispatcher;
         Speech.StatusChanged += (s, ok) => d.BeginInvoke(() => { Status.Speech = "Speech: " + s; Status.SpeechOk = ok; });

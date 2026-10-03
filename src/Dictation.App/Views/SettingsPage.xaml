@@ -21,6 +21,7 @@
                         <ListBoxItem Content="SPEECH &amp; AI" Style="{StaticResource NavGroupHeader}"/>
                         <ListBoxItem Content="Speech recognition" Tag="Speech"/>
                         <ListBoxItem Content="AI models" Tag="Models"/>
+                        <ListBoxItem Content="Read aloud" Tag="ReadAloud"/>
                         <ListBoxItem Content="LOOK &amp; FEEL" Style="{StaticResource NavGroupHeader}"/>
                         <ListBoxItem Content="Appearance" Tag="Appearance"/>
                         <ListBoxItem Content="APP" Style="{StaticResource NavGroupHeader}"/>
