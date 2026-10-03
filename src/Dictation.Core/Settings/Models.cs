@@ -7,6 +7,9 @@ public enum InsertionMode { Auto, Typing, Clipboard }
 /// <summary>System follows the Windows app theme; Light and Dark override it.</summary>
 public enum AppTheme { System, Light, Dark }
 
+/// <summary>Where the overlay sits on the screen. Declared row by row (top, middle, bottom), left to right.</summary>
+public enum OverlayPosition { TopLeft, TopCenter, TopRight, MiddleLeft, Center, MiddleRight, BottomLeft, BottomCenter, BottomRight }
+
 public sealed class AsrSettings
 {
     public string Engine { get; set; } = "faster-whisper";
@@ -46,7 +49,11 @@ public sealed class AppSettings
     public AppTheme Theme { get; set; } = AppTheme.System;
     /// <summary>Opacity of the overlay's background (its text stays fully opaque). 0.6 to 1.</summary>
     public double OverlayOpacity { get; set; } = 0.88;
+    public OverlayPosition OverlayPosition { get; set; } = OverlayPosition.BottomCenter;
     public InsertionMode Insertion { get; set; } = InsertionMode.Auto;
+    /// <summary>Read a sentence or two around the cursor (locally, via UI Automation) to fix capitalization,
+    /// trailing periods and spacing when inserting into the middle of existing text.</summary>
+    public bool MatchSurroundingText { get; set; } = true;
     /// <summary>In Auto mode, text longer than this (or containing line breaks) is pasted instead of typed.</summary>
     public int TypingMaxChars { get; set; } = 400;
     public int MaxRecordingSeconds { get; set; } = 600;

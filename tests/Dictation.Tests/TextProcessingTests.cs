@@ -118,3 +118,41 @@ public class GarbageGuardTests
     public void A_single_trailing_ellipsis_is_kept() =>
         Assert.Equal("Well...", OutputSanitizer.CollapseDots("Well..."));
 }
+
+public class SegmentTests
+{
+    [Fact]
+    public void Short_dictation_is_one_segment() => Assert.Single(TextChunker.Segment("Just one short sentence."));
+
+    [Fact]
+    public void Long_dictation_splits_into_small_segments_and_joins_back_exactly()
+    {
+        var text = string.Join(' ', Enumerable.Range(0, 60).Select(i => $"This is sentence number {i} of a long dictation."));
+        var segments = TextChunker.Segment(text);
+        Assert.True(segments.Count > 3);
+        Assert.All(segments, s => Assert.True(s.Text.Length <= TextChunker.SegmentChars));
+        Assert.All(segments, s => Assert.EndsWith(".", s.Text)); // whole sentences only
+        Assert.Equal(text, TextChunker.Join(segments, segments.Select(s => s.Text).ToList()));
+    }
+
+    [Fact]
+    public void Paragraph_breaks_start_new_segments_and_survive_the_join()
+    {
+        const string text = "First topic, short.\n\nSecond topic, also short.";
+        var segments = TextChunker.Segment(text);
+        Assert.Equal(2, segments.Count);
+        Assert.False(segments[0].StartsParagraph);
+        Assert.True(segments[1].StartsParagraph);
+        Assert.Equal(text, TextChunker.Join(segments, segments.Select(s => s.Text).ToList()));
+    }
+
+    [Fact]
+    public void Unpunctuated_run_breaks_between_words()
+    {
+        var text = string.Join(' ', Enumerable.Repeat("word", 600));
+        var pieces = TextChunker.Split(text, 200);
+        Assert.All(pieces, p => Assert.True(p.Length <= 200));
+        Assert.All(pieces, p => Assert.DoesNotContain("wor ", p + " ")); // never cuts a word in half
+        Assert.Equal(text, string.Join(' ', pieces));
+    }
+}

@@ -65,7 +65,8 @@ public partial class ProfilePage : UserControl
             TestOutput.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Text");
             DiffText.Render(TestOutput, WordDiff.Compute(input, result.Text),
                 (Brush)FindResource("Ob.DiffRemoved"), (Brush)FindResource("Ob.DiffAdded"));
-            TestMeta.Text = result.SafetyNet ? "safety net: original kept" : LengthChange(input, result.Text);
+            TestMeta.Text = !result.SafetyNet ? LengthChange(input, result.Text)
+                : result.Modified ? "safety net: some parts kept as spoken" : "safety net: original kept";
             if (result.Warning != null && !result.SafetyNet) TestMeta.Text = result.Warning;
         }
         catch (UserFacingException ex) { ShowProblem(ex.Message); }

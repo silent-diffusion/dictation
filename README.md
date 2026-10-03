@@ -55,10 +55,17 @@ The folder keeps its pre-rename name so updates from Local Dictation 1.x keep yo
 ## Using it
 
 * **Hotkey** (default `Ctrl+Space`, change under *Hotkeys*): start/stop. `Ctrl+Alt+P` cycles profiles.
-* **Overlay**: a pill at the bottom center of the screen, always on top, never steals focus. Small while you talk (timer, level meter, active profile, `✕` cancels);
-  it grows to show your transcript while the AI tidies it, then shows a short receipt with the AI's edits (removed words struck through).
-  If the safety net rejects the AI's edit, the receipt says so. Its opacity is a setting under *Appearance*.
-* **Appearance**: follows the Windows light/dark setting, or pick Light or Dark.
+* **Overlay**: a pill, always on top, never steals focus. Small while you talk (timer, level meter, active profile, `✕` cancels);
+  it grows to show your transcript while the AI tidies it, then shows a small dimmed "Inserted" receipt. Hover it to see it clearly;
+  click it to compare what you said with the AI's edit side by side (removed words struck through).
+  If the safety net rejects the AI's edit, the receipt says so. Position (nine spots) and opacity are under *Settings › Appearance*.
+* **Fits the surrounding text**: a sentence or two around the cursor is read (locally, via Windows accessibility) so a word or phrase
+  dictated mid-sentence isn't capitalized or given a period, and missing spaces are added. Works in apps that expose their text
+  (Word, browsers, most text boxes); turn it off under *Settings › General*. That text is never stored, logged or sent to the AI.
+* **No phantom text**: very short or silent recordings insert nothing, so Whisper's habit of hearing "Thank you." in silence never reaches your document.
+* **Long dictation** is cleaned up a few sentences at a time (small models stay faithful on short passages), and the safety net applies to each piece separately.
+* **Settings** (bottom of the sidebar): grouped into Dictation, Speech & AI, Look & feel and App. **Appearance** follows the
+  Windows light/dark setting, or pick Light or Dark.
 * **Profiles** (sidebar): *Light Cleanup*, *Grammar & Clarity*, *Natural Phrasing*, *Custom*, plus your own. Edit the prompt, pick a model, toggle
   *auto-process*, *preview before inserting* (shows the edits; hotkey or *Insert* inserts, `Esc` discards, *Use original* inserts raw), *preserve paragraphs*, *remove fillers*.
   The **Try it** panel runs a profile on sample text and shows what it changed, so you can tune prompts without dictating.
@@ -152,6 +159,8 @@ git tag v1.2.3
 git push origin v1.2.3
 ```
 The *Release* workflow tests, builds `Oberton-Setup-1.2.3.exe` and publishes the GitHub release. Installed copies see it under *Check for updates*.
+
+No local clone? On GitHub open *Actions › Release › Run workflow*, pick `main`, type `1.2.3` and run it: it creates the `v1.2.3` tag for you.
 
 ---
 

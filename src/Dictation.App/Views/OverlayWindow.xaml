@@ -52,7 +52,8 @@
     </Window.Resources>
 
     <Border x:Name="Card" Margin="16" CornerRadius="28" Padding="18,8,8,8" Background="#E0161618"
-            BorderBrush="#1FFFFFFF" BorderThickness="1">
+            BorderBrush="#1FFFFFFF" BorderThickness="1" MouseEnter="Card_MouseEnter" MouseLeave="Card_MouseLeave"
+            MouseLeftButtonUp="Card_MouseLeftButtonUp">
         <Border.Effect>
             <DropShadowEffect BlurRadius="24" ShadowDepth="4" Opacity="0.35"/>
         </Border.Effect>
@@ -110,6 +111,28 @@
 
             <TextBlock x:Name="BodyText" Foreground="White" FontSize="15" LineHeight="22" TextWrapping="Wrap"
                        Margin="0,4,10,6" MaxHeight="112" Visibility="Collapsed"/>
+
+            <!-- Receipt, expanded by a click: what you said next to what the AI made of it -->
+            <Grid x:Name="Compare" Margin="0,6,10,8" Visibility="Collapsed">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="20"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel>
+                    <TextBlock Text="YOU SAID" Foreground="#99FFFFFF" FontFamily="Cascadia Mono, Consolas" FontSize="11" Margin="0,0,0,6"/>
+                    <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto" Focusable="False">
+                        <TextBlock x:Name="CompareRaw" Foreground="#D9FFFFFF" FontSize="14" LineHeight="21" TextWrapping="Wrap"/>
+                    </ScrollViewer>
+                </StackPanel>
+                <Border Grid.Column="1" Width="1" Background="#26FFFFFF" HorizontalAlignment="Center"/>
+                <StackPanel Grid.Column="2">
+                    <TextBlock Text="AI EDIT" Foreground="#99FFFFFF" FontFamily="Cascadia Mono, Consolas" FontSize="11" Margin="0,0,0,6"/>
+                    <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto" Focusable="False">
+                        <TextBlock x:Name="CompareEdited" Foreground="White" FontSize="14" LineHeight="21" TextWrapping="Wrap"/>
+                    </ScrollViewer>
+                </StackPanel>
+            </Grid>
 
             <DockPanel x:Name="Actions" Margin="0,4,0,6" LastChildFill="False" Visibility="Collapsed">
                 <Button x:Name="InsertButton" Style="{StaticResource AccentPill}" Click="Insert_Click"/>

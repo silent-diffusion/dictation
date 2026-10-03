@@ -1,7 +1,7 @@
 <Window x:Class="Dictation.App.Views.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Oberton" Width="1080" Height="760" MinWidth="860" MinHeight="580"
+        Title="Oberton" Width="1200" Height="780" MinWidth="960" MinHeight="600"
         WindowStartupLocation="CenterScreen" Background="{DynamicResource Ob.Window}"
         FontFamily="{StaticResource Ob.Ui}">
     <Window.Resources>
@@ -47,6 +47,25 @@
                     </StackPanel>
                 </Border>
 
+                <!-- History and Settings, above the status panel -->
+                <ListBox x:Name="NavList" DockPanel.Dock="Bottom" Style="{StaticResource NavList}" Margin="0,12,0,0"
+                         SelectionChanged="NavList_SelectionChanged" AutomationProperties.Name="App">
+                    <ListBoxItem x:Name="HistoryItem" Tag="History" AutomationProperties.Name="History">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE81C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="14"
+                                       VerticalAlignment="Center" Margin="0,0,10,0"/>
+                            <TextBlock Text="History"/>
+                        </StackPanel>
+                    </ListBoxItem>
+                    <ListBoxItem x:Name="SettingsItem" Tag="Settings" AutomationProperties.Name="Settings">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE713;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="14"
+                                       VerticalAlignment="Center" Margin="0,0,10,0"/>
+                            <TextBlock Text="Settings"/>
+                        </StackPanel>
+                    </ListBoxItem>
+                </ListBox>
+
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel>
                         <DockPanel Margin="0,0,0,0">
@@ -83,19 +102,6 @@
                             </StackPanel>
                         </Button>
 
-                        <TextBlock Text="SETTINGS" Style="{StaticResource NavHeader}" Margin="10,24,0,6"/>
-                        <ListBox x:Name="NavList" Style="{StaticResource NavList}" SelectionChanged="NavList_SelectionChanged"
-                                 AutomationProperties.Name="Settings">
-                            <ListBoxItem Content="General" Tag="General"/>
-                            <ListBoxItem Content="Appearance" Tag="Appearance"/>
-                            <ListBoxItem Content="Hotkeys" Tag="Hotkeys"/>
-                            <ListBoxItem Content="Speech recognition" Tag="Speech"/>
-                            <ListBoxItem Content="AI models" Tag="Models"/>
-                            <ListBoxItem Content="Microphone" Tag="Audio"/>
-                            <ListBoxItem Content="History" Tag="History"/>
-                            <ListBoxItem Content="Advanced" Tag="Advanced"/>
-                            <ListBoxItem Content="About &amp; updates" Tag="About"/>
-                        </ListBox>
                     </StackPanel>
                 </ScrollViewer>
             </DockPanel>

@@ -58,24 +58,15 @@ public partial class MainWindow : Window
     {
         if (NavList.SelectedItem is not ListBoxItem item) return;
         ProfileList.SelectedItem = null;
-        Host.Content = item.Tag switch
-        {
-            "General" => new GeneralPage(),
-            "Appearance" => new AppearancePage(),
-            "Hotkeys" => new HotkeysPage(),
-            "Speech" => new SpeechPage(),
-            "Models" => new ModelsPage(),
-            "Audio" => new AudioPage(),
-            "History" => new HistoryPage(),
-            "About" => new AboutPage(),
-            _ => (object)new AdvancedPage(),
-        };
+        Host.Content = item == HistoryItem ? new HistoryPage() : new SettingsPage();
     }
 
+    /// <summary>Open "History" or a settings section by tag (e.g. "About" from the tray's update check).</summary>
     public void ShowPage(string tag)
     {
-        foreach (var o in NavList.Items)
-            if (o is ListBoxItem item && (string)item.Tag == tag) { NavList.SelectedItem = item; return; }
+        if (tag == "History") { NavList.SelectedItem = HistoryItem; return; }
+        NavList.SelectedItem = SettingsItem;
+        if (Host.Content is SettingsPage settings) settings.Show(tag);
     }
 
     void NewProfile_Click(object sender, RoutedEventArgs e)

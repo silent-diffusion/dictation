@@ -25,6 +25,16 @@
                 </StackPanel>
             </Border>
 
+            <Border Style="{StaticResource Card}" Margin="0,16,0,0">
+                <CheckBox Style="{StaticResource Switch}" IsChecked="{Binding MatchSurroundingText}" Margin="18,4">
+                    <StackPanel>
+                        <TextBlock Text="Fit dictation into the surrounding text" TextWrapping="Wrap"/>
+                        <TextBlock FontSize="12" Foreground="{DynamicResource Ob.Muted}" TextWrapping="Wrap" Margin="0,2,0,0"
+                                   Text="Reads a sentence or two around the cursor so text dropped mid-sentence isn't capitalized or given a period, and adds missing spaces. Works in apps that expose their text to Windows accessibility (Word, browsers, most text boxes). The text is never stored or sent anywhere."/>
+                    </StackPanel>
+                </CheckBox>
+            </Border>
+
             <TextBlock Text="Text insertion method" Style="{StaticResource FieldLabel}" Margin="0,24,0,6"/>
             <ComboBox x:Name="InsertionBox" SelectedItem="{Binding Insertion}" Width="220" HorizontalAlignment="Left"
                       AutomationProperties.Name="Text insertion method"/>

@@ -82,10 +82,50 @@ public static class OutputSanitizer
     }
 }
 
+/// <summary>One piece of a long dictation, processed by the AI on its own.</summary>
+/// <param name="StartsParagraph">True when a paragraph break came before this piece in the original.</param>
+public sealed record TextSegment(string Text, bool StartsParagraph);
+
 public static class TextChunker
 {
-    /// <summary>Split long dictation at sentence boundaries so each piece fits comfortably in the model's context.</summary>
-    public static List<string> Split(string text, int maxChars = 2200)
+    /// <summary>Small models edit short passages far more faithfully than long ones (on long input they start to
+    /// summarize or drop sentences), so long dictation is cleaned up a few sentences at a time.</summary>
+    public const int SegmentChars = 700;
+
+    /// <summary>Split a dictation into segments at natural breaks: paragraph breaks first, then sentence boundaries,
+    /// grouping whole sentences up to <paramref name="maxChars"/>. Joining them back with <see cref="Join"/>
+    /// reproduces the original text.</summary>
+    public static List<TextSegment> Segment(string text, int maxChars = SegmentChars)
+    {
+        var segments = new List<TextSegment>();
+        var paragraphs = Regex.Split(text.Trim(), @"\s*\n\s*\n\s*");
+        foreach (var para in paragraphs)
+        {
+            if (para.Length == 0) continue;
+            var first = true;
+            foreach (var piece in Split(para, maxChars))
+            {
+                segments.Add(new TextSegment(piece, first && segments.Count > 0));
+                first = false;
+            }
+        }
+        return segments;
+    }
+
+    /// <summary>Put segments (or their edited versions, in the same order) back together.</summary>
+    public static string Join(IReadOnlyList<TextSegment> segments, IReadOnlyList<string> texts)
+    {
+        var sb = new StringBuilder();
+        for (var i = 0; i < texts.Count; i++)
+        {
+            if (i > 0) sb.Append(segments[i].StartsParagraph ? "\n\n" : " ");
+            sb.Append(texts[i].Trim());
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>Split text at sentence boundaries into pieces of at most <paramref name="maxChars"/>.</summary>
+    public static List<string> Split(string text, int maxChars = SegmentChars)
     {
         var chunks = new List<string>();
         if (text.Length <= maxChars) { chunks.Add(text); return chunks; }
@@ -94,9 +134,17 @@ public static class TextChunker
         foreach (var s in sentences)
         {
             if (sb.Length + s.Length + 1 > maxChars && sb.Length > 0) { chunks.Add(sb.ToString()); sb.Clear(); }
-            if (s.Length > maxChars) // pathological: no punctuation at all
+            if (s.Length > maxChars) // no punctuation for a long stretch: break between words instead
             {
-                for (var i = 0; i < s.Length; i += maxChars) chunks.Add(s.Substring(i, Math.Min(maxChars, s.Length - i)));
+                var rest = s;
+                while (rest.Length > maxChars)
+                {
+                    var cut = rest.LastIndexOf(' ', maxChars);
+                    if (cut < maxChars / 2) cut = maxChars; // no usable space: hard cut
+                    chunks.Add(rest[..cut].TrimEnd());
+                    rest = rest[cut..].TrimStart();
+                }
+                if (rest.Length > 0) sb.Append(rest);
                 continue;
             }
             if (sb.Length > 0) sb.Append(' ');
@@ -232,22 +280,33 @@ public sealed class OllamaTextProcessor : ITextProcessor
 
         var model = ModelFor(profile);
         var system = BuildSystemPrompt(profile);
-        var parts = TextChunker.Split(raw.Trim());
-        var output = new List<string>();
+        var segments = TextChunker.Segment(raw);
+        var output = new List<string>(segments.Count);
+        var rejected = 0;
         var sw = Stopwatch.StartNew();
-        foreach (var part in parts)
+        foreach (var segment in segments)
         {
-            var cleaned = await CompleteAsync(model, system, part, profile.RemoveFillers, ct);
-            if (!OutputSanitizer.IsPlausible(part, cleaned, profile.MaxChangeRatio, out var reason))
+            var cleaned = await CompleteAsync(model, system, segment.Text, profile.RemoveFillers, ct);
+            if (OutputSanitizer.IsPlausible(segment.Text, cleaned, profile.MaxChangeRatio, out var reason))
             {
-                Log.Warn($"Rejected model output ({reason}); using raw text for this part.");
-                return new ProcessResult(raw.Trim(), false,
-                    "The AI's edit failed the safety net, so your original words were inserted unchanged.", SafetyNet: true);
+                output.Add(cleaned);
+                continue;
             }
-            output.Add(cleaned);
+            // The safety net works per segment: only the piece the model mangled falls back to the raw words.
+            Log.Warn($"Rejected model output for segment {output.Count + 1}/{segments.Count} ({reason}); using raw text for it.");
+            output.Add(segment.Text);
+            rejected++;
         }
-        Log.Info($"llm {model}: {raw.Length}->{string.Join(' ', output).Length} chars in {sw.ElapsedMilliseconds} ms ({parts.Count} part(s))");
-        return new ProcessResult(string.Join(raw.Contains("\n\n") ? "\n\n" : " ", output), true, null);
+        var text = TextChunker.Join(segments, output);
+        Log.Info($"llm {model}: {raw.Length}->{text.Length} chars in {sw.ElapsedMilliseconds} ms " +
+                 $"({segments.Count} segment(s), {rejected} rejected)");
+        if (rejected == 0) return new ProcessResult(text, true, null);
+        if (rejected == segments.Count)
+            return new ProcessResult(raw.Trim(), false,
+                "The AI's edit failed the safety net, so your original words were inserted unchanged.", SafetyNet: true);
+        return new ProcessResult(text, true,
+            $"The AI's edit of {rejected} of {segments.Count} parts failed the safety net; those parts were inserted unchanged.",
+            SafetyNet: true);
     }
 
     async Task<string> CompleteAsync(string model, string system, string text, bool useExamples, CancellationToken ct)
