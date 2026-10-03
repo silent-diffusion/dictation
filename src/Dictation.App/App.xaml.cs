@@ -147,7 +147,7 @@ public partial class App : Application
             if (!Services.Settings.Current.ShowOverlay && state != DictationState.Confirming) return;
             var profile = Services.Profiles.Active;
             var model = string.IsNullOrWhiteSpace(profile.Model) ? Services.Settings.Current.Llm.DefaultModel : profile.Model;
-            overlay.ShowState(state, profile.Name, c.PendingRaw, c.PreviewText, model);
+            overlay.ShowState(state, profile.Name, c.PendingRaw, c.PreviewText, model, c.IsLive);
         };
         c.Inserted += r => { if (Services.Settings.Current.ShowOverlay) overlay.ShowReceipt(r); };
         c.AudioLevel += l => overlay.SetLevel(l);

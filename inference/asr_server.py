@@ -137,7 +137,46 @@ class FasterWhisperEngine:
                 return ""
         return text if has_content(text) else ""
 
+    def segments(self, audio, language, prompt):
+        """Live mode: [(text, end_seconds)] for each phrase Whisper finds in the audio, silence skipped."""
+        segs, _ = self.model.transcribe(
+            audio,
+            language=language or None,
+            beam_size=5 if self.device == "cuda" else 1,  # CPU: keep up with speech; the final pass redoes it anyway
+            vad_filter=True,
+            vad_parameters={"min_silence_duration_ms": 400},
+            condition_on_previous_text=False,
+            initial_prompt=prompt or None,
+            temperature=[0.0, 0.2, 0.4],
+        )
+        out = [(clean(s.text.strip()), s.end) for s in segs]
+        return [(t, e) for t, e in out if has_content(t)]
+
+
+def choose_commit(segments, duration):
+    """Live mode: how much of the pending audio to commit. Returns (text, end_seconds) or None.
+
+    Prefers the last phrase that ends a sentence; after a long stretch without one, settles for the last
+    phrase boundary. Phrases ending within the final COMMIT_MARGIN seconds may still be cut off, so they wait.
+    """
+    ready = [(t, e) for t, e in segments if e <= duration - COMMIT_MARGIN]
+    if not ready:
+        return None
+    sentence_ends = [i for i, (t, _) in enumerate(ready) if t.rstrip("\"')").endswith((".", "!", "?"))]
+    if sentence_ends:
+        last = sentence_ends[-1]
+    elif duration >= LIVE_FORCE_SECONDS:
+        last = len(ready) - 1
+    else:
+        return None
+    return " ".join(t for t, _ in ready[: last + 1]), ready[last][1]
+
+
 ENGINES = {"faster-whisper": FasterWhisperEngine}
+
+LIVE_CHUNK_SECONDS = 5.0     # live mode: look for something to commit once this much new audio has built up
+LIVE_FORCE_SECONDS = 12.0    # ...and commit at a phrase boundary even without a sentence end after this long
+COMMIT_MARGIN = 0.8          # never commit a phrase ending this close to the newest audio: it may be cut off
 
 
 class Session:
@@ -152,6 +191,9 @@ class Session:
         self.active = False
         self.partial_task = None
         self.last_decoded = 0
+        self.live = False
+        self.committed = 0          # samples already committed (live mode)
+        self.committed_text = ""
 
     def audio(self):
         if not self.chunks:
@@ -182,12 +224,41 @@ class Session:
                 log.exception("partial failed")
                 await self.send({"type": "error", "code": "partial_failed", "message": str(e)})
 
+    async def _live_loop(self):
+        """Live mode: every few seconds, commit the finished sentences of the audio not yet committed."""
+        loop = asyncio.get_running_loop()
+        while self.active:
+            await asyncio.sleep(0.5)
+            if self.samples - self.committed < SAMPLE_RATE * LIVE_CHUNK_SECONDS:
+                continue
+            audio = self.audio()[self.committed:]
+            # The text committed so far (plus the vocabulary hint) keeps casing and names consistent across pieces.
+            prompt = " ".join(p for p in (self.prompt, self.committed_text[-200:]) if p) or None
+            try:
+                async with self.gpu_lock:
+                    if not self.active:
+                        break
+                    segs = await loop.run_in_executor(None, self.engine.segments, audio, self.language, prompt)
+            except Exception as e:  # noqa: BLE001
+                log.exception("live decode failed")
+                await self.send({"type": "error", "code": "live_failed", "message": str(e)})
+                continue
+            pick = choose_commit(segs, len(audio) / SAMPLE_RATE)
+            if not pick or not self.active:
+                continue
+            text, end = pick
+            self.committed += int(end * SAMPLE_RATE)
+            self.committed_text = (self.committed_text + " " + text).strip()
+            await self.send({"type": "commit", "text": text})
+
     def start(self, msg):
         self.chunks, self.samples, self.last_decoded = [], 0, 0
         self.language = msg.get("language") or None
         self.prompt = msg.get("prompt") or None
+        self.live = bool(msg.get("live"))
+        self.committed, self.committed_text = 0, ""
         self.active = True
-        self.partial_task = asyncio.create_task(self._partial_loop())
+        self.partial_task = asyncio.create_task(self._live_loop() if self.live else self._partial_loop())
 
     async def stop(self):
         self.active = False
@@ -197,15 +268,23 @@ class Session:
         audio = self.audio()
         if os.environ.get("DICTATION_DEBUG_DUMP"):  # diagnostics only, never set in normal use
             np.save(os.environ["DICTATION_DEBUG_DUMP"], audio)
-        text = ""
+        text = tail = ""
+        loop = asyncio.get_running_loop()
         if len(audio) >= SAMPLE_RATE * 0.3:
-            loop = asyncio.get_running_loop()
             async with self.gpu_lock:
                 text = await loop.run_in_executor(
                     None, self.engine.transcribe, audio, True, self.language, self.prompt)
+        rest = audio[self.committed:]
+        if self.live and self.committed and len(rest) >= SAMPLE_RATE * 0.3:
+            # Live mode: also the speech after the last committed piece, in case the app can't run the final pass.
+            prompt = " ".join(p for p in (self.prompt, self.committed_text[-200:]) if p) or None
+            async with self.gpu_lock:
+                tail = await loop.run_in_executor(None, self.engine.transcribe, rest, True, self.language, prompt)
+        elif self.live and not self.committed:
+            tail = text
         secs = len(audio) / SAMPLE_RATE
-        self.chunks, self.samples = [], 0  # discard audio
-        await self.send({"type": "final", "text": text, "seconds": round(secs, 2),
+        self.chunks, self.samples, self.committed = [], 0, 0  # discard audio
+        await self.send({"type": "final", "text": text, "tail": tail, "seconds": round(secs, 2),
                          "decode_ms": int((time.time() - t0) * 1000)})
 
     def cancel(self):

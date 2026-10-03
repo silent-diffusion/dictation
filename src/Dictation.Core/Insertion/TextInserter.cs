@@ -206,6 +206,21 @@ public sealed class TextInserter
         }
     }
 
+    /// <summary>Bring the dictation target back to the front (it normally still is).</summary>
+    public async Task<bool> FocusAsync(InsertionTarget target, CancellationToken ct = default)
+    {
+        if (!target.IsAlive) return false;
+        await WaitForModifiersReleasedAsync(ct);
+        return await EnsureForegroundAsync(target, ct);
+    }
+
+    /// <summary>Delete the current selection in the focused app (Backspace).</summary>
+    public async Task DeleteSelectionAsync(CancellationToken ct = default)
+    {
+        await WaitForModifiersReleasedAsync(ct);
+        Native.Send(new[] { Native.Key(Native.VK_BACK, 0, 0), Native.Key(Native.VK_BACK, 0, Native.KEYEVENTF_KEYUP) });
+    }
+
     static async Task WaitForModifiersReleasedAsync(CancellationToken ct)
     {
         // The dictation hotkey's own modifiers may still be down; they would turn typed text into shortcuts.

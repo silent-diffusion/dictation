@@ -165,7 +165,9 @@ public partial class OverlayWindow : Window
     /// <param name="raw">The transcript being cleaned up or previewed.</param>
     /// <param name="preview">The cleaned-up text waiting for confirmation.</param>
     /// <param name="model">The AI model doing the cleanup.</param>
-    public void ShowState(DictationState state, string profileName, string raw = "", string preview = "", string model = "")
+    /// <param name="live">Text was already typed while speaking; this cleanup is the final pass over it.</param>
+    public void ShowState(DictationState state, string profileName, string raw = "", string preview = "", string model = "",
+        bool live = false)
     {
         _state = state;
         _pinnedByState = state != DictationState.Idle;
@@ -213,7 +215,7 @@ public partial class OverlayWindow : Window
 
             case DictationState.Processing:
                 ShowSpinner();
-                TitleText.Text = "Tidying with " + profileName;
+                TitleText.Text = (live ? "Final pass with " : "Tidying with ") + profileName;
                 ShowChip(model);
                 BodyText.Foreground = Muted;
                 ShowBody(raw);
@@ -247,11 +249,11 @@ public partial class OverlayWindow : Window
         ResetView();
         _receipt = r;
         Card.Cursor = System.Windows.Input.Cursors.Hand;
-        if (r.SafetyNet)
+        if (r.SafetyNet || r.Note != null)
         {
             WarnIcon.Stroke = WarnStroke;
             WarnIcon.Visibility = Visibility.Visible;
-            TitleText.Text = r.Edited ? "Partly edited" : "Original words inserted";
+            TitleText.Text = !r.SafetyNet ? "Inserted" : r.Edited ? "Partly edited" : "Original words inserted";
             ShowBody(r.Note ?? "The AI's edit changed too much (or came back empty), so your words went in unchanged. " +
                      "You can adjust the safety net on the profile's page.");
             Display(WideWidth, expanded: true);
@@ -290,7 +292,7 @@ public partial class OverlayWindow : Window
     void Card_MouseLeave(object sender, System.Windows.Input.MouseEventArgs e)
     {
         if (_receipt == null) return;
-        if (!_compareOpen && !_receipt.SafetyNet) Opacity = ReceiptDim;
+        if (!_compareOpen && !_receipt.SafetyNet && _receipt.Note == null) Opacity = ReceiptDim;
         HideAfter(TimeSpan.FromSeconds(_compareOpen ? 4 : 2));
     }
 

@@ -15,6 +15,8 @@ namespace Dictation.Core.Speech;
 public interface ISpeechRecognizer : IAsyncDisposable
 {
     event Action<string>? PartialTranscript;
+    /// <summary>Live mode: a finished piece (whole sentences) that will not change any more. Raised on a background thread.</summary>
+    event Action<string>? Committed;
     event Action<string>? FinalTranscript;
     /// <summary>Human-readable status for the UI ("Loading speech model…", "Ready (GPU)").</summary>
     event Action<string, bool>? StatusChanged;
@@ -23,8 +25,12 @@ public interface ISpeechRecognizer : IAsyncDisposable
     /// <summary>Load the model / start the engine. Safe to call repeatedly.</summary>
     Task InitializeAsync(CancellationToken ct = default);
     /// <summary>Begin a new utterance. Returns immediately; audio may be pushed right away.</summary>
-    void Start();
+    /// <param name="live">Commit finished sentences every few seconds (<see cref="Committed"/>) instead of
+    /// streaming partial transcripts.</param>
+    void Start(bool live = false);
     void AcceptAudio(byte[] pcm16kMono);
+    /// <summary>Live mode: the transcript of the speech after the last <see cref="Committed"/> piece, from the last StopAsync.</summary>
+    string FinalTail { get; }
     /// <summary>Stop, finish decoding and return the final raw transcript.</summary>
     Task<string> StopAsync(CancellationToken ct = default);
     void Cancel();
@@ -49,6 +55,8 @@ public sealed class SidecarSpeechRecognizer : ISpeechRecognizer
     string _status = "Speech engine not started";
 
     public event Action<string>? PartialTranscript;
+    public event Action<string>? Committed;
+    public string FinalTail { get; private set; } = "";
     public event Action<string>? FinalTranscript;
     public event Action<string, bool>? StatusChanged;
     public bool IsReady => _ready && _ws?.State == WebSocketState.Open;
@@ -221,8 +229,12 @@ public sealed class SidecarSpeechRecognizer : ISpeechRecognizer
             case "partial":
                 PartialTranscript?.Invoke(root.GetProperty("text").GetString() ?? "");
                 break;
+            case "commit":
+                Committed?.Invoke(root.GetProperty("text").GetString() ?? "");
+                break;
             case "final":
                 var text = root.GetProperty("text").GetString() ?? "";
+                FinalTail = root.TryGetProperty("tail", out var tail) ? tail.GetString() ?? "" : "";
                 Log.Info($"asr final: {text.Length} chars, {root.GetProperty("seconds").GetDouble():0.0}s audio, {root.GetProperty("decode_ms").GetInt32()} ms decode");
                 FinalTranscript?.Invoke(text);
                 _final?.TrySetResult(text);
@@ -230,17 +242,19 @@ public sealed class SidecarSpeechRecognizer : ISpeechRecognizer
             case "error":
                 var msg = root.GetProperty("message").GetString();
                 Log.Error("asr error: " + msg);
+                // A failed live piece only costs that piece; the final transcript still covers all the audio.
+                if (root.TryGetProperty("code", out var code) && code.GetString() == "live_failed") break;
                 _final?.TrySetException(new UserFacingException("Speech recognition failed: " + msg));
                 break;
         }
     }
 
-    public void Start()
+    public void Start(bool live = false)
     {
         if (!IsReady) throw new UserFacingException(
             _ready ? "The speech engine is not connected." : "The speech model is still loading. Try again in a moment.");
         var asr = _settings.Current.Asr;
-        var msg = JsonSerializer.Serialize(new { type = "start", language = asr.Language, prompt = asr.VocabularyHint });
+        var msg = JsonSerializer.Serialize(new { type = "start", language = asr.Language, prompt = asr.VocabularyHint, live });
         _final = null;
         _outbox.Writer.TryWrite((false, Encoding.UTF8.GetBytes(msg)));
     }

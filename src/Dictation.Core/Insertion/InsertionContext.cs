@@ -50,6 +50,47 @@ public sealed record InsertionContext(string Before, string After)
         }
     }
 
+    /// <summary>
+    /// Select <paramref name="expected"/> in the focused control if it is exactly the text right before the caret.
+    /// Used to replace (or remove) what live dictation typed; false whenever that can't be confirmed, so text the
+    /// user wrote is never touched.
+    /// </summary>
+    public static async Task<bool> SelectBeforeCaretAsync(string expected, TimeSpan timeout)
+    {
+        var select = Task.Run(() => SelectBeforeCaret(expected));
+        return await Task.WhenAny(select, Task.Delay(timeout)) == select && select.Result;
+    }
+
+    static bool SelectBeforeCaret(string expected)
+    {
+        try
+        {
+            var focused = AutomationElement.FocusedElement;
+            if (focused == null || !focused.TryGetCurrentPattern(TextPattern.Pattern, out var p)) return false;
+            var selection = ((TextPattern)p).GetSelection();
+            if (selection.Length == 0) return false;
+            var range = selection[0].Clone();
+            range.MoveEndpointByRange(TextPatternRangeEndpoint.Start, range, TextPatternRangeEndpoint.End); // collapse to the caret
+            range.MoveEndpointByUnit(TextPatternRangeEndpoint.Start, TextUnit.Character, -expected.Length);
+            if (!SameText(range.GetText(expected.Length + 16), expected)) return false;
+            range.Select();
+            return true;
+        }
+        catch (Exception e)
+        {
+            Log.Info("Could not select the live text: " + e.GetType().Name);
+            return false;
+        }
+    }
+
+    /// <summary>Equal once editors' substitutions are undone: line-break styles, non-breaking spaces, smart quotes.</summary>
+    public static bool SameText(string inDocument, string typed)
+    {
+        static string N(string s) => s.Replace("\r\n", "\n").Replace('\r', '\n').Replace('\u00A0', ' ')
+            .Replace('\u2019', '\'').Replace('\u2018', '\'').Replace('\u201C', '"').Replace('\u201D', '"');
+        return N(inDocument) == N(typed);
+    }
+
     /// <summary>Keep at most the last two sentences before the caret and the first sentence after it.</summary>
     public static InsertionContext Trim(string before, string after)
     {

@@ -26,6 +26,16 @@
             </Border>
 
             <Border Style="{StaticResource Card}" Margin="0,16,0,0">
+                <CheckBox Style="{StaticResource Switch}" IsChecked="{Binding TypeWhileSpeaking}" Margin="18,4">
+                    <StackPanel>
+                        <TextBlock Text="Type as you speak" TextWrapping="Wrap"/>
+                        <TextBlock FontSize="12" Foreground="{DynamicResource Ob.Muted}" TextWrapping="Wrap" Margin="0,2,0,0"
+                                   Text="Finished sentences appear in the app about every 5 seconds while you talk. When you press the hotkey again, the whole dictation is cleaned up in one final pass that replaces them. Off for profiles that preview before inserting."/>
+                    </StackPanel>
+                </CheckBox>
+            </Border>
+
+            <Border Style="{StaticResource Card}" Margin="0,16,0,0">
                 <CheckBox Style="{StaticResource Switch}" IsChecked="{Binding MatchSurroundingText}" Margin="18,4">
                     <StackPanel>
                         <TextBlock Text="Fit dictation into the surrounding text" TextWrapping="Wrap"/>
