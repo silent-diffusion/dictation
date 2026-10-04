@@ -9,7 +9,8 @@ The name is German for *overtone*: the AI adds a layer of polish on top of your 
 
 * Speech recognition: Whisper (via faster-whisper), GPU-accelerated on NVIDIA cards, CPU everywhere else.
 * Cleanup: a small local language model (default `qwen2.5:3b`) served by Ollama, driven by editable **profiles**.
-* Everything runs on your PC. No cloud APIs, accounts, analytics or telemetry.
+* Everything runs on your PC: *Keep everything offline* is on by default. Cloud models (Anthropic's Claude, OpenAI and
+  compatible services) are optional, per profile, with your own API key. No accounts, analytics or telemetry.
 
 ---
 
@@ -55,9 +56,12 @@ The folder keeps its pre-rename name so updates from Local Dictation 1.x keep yo
 
 ## Using it
 
+The sidebar has five sections: **Active dashboard** (what's active and loaded right now: profile, models, Read aloud,
+history, privacy), **Speech to text** (profiles), **Text to speech** (Read aloud), **History** and **Settings**.
+
 * **Hotkey** (default `Ctrl+Space`, change under *Hotkeys*): start/stop. `Ctrl+Alt+P` cycles profiles.
 * **Overlay**: a pill, always on top, never steals focus. Small while you talk (timer, level meter, active profile, `✕` cancels);
-  it grows to show your transcript while the AI tidies it, then shows a small dimmed "Inserted" receipt. Hover it to see it clearly;
+  while you speak, the words recognized so far run above it; it grows to show your transcript while the AI tidies it, then shows a small dimmed "Inserted" receipt. Hover it to see it clearly;
   click it to see three columns: what you said, the AI's edit (removed words struck through, new ones highlighted) and the
   clean text that was inserted. Without AI the middle column is left out.
   If the safety net rejects the AI's edit, the receipt says so. Position (nine spots) and opacity are under *Settings › Appearance*.
@@ -76,18 +80,25 @@ The folder keeps its pre-rename name so updates from Local Dictation 1.x keep yo
 * **Read aloud** (`Ctrl+Shift+Space`): reads the selected text in any app with Kokoro, a high-quality voice that runs on
   your PC. With nothing selected, it offers to read your clipboard. The player has play/pause, back and forward 15 seconds,
   slower/faster, the time left, and the sentence being read with the current word highlighted. Pick the voice and the base
-  speed under *Settings › Read aloud*. The voice (about 370 MB) downloads the first time you use it.
+  speed under *Text to speech*. The voice (about 370 MB) downloads the first time you use it.
   Text is read as plain text: Markdown (headings, lists, **bold**, links, tables, code fences) and stray symbols are dropped.
-  The ⌄ button shows the whole text, scrolling along as it is read. The player's opacity is a setting under *Read aloud*.
-* **Settings** (bottom of the sidebar): grouped into Dictation, Speech & AI, Look & feel and App. **Appearance** follows the
+  The ⌄ button shows the whole text, scrolling along as it is read. The player's opacity is a setting under *Text to speech*.
+* **Settings**: grouped into Dictation, Models & AI, Look & feel and App. **Appearance** follows the
   Windows light/dark setting, or pick Light or Dark.
-* **Profiles** (sidebar): *Light Cleanup*, *Grammar & Clarity*, *Natural Phrasing*, *Custom*, *Raw* (no AI: the recognizer's words,
+* **Profiles** (*Speech to text*): *Light Cleanup*, *Grammar & Clarity*, *Natural Phrasing*, *Custom*, *Raw* (no AI: the recognizer's words,
   with the seams between live pieces fixed), plus your own. Edit the prompt, pick a model, toggle
   *Use AI* (off hides the instructions, model and other AI settings; only *Raw* has it off), *preview before inserting* (shows the edits; hotkey or *Insert* inserts, `Esc` discards, *Use original* inserts raw), *preserve paragraphs*, *remove fillers*.
   *Rewrite the whole dictation* is for prompts that reshape what you say ("turn my thoughts into an email"): the AI gets the
   whole dictation in one go when you stop. With *Type as you speak*, your words are typed as spoken and the rewrite replaces them at the end.
   The **Try it** panel runs a profile on sample text and shows what it changed, so you can tune prompts without dictating.
-* **History**: the last 25 dictations, raw next to processed, in memory only. "Insert raw into the last app" is the manual undo-to-raw.
+* **History**: the last 50 dictations (adjustable under *Settings › History*), kept in Oberton's data folder so they survive
+  updates. Each has its recording (play it, also at 2×), the transcription, the AI's raw output, the AI's edit with
+  strikeouts, the text that was inserted, and the app and window it went into. List them newest first, or grouped by app.
+* **Models** (*Settings › Models*): every speech, AI and voice model as a list, showing whether it is downloaded, active and
+  loaded, with **Download** and **Use this** buttons. Cloud models are marked CLOUD.
+* **Model unloading** (*Settings*): unload models unused for 5 minutes to 4 hours (default 30 minutes), or never. Dictating
+  never waits for a model: recording starts at once and the speech model catches up when it has loaded.
+* **Cloud AI** (*Settings*): API keys (encrypted for your Windows account) and the *Keep everything offline* switch.
 * If the AI fails, is unreachable, or returns something implausible (empty, summarised, rambling), your **raw words are inserted instead** - dictation is never lost.
 
 ### Other models
@@ -95,7 +106,7 @@ The folder keeps its pre-rename name so updates from Local Dictation 1.x keep yo
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\pull-model.ps1 qwen3:4b-instruct-2507-q4_K_M   # any Ollama tag
 ```
-Then pick it under **AI Models** (or per profile). Whisper models (`large-v3-turbo`, `distil-large-v3`, `small.en`, `base.en`, …) are chosen under **Speech Recognition**.
+Or download models from **Settings › Models**, and pick the active one there (or per profile).
 
 ---
 

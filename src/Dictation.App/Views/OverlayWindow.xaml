@@ -58,6 +58,9 @@
             <DropShadowEffect BlurRadius="24" ShadowDepth="4" Opacity="0.35"/>
         </Border.Effect>
         <StackPanel x:Name="Body" Width="440">
+            <!-- The transcript so far, while you speak: above the pill's own content -->
+            <TextBlock x:Name="LiveText" Foreground="#D9FFFFFF" FontSize="14" LineHeight="21" TextWrapping="Wrap"
+                       Margin="0,6,10,4" MaxHeight="63" Visibility="Collapsed"/>
             <Grid MinHeight="40">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>

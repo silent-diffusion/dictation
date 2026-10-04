@@ -1,0 +1,39 @@
+<UserControl x:Class="Dictation.App.Views.HistorySettingsPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="40,32,40,40" MaxWidth="760" HorizontalAlignment="Left">
+            <TextBlock Text="History" Style="{StaticResource SectionTitle}"/>
+            <TextBlock Style="{StaticResource Caption}"
+                       Text="Recent dictations are kept on this PC with everything about them: the recording, the transcription, the AI's output and what was inserted where. They are stored in Oberton's data folder, which app updates never touch."/>
+
+            <Border Style="{StaticResource Card}" Margin="0,8,0,0">
+                <StackPanel Margin="18,0">
+                    <CheckBox Style="{StaticResource Switch}" Content="Keep a history of dictations" IsChecked="{Binding KeepHistory}"/>
+                    <Border Style="{StaticResource Divider}"/>
+                    <CheckBox Style="{StaticResource Switch}" IsChecked="{Binding SaveHistoryAudio}" Margin="0,4">
+                        <StackPanel>
+                            <TextBlock Text="Keep the recordings" TextWrapping="Wrap"/>
+                            <TextBlock Text="So you can play a dictation back. About 2 MB per minute of speech."
+                                       FontSize="12" Foreground="{DynamicResource Ob.Muted}" TextWrapping="Wrap" Margin="0,2,0,0"/>
+                        </StackPanel>
+                    </CheckBox>
+                </StackPanel>
+            </Border>
+
+            <TextBlock Text="How many to keep" Style="{StaticResource FieldLabel}" Margin="0,22,0,6"/>
+            <ComboBox x:Name="LimitBox" Width="200" HorizontalAlignment="Left" DisplayMemberPath="Label" SelectedValuePath="Value"
+                      SelectedValue="{Binding HistoryLimit}" AutomationProperties.Name="How many dictations to keep"/>
+            <TextBlock Style="{StaticResource Caption}" Margin="0,6,0,0"
+                       Text="The oldest ones are deleted as new ones come in (also right away when you lower this)."/>
+
+            <TextBlock Text="Stored in" Style="{StaticResource FieldLabel}" Margin="0,18,0,6"/>
+            <TextBlock x:Name="FolderText" FontFamily="{StaticResource Ob.Mono}" FontSize="12" TextWrapping="Wrap"/>
+            <TextBlock x:Name="SizeText" Style="{StaticResource Caption}" Margin="0,4,0,0"/>
+            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                <Button Content="Open folder" Style="{StaticResource QuietButton}" Margin="0,0,8,0" Click="Open_Click"/>
+                <Button Content="Delete all history…" Style="{StaticResource QuietButton}" Click="Clear_Click"/>
+            </StackPanel>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

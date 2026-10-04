@@ -6,6 +6,13 @@
         FontFamily="{StaticResource Ob.Ui}">
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="B2V"/>
+        <Style x:Key="NavIcon" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets"/>
+            <Setter Property="FontSize" Value="15"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Margin" Value="0,0,12,0"/>
+            <Setter Property="FontWeight" Value="Normal"/>
+        </Style>
         <Style x:Key="StatusDot" TargetType="Ellipse">
             <Setter Property="Width" Value="7"/>
             <Setter Property="Height" Value="7"/>
@@ -43,67 +50,45 @@
                             <TextBlock Text="{Binding Ai}" FontSize="12" TextTrimming="CharacterEllipsis" MaxWidth="190"
                                        ToolTip="{Binding Ai}"/>
                         </StackPanel>
-                        <TextBlock Text="Nothing leaves this PC." FontSize="11" Foreground="{DynamicResource Ob.Muted}" Margin="0,6,0,0"/>
+                        <TextBlock x:Name="PrivacyText" FontSize="11" Foreground="{DynamicResource Ob.Muted}" Margin="0,6,0,0"
+                                   TextWrapping="Wrap"/>
                     </StackPanel>
                 </Border>
 
-                <!-- History and Settings, above the status panel -->
-                <ListBox x:Name="NavList" DockPanel.Dock="Bottom" Style="{StaticResource NavList}" Margin="0,12,0,0"
-                         SelectionChanged="NavList_SelectionChanged" AutomationProperties.Name="App">
+                <!-- The app's sections -->
+                <ListBox x:Name="NavList" Style="{StaticResource NavList}" SelectionChanged="NavList_SelectionChanged"
+                         AutomationProperties.Name="Sections">
+                    <ListBoxItem x:Name="DashboardItem" Tag="Dashboard" AutomationProperties.Name="Active dashboard">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE80F;" Style="{StaticResource NavIcon}"/>
+                            <TextBlock Text="Active dashboard"/>
+                        </StackPanel>
+                    </ListBoxItem>
+                    <ListBoxItem x:Name="SpeechItem" Tag="SpeechToText" AutomationProperties.Name="Speech to text">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE720;" Style="{StaticResource NavIcon}"/>
+                            <TextBlock Text="Speech to text"/>
+                        </StackPanel>
+                    </ListBoxItem>
+                    <ListBoxItem x:Name="ReadItem" Tag="TextToSpeech" AutomationProperties.Name="Text to speech">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE767;" Style="{StaticResource NavIcon}"/>
+                            <TextBlock Text="Text to speech"/>
+                        </StackPanel>
+                    </ListBoxItem>
                     <ListBoxItem x:Name="HistoryItem" Tag="History" AutomationProperties.Name="History">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE81C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="14"
-                                       VerticalAlignment="Center" Margin="0,0,10,0"/>
+                            <TextBlock Text="&#xE81C;" Style="{StaticResource NavIcon}"/>
                             <TextBlock Text="History"/>
                         </StackPanel>
                     </ListBoxItem>
                     <ListBoxItem x:Name="SettingsItem" Tag="Settings" AutomationProperties.Name="Settings">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE713;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="14"
-                                       VerticalAlignment="Center" Margin="0,0,10,0"/>
+                            <TextBlock Text="&#xE713;" Style="{StaticResource NavIcon}"/>
                             <TextBlock Text="Settings"/>
                         </StackPanel>
                     </ListBoxItem>
                 </ListBox>
-
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <StackPanel>
-                        <DockPanel Margin="0,0,0,0">
-                            <TextBlock x:Name="CycleHint" DockPanel.Dock="Right" Style="{StaticResource MonoLabel}" Margin="0,0,10,6"
-                                       ToolTip="Press this shortcut in any app to switch to the next profile."/>
-                            <TextBlock Text="PROFILES" Style="{StaticResource NavHeader}"/>
-                        </DockPanel>
-                        <ListBox x:Name="ProfileList" Style="{StaticResource NavList}" SelectionChanged="ProfileList_SelectionChanged"
-                                 AutomationProperties.Name="Profiles">
-                            <ListBox.ItemTemplate>
-                                <DataTemplate>
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel>
-                                            <TextBlock Text="{Binding Name}" FontSize="14" TextTrimming="CharacterEllipsis"/>
-                                            <TextBlock Text="{Binding Description}" FontSize="12" FontWeight="Normal"
-                                                       Foreground="{DynamicResource Ob.Muted}" TextTrimming="CharacterEllipsis"/>
-                                        </StackPanel>
-                                        <TextBlock Grid.Column="1" Text="Active" Style="{StaticResource MonoLabel}" Margin="8,2,0,0"
-                                                   VerticalAlignment="Top" FontWeight="Normal"
-                                                   Visibility="{Binding IsActive, Converter={StaticResource B2V}}"/>
-                                    </Grid>
-                                </DataTemplate>
-                            </ListBox.ItemTemplate>
-                        </ListBox>
-                        <Button Style="{StaticResource DashedButton}" Margin="0,6,0,0" Click="NewProfile_Click">
-                            <StackPanel Orientation="Horizontal">
-                                <Path Data="M 6,1 L 6,11 M 1,6 L 11,6" Stroke="{DynamicResource Ob.Muted}" StrokeThickness="1.6"
-                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                                <TextBlock Text="New profile" FontSize="13"/>
-                            </StackPanel>
-                        </Button>
-
-                    </StackPanel>
-                </ScrollViewer>
             </DockPanel>
         </Border>
 

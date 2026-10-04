@@ -76,6 +76,9 @@ public partial class App : Application
 
         WireController();
         ApplyHotkeys();
+        var unloader = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
+        unloader.Tick += async (_, _) => await UnloadIdleModelsAsync();
+        unloader.Start();
         _lastAsr = JsonSerializer.Serialize(s.Settings.Current.Asr);
         s.Settings.Changed += OnSettingsChanged;
         s.Profiles.ActiveChanged += () =>
@@ -103,6 +106,27 @@ public partial class App : Application
         _ = s.Llm.WarmUpAsync(s.Profiles.Active.Model);
 
         if (s.Settings.Current.CheckUpdatesOnStartup) _ = CheckForUpdatesQuietlyAsync();
+    }
+
+    /// <summary>
+    /// Settings › Model unloading: free the speech model and the Read aloud voice after they have been unused for a while.
+    /// (Ollama unloads the AI model by itself, through the keep-alive Oberton sends with every request.) Both load again
+    /// on their own when needed; a dictation starts recording at once and catches up.
+    /// </summary>
+    async Task UnloadIdleModelsAsync()
+    {
+        var minutes = Services.Settings.Current.UnloadAfterMinutes;
+        if (minutes <= 0) return;
+        var idle = TimeSpan.FromMinutes(minutes);
+        try
+        {
+            var c = Services.Controller;
+            if (c.State == DictationState.Idle && Services.Speech.IsReady && DateTime.Now - c.LastActivity > idle)
+                await Services.Speech.UnloadAsync();
+            if (_reader is { IsBusy: false } && Services.Tts.IsRunning && DateTime.Now - Services.Tts.LastUsed > idle)
+                await Services.Tts.UnloadAsync();
+        }
+        catch (Exception e) { Log.Warn("Unloading idle models failed: " + e.Message); }
     }
 
     /// <summary>Opt-in startup check: only tells the user; installing is always their click.</summary>
@@ -158,6 +182,8 @@ public partial class App : Application
         };
         c.Inserted += r => { if (Services.Settings.Current.ShowOverlay) overlay.ShowReceipt(r); };
         c.AudioLevel += l => overlay.SetLevel(l);
+        c.LiveTranscript += t => overlay.SetLiveTranscript(t);
+        c.EngineLoading += loading => overlay.SetEngineLoading(loading);
         c.Notice += (msg, level) => overlay.ShowMessage(msg, level);
     }
 

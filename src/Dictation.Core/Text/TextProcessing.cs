@@ -21,6 +21,8 @@ public interface ITextProcessor
     Task<IReadOnlyList<string>> ListModelsAsync(CancellationToken ct = default);
     /// <summary>Make sure the runtime is up and the model is resident in memory.</summary>
     Task WarmUpAsync(string? model, CancellationToken ct = default);
+    /// <summary>Local models currently loaded in memory (empty if the runtime isn't running). Never starts the runtime.</summary>
+    Task<IReadOnlyList<string>> LoadedModelsAsync(CancellationToken ct = default);
     string Status { get; }
     event Action<string, bool>? StatusChanged;
 }
@@ -201,7 +203,7 @@ public sealed class OllamaHost
             psi.Environment["OLLAMA_HOST"] = $"127.0.0.1:{uri.Port}";
             psi.Environment["OLLAMA_MODELS"] = Path.Combine(AppPaths.ModelsDir, "ollama");
             psi.Environment["OLLAMA_NO_CLOUD"] = "1";
-            psi.Environment["OLLAMA_KEEP_ALIVE"] = llm.KeepAlive;
+            psi.Environment["OLLAMA_KEEP_ALIVE"] = _settings.Current.OllamaKeepAlive;
             var p = new Process { StartInfo = psi };
             p.OutputDataReceived += (_, e) => { if (e.Data != null) Log.Info("ollama: " + e.Data); };
             p.ErrorDataReceived += (_, e) => { if (e.Data != null) Log.Info("ollama: " + e.Data); };
@@ -243,6 +245,7 @@ public sealed class OllamaTextProcessor : ITextProcessor
 {
     readonly SettingsService _settings;
     readonly OllamaHost _host;
+    readonly CloudCompletion _cloud;
     readonly HttpClient _http = new() { Timeout = Timeout.InfiniteTimeSpan };
     /// <summary>Must be identical for warm-up and real requests, otherwise Ollama reloads the model.</summary>
     const int NumCtx = 4096;
@@ -264,6 +267,7 @@ public sealed class OllamaTextProcessor : ITextProcessor
     {
         _settings = settings;
         _host = host;
+        _cloud = new CloudCompletion(settings);
     }
 
     void SetStatus(string s, bool ok) { _status = s; StatusChanged?.Invoke(s, ok); }
@@ -290,9 +294,9 @@ public sealed class OllamaTextProcessor : ITextProcessor
     public async Task<ProcessResult> ProcessAsync(string raw, Profile profile, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(raw)) return new ProcessResult(raw, false, null);
-        await _host.EnsureRunningAsync(ct);
-
         var model = ModelFor(profile);
+        if (!CloudModels.IsCloud(model)) await _host.EnsureRunningAsync(ct);
+
         var system = BuildSystemPrompt(profile);
         if (profile.RewriteWhole) return await RewriteAsync(raw, profile, model, system, ct);
         var segments = TextChunker.Segment(raw);
@@ -339,6 +343,15 @@ public sealed class OllamaTextProcessor : ITextProcessor
 
     async Task<string> CompleteAsync(string model, string system, string text, bool useExamples, CancellationToken ct)
     {
+        if (CloudModels.IsCloud(model))
+        {
+            var examples = useExamples
+                ? Examples.Select(e => ($"<transcript>\n{e.In}\n</transcript>", e.Out)).ToList()
+                : new List<(string, string)>();
+            var reply = await _cloud.CompleteAsync(model, system, examples, $"<transcript>\n{text}\n</transcript>",
+                Math.Min(8192, text.Length / 2 + 512), ct);
+            return OutputSanitizer.Clean(reply, text);
+        }
         var llm = _settings.Current.Llm;
         var messages = new JsonArray { new JsonObject { ["role"] = "system", ["content"] = system } };
         if (useExamples)
@@ -353,7 +366,7 @@ public sealed class OllamaTextProcessor : ITextProcessor
             ["model"] = model,
             ["stream"] = false,
             ["think"] = false,
-            ["keep_alive"] = llm.KeepAlive,
+            ["keep_alive"] = _settings.Current.OllamaKeepAlive,
             ["options"] = new JsonObject
             {
                 ["temperature"] = 0,
@@ -400,6 +413,18 @@ public sealed class OllamaTextProcessor : ITextProcessor
         }
     }
 
+    public async Task<IReadOnlyList<string>> LoadedModelsAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            if (!await OllamaHost.PingAsync(_settings.Current.Llm.Endpoint, ct)) return Array.Empty<string>();
+            var ps = await _http.GetFromJsonAsync<JsonObject>(Url("/api/ps"), ct);
+            return ps?["models"]?.AsArray().Select(m => m?["name"]?.GetValue<string>() ?? "").Where(n => n.Length > 0).ToList()
+                   ?? new List<string>();
+        }
+        catch { return Array.Empty<string>(); }
+    }
+
     /// <summary>Ask Ollama how much of the loaded model landed in GPU memory.</summary>
     async Task<string> DescribeLoadedAsync(string model, CancellationToken ct)
     {
@@ -421,6 +446,13 @@ public sealed class OllamaTextProcessor : ITextProcessor
     public async Task WarmUpAsync(string? model, CancellationToken ct = default)
     {
         model = string.IsNullOrWhiteSpace(model) ? _settings.Current.Llm.DefaultModel : model;
+        if (CloudModels.IsCloud(model))
+        {
+            // Nothing to load; and nothing is sent until a dictation needs it.
+            var offline = _settings.Current.Cloud.KeepOffline;
+            SetStatus(offline ? $"{model} is a cloud model; \"Keep everything offline\" blocks it" : $"Ready · {model} (cloud)", !offline);
+            return;
+        }
         try
         {
             SetStatus("Starting AI runtime…", false);
@@ -435,7 +467,7 @@ public sealed class OllamaTextProcessor : ITextProcessor
             SetStatus($"Loading {model}…", false);
             // An empty chat request loads the model into (GPU) memory without generating anything.
             using var resp = await _http.PostAsJsonAsync(Url("/api/chat"),
-                new { model, keep_alive = _settings.Current.Llm.KeepAlive, options = new { num_ctx = NumCtx }, messages = Array.Empty<object>() }, ct);
+                new { model, keep_alive = _settings.Current.OllamaKeepAlive, options = new { num_ctx = NumCtx }, messages = Array.Empty<object>() }, ct);
             resp.EnsureSuccessStatusCode();
             SetStatus(await DescribeLoadedAsync(model, ct), true);
         }

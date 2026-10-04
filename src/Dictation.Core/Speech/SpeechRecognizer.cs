@@ -36,6 +36,8 @@ public interface ISpeechRecognizer : IAsyncDisposable
     void Cancel();
     /// <summary>Restart the engine with current settings (after the user changed the model, etc.).</summary>
     Task RestartAsync();
+    /// <summary>Free the model's memory (GPU memory especially). The next <see cref="InitializeAsync"/> loads it again.</summary>
+    Task UnloadAsync();
 }
 
 /// <summary>
@@ -276,6 +278,21 @@ public sealed class SidecarSpeechRecognizer : ISpeechRecognizer
     {
         _final = null;
         _outbox.Writer.TryWrite((false, Encoding.UTF8.GetBytes("{\"type\":\"cancel\"}")));
+    }
+
+    public async Task UnloadAsync()
+    {
+        await _initLock.WaitAsync();
+        try
+        {
+            if (!IsReady) return;
+            _ready = false;
+            _lifetime.Cancel();
+            KillProcess();
+            Log.Info("Speech model unloaded after being idle");
+            SetStatus("Unloaded · loads again when you dictate", false);
+        }
+        finally { _initLock.Release(); }
     }
 
     public async Task RestartAsync()

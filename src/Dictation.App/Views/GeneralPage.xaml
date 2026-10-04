@@ -5,7 +5,7 @@
         <StackPanel Margin="40,32,40,40" MaxWidth="760" HorizontalAlignment="Left">
             <TextBlock Text="General" Style="{StaticResource SectionTitle}"/>
             <TextBlock Style="{StaticResource Caption}"
-                       Text="Everything runs on this computer. No audio or text is ever sent anywhere, and there is no telemetry."/>
+                       Text="Everything runs on this computer. No audio or text is sent anywhere unless you allow cloud AI (Settings › Cloud AI), and there is no telemetry."/>
 
             <Border Style="{StaticResource Card}" Margin="0,8,0,0">
                 <StackPanel Margin="18,0">
@@ -14,14 +14,6 @@
                     <Border Style="{StaticResource Divider}"/>
                     <CheckBox Style="{StaticResource Switch}" Content="Keep running in the tray when the window is closed"
                               IsChecked="{Binding MinimizeToTray}"/>
-                    <Border Style="{StaticResource Divider}"/>
-                    <CheckBox Style="{StaticResource Switch}" IsChecked="{Binding KeepHistory}" Margin="0,4">
-                        <StackPanel>
-                            <TextBlock Text="Keep the last 25 dictations for the History page" TextWrapping="Wrap"/>
-                            <TextBlock Text="Raw and processed text, held in memory only and discarded when the app exits."
-                                       FontSize="12" Foreground="{DynamicResource Ob.Muted}" TextWrapping="Wrap" Margin="0,2,0,0"/>
-                        </StackPanel>
-                    </CheckBox>
                 </StackPanel>
             </Border>
 

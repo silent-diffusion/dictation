@@ -1,0 +1,58 @@
+<UserControl x:Class="Dictation.App.Views.SpeechToTextPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <UserControl.Resources>
+        <BooleanToVisibilityConverter x:Key="B2V"/>
+    </UserControl.Resources>
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="250"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- Profiles -->
+        <Border BorderBrush="{DynamicResource Ob.Divider}" BorderThickness="0,0,1,0">
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <StackPanel Margin="14,30,14,16">
+                    <TextBlock Text="Speech to text" FontSize="20" FontWeight="SemiBold" Margin="10,0,0,4"/>
+                    <TextBlock x:Name="HotkeyHint" Style="{StaticResource Caption}" Margin="10,0,8,14" FontSize="12"/>
+                    <DockPanel>
+                        <TextBlock x:Name="CycleHint" DockPanel.Dock="Right" Style="{StaticResource MonoLabel}" Margin="0,0,10,6"
+                                   ToolTip="Press this shortcut in any app to switch to the next profile."/>
+                        <TextBlock Text="PROFILES" Style="{StaticResource NavHeader}"/>
+                    </DockPanel>
+                    <ListBox x:Name="ProfileList" Style="{StaticResource NavList}" SelectionChanged="ProfileList_SelectionChanged"
+                             AutomationProperties.Name="Profiles">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding Name}" FontSize="14" TextTrimming="CharacterEllipsis"/>
+                                        <TextBlock Text="{Binding Description}" FontSize="12" FontWeight="Normal"
+                                                   Foreground="{DynamicResource Ob.Muted}" TextTrimming="CharacterEllipsis"/>
+                                    </StackPanel>
+                                    <TextBlock Grid.Column="1" Text="Active" Style="{StaticResource MonoLabel}" Margin="8,2,0,0"
+                                               VerticalAlignment="Top" FontWeight="Normal"
+                                               Visibility="{Binding IsActive, Converter={StaticResource B2V}}"/>
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <Button Style="{StaticResource DashedButton}" Margin="0,6,0,0" Click="NewProfile_Click">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Data="M 6,1 L 6,11 M 1,6 L 11,6" Stroke="{DynamicResource Ob.Muted}" StrokeThickness="1.6"
+                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                            <TextBlock Text="New profile" FontSize="13"/>
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+
+        <ContentPresenter x:Name="Host" Grid.Column="1"/>
+    </Grid>
+</UserControl>

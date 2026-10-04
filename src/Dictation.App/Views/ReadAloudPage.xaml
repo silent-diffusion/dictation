@@ -3,7 +3,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <ScrollViewer VerticalScrollBarVisibility="Auto">
         <StackPanel Margin="40,32,40,40" MaxWidth="760" HorizontalAlignment="Left">
-            <TextBlock Text="Read aloud" Style="{StaticResource SectionTitle}"/>
+            <TextBlock Text="Text to speech" Style="{StaticResource SectionTitle}"/>
             <TextBlock x:Name="Intro" Style="{StaticResource Caption}"/>
 
             <Border Style="{StaticResource Card}" Margin="0,8,0,0">

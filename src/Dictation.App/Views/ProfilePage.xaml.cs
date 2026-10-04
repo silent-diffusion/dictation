@@ -24,7 +24,8 @@ public partial class ProfilePage : UserControl
         Loaded += async (_, _) =>
         {
             var models = await App.Services.Llm.ListModelsAsync();
-            ModelBox.ItemsSource = models;
+            // Local models first; cloud models (sent only while "Keep everything offline" is off) after them.
+            ModelBox.ItemsSource = models.Concat(CloudModels.Catalog(App.Services.Settings.Current.Cloud).Select(c => c.Id)).ToList();
         };
     }
 
