@@ -119,6 +119,13 @@
                             <CheckBox Style="{StaticResource Switch}" Margin="14,0" Content="Clean up automatically"
                                       IsChecked="{Binding AutoProcess}"/>
                             <Border Style="{StaticResource Divider}"/>
+                            <StackPanel>
+                                <CheckBox Style="{StaticResource Switch}" Margin="14,0" Content="Rewrite the whole dictation"
+                                          IsChecked="{Binding RewriteWhole}" IsEnabled="{Binding AutoProcess}"/>
+                                <TextBlock Style="{StaticResource Caption}" Margin="14,0,14,12" FontSize="12"
+                                           Text="For instructions that reshape what you say, like turning your thoughts into an email. The AI gets everything at once when you stop. While you speak, your words are typed as spoken, then replaced by the rewrite. Off: long dictation is edited a few sentences at a time, which keeps the wording closer to yours."/>
+                            </StackPanel>
+                            <Border Style="{StaticResource Divider}"/>
                             <CheckBox Style="{StaticResource Switch}" Margin="14,0" Content="Preview before inserting"
                                       IsChecked="{Binding ShowPreview}"/>
                             <Border Style="{StaticResource Divider}"/>
@@ -135,9 +142,29 @@
                                     <TextBlock Text="Safety net"/>
                                 </DockPanel>
                                 <Slider Minimum="0.1" Maximum="0.9" Value="{Binding MaxChangeRatio}" TickFrequency="0.1"
-                                        IsSnapToTickEnabled="True" Margin="0,6,0,4" AutomationProperties.Name="Safety net"/>
-                                <TextBlock Style="{StaticResource Caption}" Margin="0" FontSize="12"
-                                           Text="If the AI changes the length by more than this, your original words are inserted instead."/>
+                                        IsSnapToTickEnabled="True" Margin="0,6,0,4" AutomationProperties.Name="Safety net">
+                                    <Slider.Style>
+                                        <Style TargetType="Slider" BasedOn="{StaticResource {x:Type Slider}}">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding RewriteWhole}" Value="True">
+                                                    <Setter Property="IsEnabled" Value="False"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Slider.Style>
+                                </Slider>
+                                <TextBlock FontSize="12" Margin="0" TextWrapping="Wrap">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock" BasedOn="{StaticResource Caption}">
+                                            <Setter Property="Text" Value="If the AI changes the length by more than this, your original words are inserted instead."/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding RewriteWhole}" Value="True">
+                                                    <Setter Property="Text" Value="A rewrite may change the length a lot, so only an empty or runaway result falls back to your original words."/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
                             </StackPanel>
                         </StackPanel>
                     </Border>

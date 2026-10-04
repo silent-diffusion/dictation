@@ -12,6 +12,8 @@ namespace Dictation.Core.Session;
 /// sentences, every ~5 s) is cleaned up and typed into the target right away. When the user stops, the whole
 /// recording is transcribed and cleaned in one pass and replaces everything typed live; that replacement only
 /// happens after confirming (via UI Automation) that the text before the caret is exactly what was typed.
+/// With a profile that rewrites the whole dictation (an email, say), pieces are typed as spoken, since the
+/// instructions only make sense for the whole, and the rewrite replaces them at the end.
 /// Use from the UI thread only.
 /// </summary>
 public sealed class LiveInsertion
@@ -75,7 +77,7 @@ public sealed class LiveInsertion
 
     async Task<string> CleanAsync(string raw, CancellationToken ct)
     {
-        if (!_profile.AutoProcess || string.IsNullOrWhiteSpace(raw)) return raw.Trim();
+        if (!_profile.AutoProcess || _profile.RewriteWhole || string.IsNullOrWhiteSpace(raw)) return raw.Trim();
         try { return (await _llm.ProcessAsync(raw, _profile, ct)).Text; }
         catch (UserFacingException e)
         {
@@ -104,9 +106,10 @@ public sealed class LiveInsertion
         if (!await _inserter.FocusAsync(_target, ct))
             throw new UserFacingException("Couldn't switch back to the app you were typing in. Click into it and try again.");
 
-        if (IsPlausibleReplacement(finalText, Typed) && await InsertionContext.SelectBeforeCaretAsync(Typed, UiaTimeout))
+        var rewrite = _profile.RewriteWhole && _profile.AutoProcess;
+        if (IsPlausibleReplacement(finalText, Typed, rewrite) && await InsertionContext.SelectBeforeCaretAsync(Typed, UiaTimeout))
         {
-            var replacement = ContextFit.Apply(finalText, await _context);
+            var replacement = ContextFit.Fit(finalText, await _context, spacingOnly: rewrite);
             await _inserter.InsertAsync(replacement, _target, ct); // replaces the selection
             Log.Info($"Live dictation: final pass replaced {Typed.Length} typed chars with {replacement.Length}");
             return (replacement, null);
@@ -117,17 +120,26 @@ public sealed class LiveInsertion
         var missing = ContextFit.Apply(string.Join(" ", rest.Where(r => r.Length > 0)), await ContextAfterTypedAsync());
         if (missing.Length > 0) await _inserter.InsertAsync(missing, _target, ct);
         Log.Info("Live dictation: couldn't confirm the typed text, so the final pass was skipped");
+        if (rewrite && !string.IsNullOrWhiteSpace(finalText))
+        {
+            // The words as spoken are in the document; hand over the rewrite so it isn't lost.
+            try { System.Windows.Clipboard.SetText(finalText); } catch { }
+            return (Typed + missing,
+                "This app didn't let Oberton replace the text it typed while you spoke, so your words were kept as " +
+                "spoken. The rewritten version is on your clipboard.");
+        }
         return (Typed + missing,
             "This app didn't let Oberton confirm the text it typed while you spoke, so that text was kept as typed " +
             "and only the rest was added.");
     }
 
     /// <summary>The final pass must cover at least most of what was already typed: an empty or much shorter result
-    /// (a failed final decode, a model that summarized) would delete the user's words.</summary>
-    public static bool IsPlausibleReplacement(string finalText, string typed)
+    /// (a failed final decode, a model that summarized) would delete the user's words. A rewrite (see
+    /// <see cref="Profile.RewriteWhole"/>) may legitimately be much shorter; the AI step already checked it.</summary>
+    public static bool IsPlausibleReplacement(string finalText, string typed, bool rewrite = false)
     {
         static int Words(string s) => s.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
-        return Words(finalText) > 0 && Words(finalText) >= Words(typed) * 0.6;
+        return Words(finalText) > 0 && Words(finalText) >= Words(typed) * (rewrite ? 0.1 : 0.6);
     }
 
     /// <summary>Cancelled: remove what was typed live, if it can be confirmed in place.</summary>

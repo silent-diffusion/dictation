@@ -282,7 +282,9 @@ public sealed class DictationController
             }
             else
             {
-                text = ContextFit.Apply(text, await _context);
+                // A rewrite was laid out on purpose: only fix the spacing around it.
+                var profile = _profiles.Active;
+                text = ContextFit.Fit(text, await _context, spacingOnly: profile.RewriteWhole && profile.AutoProcess && text != _pendingRaw);
                 await _inserter.InsertAsync(text, _target, ct);
             }
             if (rec != null) { rec.Processed = text; rec.Inserted = true; }
