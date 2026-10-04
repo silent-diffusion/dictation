@@ -157,7 +157,7 @@ public sealed class DictationController
             switch (State)
             {
                 case DictationState.Idle: await StartAsync(); break;
-                case DictationState.Recording: await StopAsync(); break;
+                case DictationState.Recording: await StopCancellableAsync(); break;
                 case DictationState.Confirming: await ConfirmInsertAsync(); break;
                 // Starting / Transcribing / Processing / Inserting: ignore presses until done
             }
@@ -165,6 +165,21 @@ public sealed class DictationController
         catch (Exception e)
         {
             Fail(e);
+        }
+    }
+
+    /// <summary>
+    /// A dictation cancelled (Esc / ✕) while it was finishing still completes its awaits afterwards, often with an error
+    /// (the model it waited for loaded, a request was cancelled). That is not a failure, and it must not touch a newer
+    /// dictation, so it ends quietly.
+    /// </summary>
+    async Task StopCancellableAsync()
+    {
+        var session = _sessionCts;
+        try { await StopAsync(); }
+        catch (Exception e) when (session is { IsCancellationRequested: true })
+        {
+            Log.Info("A cancelled dictation ended: " + e.GetType().Name);
         }
     }
 

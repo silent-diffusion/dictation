@@ -45,7 +45,7 @@ public class UnloadingTests
     [Theory]
     [InlineData(30, "30m")]
     [InlineData(5, "5m")]
-    [InlineData(0, "-1")]
+    [InlineData(0, "-1m")]
     public void Unload_time_becomes_an_ollama_keep_alive(int minutes, string keepAlive) =>
         Assert.Equal(keepAlive, new AppSettings { UnloadAfterMinutes = minutes }.OllamaKeepAlive);
 

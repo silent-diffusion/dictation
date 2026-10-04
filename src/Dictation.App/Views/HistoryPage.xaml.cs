@@ -20,6 +20,7 @@ public partial class HistoryPage : UserControl
     readonly MediaPlayer _player = new();
     readonly DispatcherTimer _tick = new() { Interval = TimeSpan.FromMilliseconds(200) };
     bool _playing, _seeking;
+    string? _playCopy; // the player reads a temporary copy, so the entry's own file is never locked
 
     public HistoryPage()
     {
@@ -37,7 +38,7 @@ public partial class HistoryPage : UserControl
         {
             store.Entries.CollectionChanged -= OnEntriesChanged;
             _tick.Stop();
-            _player.Close();
+            ClosePlayer();
         };
         UpdateCount();
         if (_view.Count > 0) List.SelectedIndex = 0;
@@ -81,7 +82,7 @@ public partial class HistoryPage : UserControl
     void List_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         StopPlayback();
-        _player.Close();
+        ClosePlayer();
         var c = Current;
         Detail.Visibility = c == null ? Visibility.Collapsed : Visibility.Visible;
         Info.Text = "";
@@ -95,7 +96,21 @@ public partial class HistoryPage : UserControl
         var audio = c.HasAudio;
         Player.Visibility = audio ? Visibility.Visible : Visibility.Collapsed;
         NoAudioText.Visibility = audio ? Visibility.Collapsed : Visibility.Visible;
-        if (audio) _player.Open(new Uri(c.AudioPath));
+        if (audio)
+        {
+            try
+            {
+                _playCopy = Path.Combine(Path.GetTempPath(), $"oberton-play-{Guid.NewGuid():N}.wav");
+                File.Copy(c.AudioPath, _playCopy);
+                _player.Open(new Uri(_playCopy));
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("Couldn't open a recording: " + ex.Message);
+                Player.Visibility = Visibility.Collapsed;
+                NoAudioText.Visibility = Visibility.Visible;
+            }
+        }
         Seek.Value = 0;
         UpdateTime();
 
@@ -129,6 +144,18 @@ public partial class HistoryPage : UserControl
         _player.SpeedRatio = SpeedButton.IsChecked == true ? 2.0 : 1.0;
     }
 
+    /// <summary>Close the player and delete its temporary copy (the player may hold it a moment longer, so later too).</summary>
+    void ClosePlayer()
+    {
+        _player.Close();
+        var copy = _playCopy;
+        _playCopy = null;
+        if (copy == null) return;
+        void TryDelete() { try { if (File.Exists(copy)) File.Delete(copy); } catch { } }
+        TryDelete();
+        Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, (Action)TryDelete);
+    }
+
     void StopPlayback()
     {
         _player.Stop();
@@ -159,7 +186,7 @@ public partial class HistoryPage : UserControl
     {
         if (Current is not { } c) return;
         StopPlayback();
-        _player.Close(); // release the audio file
+        ClosePlayer();
         App.Services.History.Delete(c);
     }
 

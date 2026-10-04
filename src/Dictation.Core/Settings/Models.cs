@@ -103,9 +103,9 @@ public sealed class AppSettings
     /// <summary>Unload a model after this many minutes without use, to free memory (GPU memory especially).
     /// 0 = keep loaded. It loads again by itself the next time it is needed.</summary>
     public int UnloadAfterMinutes { get; set; } = 30;
-    /// <summary>The same as an Ollama keep_alive value.</summary>
+    /// <summary>The same as an Ollama keep_alive value (a negative duration keeps the model loaded; it needs a unit).</summary>
     [System.Text.Json.Serialization.JsonIgnore]
-    public string OllamaKeepAlive => UnloadAfterMinutes <= 0 ? "-1" : UnloadAfterMinutes + "m";
+    public string OllamaKeepAlive => UnloadAfterMinutes <= 0 ? "-1m" : UnloadAfterMinutes + "m";
     public CloudSettings Cloud { get; set; } = new();
     /// <summary>Ask GitHub for a newer release when the app starts. Off by default: the app makes no network calls unless asked.</summary>
     public bool CheckUpdatesOnStartup { get; set; }

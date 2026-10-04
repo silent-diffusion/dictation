@@ -251,11 +251,17 @@ public sealed class RuntimeInstaller
         ["UV_NO_PROGRESS"] = "1",
     };
 
-    public static bool WhisperModelPresent(string model) =>
-        Directory.Exists(WhisperDir) &&
-        Directory.GetDirectories(WhisperDir, "models--*").Any(d =>
-            d.EndsWith("faster-whisper-" + model, StringComparison.OrdinalIgnoreCase) &&
+    public static bool WhisperModelPresent(string model)
+    {
+        if (!Directory.Exists(WhisperDir)) return false;
+        // Hugging Face cache folders end in the repository name: faster-whisper-<model>, except the distilled models,
+        // which live in Systran/faster-distil-whisper-<size>.
+        var names = new List<string> { "faster-whisper-" + model };
+        if (model.StartsWith("distil-", StringComparison.OrdinalIgnoreCase)) names.Add("faster-distil-whisper-" + model["distil-".Length..]);
+        return Directory.GetDirectories(WhisperDir, "models--*").Any(d =>
+            names.Any(n => d.EndsWith(n, StringComparison.OrdinalIgnoreCase)) &&
             Directory.GetFiles(d, "model.bin", SearchOption.AllDirectories).Length > 0);
+    }
 
     async Task DownloadAsync(string url, string target, Action<double?> progress, CancellationToken ct)
     {
