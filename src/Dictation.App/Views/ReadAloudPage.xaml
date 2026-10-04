@@ -34,6 +34,16 @@
             <TextBlock Style="{StaticResource Caption}" Margin="0,6,0,0"
                        Text="Every reading starts at this speed. The − and + buttons in the reader change it for that reading only."/>
 
+            <TextBlock Text="Player opacity" Style="{StaticResource FieldLabel}" Margin="0,20,0,6"/>
+            <StackPanel Orientation="Horizontal">
+                <Slider x:Name="OpacitySlider" Width="300" Minimum="0.3" Maximum="1" TickFrequency="0.02" IsSnapToTickEnabled="True"
+                        Value="{Binding ReaderOpacity}" AutomationProperties.Name="Player opacity"/>
+                <TextBlock Text="{Binding Value, ElementName=OpacitySlider, StringFormat={}{0:P0}}" Width="60" Margin="12,0,0,0"
+                           FontFamily="{StaticResource Ob.Mono}" VerticalAlignment="Center"/>
+            </StackPanel>
+            <TextBlock Style="{StaticResource Caption}" Margin="0,6,0,0"
+                       Text="How much of the player's dark background shows; the text stays solid. The dictation pill has its own setting under Appearance."/>
+
             <TextBlock Text="How to use it" Style="{StaticResource FieldLabel}" Margin="0,20,0,6"/>
             <TextBlock x:Name="HowTo" Style="{StaticResource Caption}"/>
         </StackPanel>

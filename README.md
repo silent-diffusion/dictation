@@ -76,7 +76,8 @@ The folder keeps its pre-rename name so updates from Local Dictation 1.x keep yo
   your PC. With nothing selected, it offers to read your clipboard. The player has play/pause, back and forward 15 seconds,
   slower/faster, the time left, and the sentence being read with the current word highlighted. Pick the voice and the base
   speed under *Settings › Read aloud*. The voice (about 370 MB) downloads the first time you use it.
-  Markdown (headings, lists, **bold**, links, tables, code fences) is read as the plain text it stands for.
+  Text is read as plain text: Markdown (headings, lists, **bold**, links, tables, code fences) and stray symbols are dropped.
+  The ⌄ button shows the whole text, scrolling along as it is read. The player's opacity is a setting under *Read aloud*.
 * **Settings** (bottom of the sidebar): grouped into Dictation, Speech & AI, Look & feel and App. **Appearance** follows the
   Windows light/dark setting, or pick Light or Dark.
 * **Profiles** (sidebar): *Light Cleanup*, *Grammar & Clarity*, *Natural Phrasing*, *Custom*, plus your own. Edit the prompt, pick a model, toggle

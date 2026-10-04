@@ -74,7 +74,7 @@
         <Border.Effect>
             <DropShadowEffect BlurRadius="24" ShadowDepth="4" Opacity="0.35"/>
         </Border.Effect>
-        <Grid Width="520">
+        <Grid x:Name="Root" Width="520">
 
             <!-- Player -->
             <StackPanel x:Name="Player">
@@ -131,11 +131,17 @@
                         <TextBlock x:Name="StatusText" Foreground="#99FFFFFF" FontSize="11" HorizontalAlignment="Right"/>
                     </StackPanel>
 
-                    <Button Grid.Column="3" Style="{StaticResource RoundButton}" Width="30" Height="30" VerticalAlignment="Top"
-                            Click="Close_Click" ToolTip="Stop" AutomationProperties.Name="Stop reading">
-                        <Path Data="M 1,1 L 9,9 M 9,1 L 1,9" Stroke="White" StrokeThickness="1.5"
-                              StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
-                    </Button>
+                    <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Top">
+                        <Button x:Name="ExpandButton" Style="{StaticResource RoundButton}" Width="30" Height="30" Margin="0,0,6,0"
+                                Click="Expand_Click" ToolTip="Show the whole text" AutomationProperties.Name="Show the whole text">
+                            <TextBlock x:Name="ExpandGlyph" Text="&#xE70D;" Style="{StaticResource Glyph}" FontSize="11"/>
+                        </Button>
+                        <Button Style="{StaticResource RoundButton}" Width="30" Height="30"
+                                Click="Close_Click" ToolTip="Stop" AutomationProperties.Name="Stop reading">
+                            <Path Data="M 1,1 L 9,9 M 9,1 L 1,9" Stroke="White" StrokeThickness="1.5"
+                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                        </Button>
+                    </StackPanel>
                 </Grid>
 
                 <!-- Progress through the whole text -->
@@ -147,6 +153,13 @@
                 <!-- The sentence being read, highlighted as it goes; at most two lines -->
                 <TextBlock x:Name="Lines" Foreground="#73FFFFFF" FontSize="16" LineHeight="24" TextWrapping="Wrap"
                            TextTrimming="CharacterEllipsis" MaxHeight="48" Margin="2,0,2,0"/>
+
+                <!-- Expanded: the whole text, read so far in white, the current word accented; scrolls along -->
+                <ScrollViewer x:Name="FullScroll" Visibility="Collapsed" MaxHeight="380" Focusable="False"
+                              VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="2,0,0,0">
+                    <TextBlock x:Name="FullText" Foreground="#73FFFFFF" FontSize="15" LineHeight="23" TextWrapping="Wrap"
+                               Margin="0,0,12,4"/>
+                </ScrollViewer>
             </StackPanel>
 
             <!-- Question: clipboard, or download -->

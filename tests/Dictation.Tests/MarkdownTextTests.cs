@@ -6,20 +6,20 @@ namespace Dictation.Tests;
 public class MarkdownTextTests
 {
     [Theory]
-    [InlineData("# Title\nSome text.")]
-    [InlineData("See [the docs](https://example.com/docs) for more.")]
-    [InlineData("This is **important** to know.")]
-    [InlineData("```\ncode\n```")]
-    [InlineData("| a | b |\n|---|---|\n| 1 | 2 |")]
-    [InlineData("- one\n- two\n\nUse `npm install` first.")]
-    public void Recognizes_markdown(string text) => Assert.True(MarkdownText.LooksLikeMarkdown(text));
-
-    [Theory]
     [InlineData("Hello there. How are you?")]
     [InlineData("We came #1 in the league, 5*3 = 15, and my_file_name stays.")]
-    [InlineData("Shopping:\n- milk\n- eggs")]               // a dash list on its own is ordinary text too
-    [InlineData("I *really* mean it.")]                    // one emphasis alone isn't enough
-    public void Leaves_ordinary_text_alone(string text) => Assert.Equal(text, MarkdownText.ForReading(text));
+    [InlineData("Learn C# today.\nThe 3 - 2 = 1 rule.")]
+    public void Ordinary_text_comes_through_unchanged(string text) => Assert.Equal(text, MarkdownText.ForReading(text));
+
+    [Theory]
+    [InlineData("Shopping:\n- milk\n- eggs", "Shopping:\nmilk\neggs")]
+    [InlineData("I *really* mean it.", "I really mean it.")]
+    [InlineData("Two steps:\n1. **Install** it\n2. Run it", "Two steps:\n1. Install it\n2. Run it")]
+    [InlineData("• first\n• second", "first\nsecond")]
+    [InlineData("##Notes\nA *dangling bold", "Notes\nA dangling bold")]
+    [InlineData("a | b | c", "a, b, c")]
+    public void Light_markdown_is_cleaned_too(string text, string expected) =>
+        Assert.Equal(expected, MarkdownText.ForReading(text));
 
     [Fact]
     public void Headings_lists_and_emphasis_become_plain_lines()

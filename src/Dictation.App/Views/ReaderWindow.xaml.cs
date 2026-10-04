@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Documents;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -21,6 +22,7 @@ public partial class ReaderWindow : Window
     static readonly Brush Current = Freeze(new SolidColorBrush(Color.FromRgb(0xF4, 0xA6, 0x8C)));
     static readonly Brush Upcoming = Freeze(new SolidColorBrush(Color.FromArgb(0x73, 0xFF, 0xFF, 0xFF)));
     const int WindowChars = 150; // longer sentences show a moving window around the spoken position
+    const double CompactWidth = 520, ExpandedWidth = 640;
 
     readonly DispatcherTimer _tick = new() { Interval = TimeSpan.FromMilliseconds(100) };
     readonly DispatcherTimer _autoClose = new() { Interval = TimeSpan.FromSeconds(4) };
@@ -29,11 +31,16 @@ public partial class ReaderWindow : Window
     Func<Task>? _primary;
     (int Sentence, int Upto) _shown = (-1, -1);
     readonly WindowDrag _drag;
+    // Expanded view: one Span per sentence of the session it was built for; the current one holds three runs.
+    readonly List<Span> _fullSentences = new();
+    ReadAloudSession? _fullFor;
+    int _fullCurrent = -1;
 
     public ReaderWindow()
     {
         InitializeComponent();
         _drag = new WindowDrag(this);
+        ApplyExpanded();
         _tick.Tick += (_, _) => Refresh();
         _autoClose.Tick += (_, _) => { _autoClose.Stop(); if (!IsMouseOver) Stop(); };
         SizeChanged += (_, _) => Reposition();
@@ -69,6 +76,8 @@ public partial class ReaderWindow : Window
     void ShowWindow()
     {
         _autoClose.Stop();
+        var opacity = Math.Clamp(App.Services.Settings.Current.ReaderOpacity, 0.3, 1.0);
+        Card.Background = new SolidColorBrush(Color.FromArgb((byte)Math.Round(opacity * 255), 0x16, 0x16, 0x18));
         if (!IsVisible) Show();
         Reposition();
     }
@@ -188,7 +197,8 @@ public partial class ReaderWindow : Window
         ShowLines(s);
     }
 
-    /// <summary>The current sentence: spoken words white, the word being spoken accented, the rest dimmed.</summary>
+    /// <summary>The current sentence: spoken words white, the word being spoken accented, the rest dimmed.
+    /// Compact: that sentence only, at most two lines. Expanded: the whole text, scrolled to it.</summary>
     void ShowLines(ReadAloudSession s)
     {
         var (index, fraction) = s.Position;
@@ -204,6 +214,8 @@ public partial class ReaderWindow : Window
         var wordEnd = nextSpace >= 0 ? nextSpace : sentence.Length;
         if (s.IsEnded) wordStart = wordEnd = sentence.Length;
 
+        if (Settings.ReaderExpanded) { ShowFull(s, index, sentence, wordStart, wordEnd); return; }
+
         var from = 0;
         var to = sentence.Length;
         if (sentence.Length > WindowChars)
@@ -214,15 +226,84 @@ public partial class ReaderWindow : Window
         }
         Lines.Inlines.Clear();
         if (from > 0) Lines.Inlines.Add(new Run("… ") { Foreground = Upcoming });
-        Add(sentence, from, Math.Min(wordStart, to), Spoken);
-        Add(sentence, Math.Max(from, wordStart), Math.Min(wordEnd, to), Current);
-        Add(sentence, Math.Max(from, wordEnd), to, Upcoming);
+        Add(Lines.Inlines, sentence, from, Math.Min(wordStart, to), Spoken);
+        Add(Lines.Inlines, sentence, Math.Max(from, wordStart), Math.Min(wordEnd, to), Current);
+        Add(Lines.Inlines, sentence, Math.Max(from, wordEnd), to, Upcoming);
         if (to < sentence.Length) Lines.Inlines.Add(new Run(" …") { Foreground = Upcoming });
     }
 
-    void Add(string text, int start, int end, Brush brush)
+    /// <summary>Expanded view: sentences before the current one in white, after it dimmed, the current one
+    /// highlighted like the compact view and kept in view.</summary>
+    void ShowFull(ReadAloudSession s, int index, string sentence, int wordStart, int wordEnd)
     {
-        if (end > start) Lines.Inlines.Add(new Run(text[start..end]) { Foreground = brush });
+        if (_fullFor != s) BuildFull(s);
+        var moved = index != _fullCurrent;
+        if (moved)
+        {
+            if (_fullCurrent >= 0 && _fullCurrent < _fullSentences.Count) // the previous sentence: back to one plain run
+            {
+                var prev = s.Sentences[_fullCurrent];
+                _fullSentences[_fullCurrent].Inlines.Clear();
+                _fullSentences[_fullCurrent].Inlines.Add(new Run(s.Text.Substring(prev.Start, prev.Length).ReplaceLineEndings(" ")));
+            }
+            for (var i = 0; i < _fullSentences.Count; i++)
+                _fullSentences[i].Foreground = i < index ? Spoken : Upcoming;
+            _fullCurrent = index;
+        }
+        var current = _fullSentences[index];
+        current.Inlines.Clear();
+        Add(current.Inlines, sentence, 0, wordStart, Spoken);
+        Add(current.Inlines, sentence, wordStart, wordEnd, Current);
+        Add(current.Inlines, sentence, wordEnd, sentence.Length, Upcoming);
+        if (current.Inlines.Count == 0) current.Inlines.Add(new Run(sentence)); // keep the span, so it can be scrolled to
+        if (moved) current.BringIntoView();
+    }
+
+    /// <summary>The whole text with the gaps between sentences (spaces, line breaks) kept as they are.</summary>
+    void BuildFull(ReadAloudSession s)
+    {
+        FullText.Inlines.Clear();
+        _fullSentences.Clear();
+        var prev = 0;
+        foreach (var span in s.Sentences)
+        {
+            if (span.Start > prev) FullText.Inlines.Add(new Run(s.Text[prev..span.Start].ReplaceLineEndings("\n")));
+            var sp = new Span(new Run(s.Text.Substring(span.Start, span.Length).ReplaceLineEndings(" "))) { Foreground = Upcoming };
+            _fullSentences.Add(sp);
+            FullText.Inlines.Add(sp);
+            prev = span.Start + span.Length;
+        }
+        _fullFor = s;
+        _fullCurrent = -1;
+        FullScroll.ScrollToTop();
+    }
+
+    static Dictation.Core.Settings.AppSettings Settings => App.Services.Settings.Current;
+
+    void Expand_Click(object sender, RoutedEventArgs e)
+    {
+        Settings.ReaderExpanded = !Settings.ReaderExpanded;
+        App.Services.Settings.Save();
+        ApplyExpanded();
+        _shown = (-1, -1); // redraw in the new view
+        _fullFor = null;
+        if (_session != null) Refresh();
+    }
+
+    void ApplyExpanded()
+    {
+        var expanded = Settings.ReaderExpanded;
+        Lines.Visibility = expanded ? Visibility.Collapsed : Visibility.Visible;
+        FullScroll.Visibility = expanded ? Visibility.Visible : Visibility.Collapsed;
+        Root.Width = expanded ? ExpandedWidth : CompactWidth;
+        ExpandGlyph.Text = expanded ? "\uE70E" : "\uE70D"; // chevron up : down
+        ExpandButton.ToolTip = expanded ? "Show the current sentence only" : "Show the whole text";
+        AutomationProperties.SetName(ExpandButton, (string)ExpandButton.ToolTip);
+    }
+
+    static void Add(InlineCollection inlines, string text, int start, int end, Brush brush)
+    {
+        if (end > start) inlines.Add(new Run(text[start..end]) { Foreground = brush });
     }
 
     void StopSession()
