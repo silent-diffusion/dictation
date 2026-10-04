@@ -113,9 +113,12 @@
                        Margin="0,4,10,6" MaxHeight="112" Visibility="Collapsed"/>
 
             <!-- Receipt, expanded by a click: what you said next to what the AI made of it -->
+            <!-- What you said · what the AI changed (struck through / added) · the clean text that was inserted -->
             <Grid x:Name="Compare" Margin="0,6,10,8" Visibility="Collapsed">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
+                    <ColumnDefinition x:Name="AiGap" Width="20"/>
+                    <ColumnDefinition x:Name="AiColumn" Width="*"/>
                     <ColumnDefinition Width="20"/>
                     <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
@@ -125,11 +128,18 @@
                         <TextBlock x:Name="CompareRaw" Foreground="#D9FFFFFF" FontSize="14" LineHeight="21" TextWrapping="Wrap"/>
                     </ScrollViewer>
                 </StackPanel>
-                <Border Grid.Column="1" Width="1" Background="#26FFFFFF" HorizontalAlignment="Center"/>
-                <StackPanel Grid.Column="2">
+                <Border x:Name="AiDivider" Grid.Column="1" Width="1" Background="#26FFFFFF" HorizontalAlignment="Center"/>
+                <StackPanel x:Name="AiPanel" Grid.Column="2">
                     <TextBlock Text="AI EDIT" Foreground="#99FFFFFF" FontFamily="Cascadia Mono, Consolas" FontSize="11" Margin="0,0,0,6"/>
                     <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto" Focusable="False">
                         <TextBlock x:Name="CompareEdited" Foreground="White" FontSize="14" LineHeight="21" TextWrapping="Wrap"/>
+                    </ScrollViewer>
+                </StackPanel>
+                <Border Grid.Column="3" Width="1" Background="#26FFFFFF" HorizontalAlignment="Center"/>
+                <StackPanel Grid.Column="4">
+                    <TextBlock Text="INSERTED" Foreground="#99FFFFFF" FontFamily="Cascadia Mono, Consolas" FontSize="11" Margin="0,0,0,6"/>
+                    <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto" Focusable="False">
+                        <TextBlock x:Name="CompareInserted" Foreground="White" FontSize="14" LineHeight="21" TextWrapping="Wrap"/>
                     </ScrollViewer>
                 </StackPanel>
             </Grid>

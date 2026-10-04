@@ -58,7 +58,8 @@ The folder keeps its pre-rename name so updates from Local Dictation 1.x keep yo
 * **Hotkey** (default `Ctrl+Space`, change under *Hotkeys*): start/stop. `Ctrl+Alt+P` cycles profiles.
 * **Overlay**: a pill, always on top, never steals focus. Small while you talk (timer, level meter, active profile, `✕` cancels);
   it grows to show your transcript while the AI tidies it, then shows a small dimmed "Inserted" receipt. Hover it to see it clearly;
-  click it to compare what you said with the AI's edit side by side (removed words struck through).
+  click it to see three columns: what you said, the AI's edit (removed words struck through, new ones highlighted) and the
+  clean text that was inserted. Without AI the middle column is left out.
   If the safety net rejects the AI's edit, the receipt says so. Position (nine spots) and opacity are under *Settings › Appearance*.
   Drag the pill (or the Read aloud player) anywhere; it stays there until Oberton restarts or you pick a position.
 * **Fits the surrounding text**: a sentence or two around the cursor is read (locally, via Windows accessibility) so a word or phrase
@@ -82,7 +83,7 @@ The folder keeps its pre-rename name so updates from Local Dictation 1.x keep yo
   Windows light/dark setting, or pick Light or Dark.
 * **Profiles** (sidebar): *Light Cleanup*, *Grammar & Clarity*, *Natural Phrasing*, *Custom*, *Raw* (no AI: the recognizer's words,
   with the seams between live pieces fixed), plus your own. Edit the prompt, pick a model, toggle
-  *auto-process*, *preview before inserting* (shows the edits; hotkey or *Insert* inserts, `Esc` discards, *Use original* inserts raw), *preserve paragraphs*, *remove fillers*.
+  *Use AI* (off hides the instructions, model and other AI settings; only *Raw* has it off), *preview before inserting* (shows the edits; hotkey or *Insert* inserts, `Esc` discards, *Use original* inserts raw), *preserve paragraphs*, *remove fillers*.
   *Rewrite the whole dictation* is for prompts that reshape what you say ("turn my thoughts into an email"): the AI gets the
   whole dictation in one go when you stop. With *Type as you speak*, your words are typed as spoken and the rewrite replaces them at the end.
   The **Try it** panel runs a profile on sample text and shows what it changed, so you can tune prompts without dictating.
