@@ -13,7 +13,7 @@ namespace Dictation.App.Views;
 /// <summary>
 /// The Read aloud player: play/pause, ±15 s, slower/faster, time left, and the sentence being read with the spoken
 /// part highlighted. Also asks before reading the clipboard and before the one-time voice download.
-/// Like the dictation overlay it never takes keyboard focus.
+/// Like the dictation overlay it never takes keyboard focus, and it can be dragged anywhere.
 /// </summary>
 public partial class ReaderWindow : Window
 {
@@ -28,10 +28,12 @@ public partial class ReaderWindow : Window
     CancellationTokenSource? _download;
     Func<Task>? _primary;
     (int Sentence, int Upto) _shown = (-1, -1);
+    readonly WindowDrag _drag;
 
     public ReaderWindow()
     {
         InitializeComponent();
+        _drag = new WindowDrag(this);
         _tick.Tick += (_, _) => Refresh();
         _autoClose.Tick += (_, _) => { _autoClose.Stop(); if (!IsMouseOver) Stop(); };
         SizeChanged += (_, _) => Reposition();
@@ -50,8 +52,12 @@ public partial class ReaderWindow : Window
     /// <summary>Reading, asking or downloading.</summary>
     public bool IsBusy => IsVisible;
 
+    /// <summary>The position setting changed: forget where the player was dragged.</summary>
+    public void ResetPosition() => _drag.Reset();
+
     void Reposition()
     {
+        if (_drag.Place()) return; // the user dragged it somewhere
         var wa = SystemParameters.WorkArea;
         const double edge = 8;
         var pos = (int)App.Services.Settings.Current.OverlayPosition;
@@ -84,6 +90,7 @@ public partial class ReaderWindow : Window
     /// <summary>Nothing was selected: offer to read the clipboard instead.</summary>
     public void AskToReadClipboard(string clipboard)
     {
+        clipboard = MarkdownText.ForReading(clipboard); // so the preview, word count and estimate match what is read
         var words = clipboard.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
         var minutes = ReadAloudText.Estimate(clipboard.Length).TotalMinutes / App.Services.Settings.Current.TtsBaseSpeed;
         var preview = clipboard.Length > 200 ? clipboard[..200].TrimEnd() + "…" : clipboard;
@@ -138,6 +145,7 @@ public partial class ReaderWindow : Window
     void StartSession(string text)
     {
         StopSession();
+        text = MarkdownText.ForReading(text); // read Markdown as the plain text it stands for
         var s = App.Services.Settings.Current;
         var session = new ReadAloudSession(text, App.Services.Tts, s.TtsVoice, s.TtsBaseSpeed);
         if (session.Sentences.Count == 0)
