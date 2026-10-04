@@ -84,7 +84,7 @@ public sealed class Profile : Bindable
     string _description = "";
     string _prompt = "";
     string? _model;
-    bool _autoProcess = true, _showPreview, _preserveParagraphs = true, _removeFillers = true;
+    bool _autoProcess = true, _showPreview, _preserveParagraphs = true, _removeFillers = true, _rewriteWhole;
     double _maxChangeRatio = 0.5;
 
     public string Id { get => _id; set => Set(ref _id, value); }
@@ -97,6 +97,10 @@ public sealed class Profile : Bindable
     public bool ShowPreview { get => _showPreview; set => Set(ref _showPreview, value); }
     public bool PreserveParagraphs { get => _preserveParagraphs; set => Set(ref _preserveParagraphs, value); }
     public bool RemoveFillers { get => _removeFillers; set => Set(ref _removeFillers, value); }
+    /// <summary>Give the AI the whole dictation in one piece once the user stops, so the instructions can reshape it
+    /// (into an email, a list, ...). Off: long dictation is edited a few sentences at a time, which keeps small models
+    /// faithful. While speaking, a rewriting profile types the words as spoken; the rewrite replaces them at the end.</summary>
+    public bool RewriteWhole { get => _rewriteWhole; set => Set(ref _rewriteWhole, value); }
     bool _isActive, _isDefault;
     /// <summary>UI-only flags (not persisted).</summary>
     [System.Text.Json.Serialization.JsonIgnore] public bool IsActive { get => _isActive; set => Set(ref _isActive, value); }

@@ -79,6 +79,8 @@ The folder keeps its pre-rename name so updates from Local Dictation 1.x keep yo
   Windows light/dark setting, or pick Light or Dark.
 * **Profiles** (sidebar): *Light Cleanup*, *Grammar & Clarity*, *Natural Phrasing*, *Custom*, plus your own. Edit the prompt, pick a model, toggle
   *auto-process*, *preview before inserting* (shows the edits; hotkey or *Insert* inserts, `Esc` discards, *Use original* inserts raw), *preserve paragraphs*, *remove fillers*.
+  *Rewrite the whole dictation* is for prompts that reshape what you say ("turn my thoughts into an email"): the AI gets the
+  whole dictation in one go when you stop. With *Type as you speak*, your words are typed as spoken and the rewrite replaces them at the end.
   The **Try it** panel runs a profile on sample text and shows what it changed, so you can tune prompts without dictating.
 * **History**: the last 25 dictations, raw next to processed, in memory only. "Insert raw into the last app" is the manual undo-to-raw.
 * If the AI fails, is unreachable, or returns something implausible (empty, summarised, rambling), your **raw words are inserted instead** - dictation is never lost.

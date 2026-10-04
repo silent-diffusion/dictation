@@ -108,6 +108,10 @@ public static class ContextFit
     /// <summary>Up to this many words count as a "short phrase" that should not get its own period mid-sentence.</summary>
     const int ShortPhraseWords = 6;
 
+    /// <summary>Fit text to its surroundings; <see cref="Space"/> only, when <paramref name="spacingOnly"/>.</summary>
+    public static string Fit(string text, InsertionContext? context, bool spacingOnly) =>
+        spacingOnly ? Space(text, context) : Apply(text, context);
+
     public static string Apply(string text, InsertionContext? context)
     {
         text = text.Trim();
@@ -132,6 +136,17 @@ public static class ContextFit
             if (continues || shortFragment) text = text[..^1];
         }
 
+        return Space(text, context);
+    }
+
+    /// <summary>Only the spacing part of <see cref="Apply"/>: for text that was laid out on purpose (a rewritten
+    /// email, say), whose capitalization and punctuation must stay as they are.</summary>
+    public static string Space(string text, InsertionContext? context)
+    {
+        text = text.Trim();
+        if (context == null || text.Length == 0) return text;
+        var before = context.Before;
+        var after = context.After;
         // Spacing, so the new words don't run into the old ones
         var prev = before.LastOrDefault();
         if (prev != '\0' && !char.IsWhiteSpace(prev) && prev is not ('(' or '[' or '{' or '"' or '“' or '\'' or '/' or '-')
