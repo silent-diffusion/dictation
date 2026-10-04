@@ -97,7 +97,7 @@ public class PromptTests
     public void Built_in_profiles_match_the_spec()
     {
         var names = BuiltInProfiles.Create().Select(p => p.Name).ToArray();
-        Assert.Equal(new[] { "Light Cleanup", "Grammar & Clarity", "Natural Phrasing", "Custom" }, names);
+        Assert.Equal(new[] { "Light Cleanup", "Grammar & Clarity", "Natural Phrasing", "Custom", "Raw" }, names);
         Assert.Contains("conservative dictation editor", BuiltInProfiles.Create()[0].Prompt);
     }
 }

@@ -45,8 +45,17 @@ public sealed class ProfileService
         _settings = settings;
         var loaded = JsonStore.Load<List<Profile>>(_path);
         foreach (var p in loaded is { Count: > 0 } ? loaded : BuiltInProfiles.Create()) Profiles.Add(p);
-        if (loaded is not { Count: > 0 }) Save();
         var s = settings.Current;
+        // Built-ins added in later versions (with a fixed id) show up once for existing users, too.
+        var changed = loaded is not { Count: > 0 };
+        foreach (var p in BuiltInProfiles.Create().Where(p => BuiltInProfiles.FixedIds.Contains(p.Id)))
+        {
+            if (s.BuiltInProfilesAdded.Contains(p.Id)) continue;
+            if (Find(p.Id) == null) Profiles.Add(p);
+            s.BuiltInProfilesAdded.Add(p.Id);
+            changed = true;
+        }
+        if (changed) { Save(); settings.Save(); }
         s.DefaultProfileId = Find(s.DefaultProfileId)?.Id ?? Profiles[0].Id;
         s.ActiveProfileId = Find(s.DefaultProfileId)?.Id ?? s.DefaultProfileId; // active starts as the default
         RefreshFlags();
@@ -122,6 +131,10 @@ public sealed class ProfileService
 
 public static class BuiltInProfiles
 {
+    public const string RawId = "builtin-raw";
+    /// <summary>Built-ins with a fixed id; older ones got random ids when they were created.</summary>
+    public static readonly IReadOnlySet<string> FixedIds = new HashSet<string> { RawId };
+
     public const string CustomPrompt =
         "You are a dictation editor. Clean up this speech transcript: remove filler words and false starts, " +
         "and fix punctuation and capitalization, while keeping the speaker's meaning and wording.\n" +
@@ -181,6 +194,14 @@ public static class BuiltInProfiles
             Description = "Write your own instructions.",
             Prompt = CustomPrompt,
             MaxChangeRatio = 0.6,
+        },
+        new Profile
+        {
+            Id = RawId,
+            Name = "Raw",
+            Description = "Exactly what the speech recognizer heard. No AI: nothing is reworded, fast and private.",
+            Prompt = "",
+            AutoProcess = false,
         },
     };
 }

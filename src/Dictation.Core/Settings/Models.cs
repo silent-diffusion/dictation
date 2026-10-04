@@ -50,6 +50,9 @@ public sealed class AppSettings
     public double ReaderOpacity { get; set; } = 0.94;
     /// <summary>The player shows the whole text (scrolling along) instead of the current sentence only.</summary>
     public bool ReaderExpanded { get; set; }
+    /// <summary>Ids of built-in profiles already offered, so one added in an update appears once and stays deleted
+    /// if the user deletes it.</summary>
+    public List<string> BuiltInProfilesAdded { get; set; } = new();
     public int TtsPort { get; set; } = 8766;
     public string? MicrophoneName { get; set; }
     public string? ActiveProfileId { get; set; }

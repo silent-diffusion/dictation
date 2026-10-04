@@ -62,6 +62,7 @@ public sealed class DictationController
     bool _micWarned;
     float _peakLevel; // loudest input level of the current recording, for SpeechGuard
     LiveInsertion? _live; // "type as you speak" for the current dictation, when enabled
+    readonly List<string> _pieces = new(); // live mode: the pieces the recognizer committed, in order
 
     public DictationState State { get; private set; } = DictationState.Idle;
     public string LivePartial { get; private set; } = "";
@@ -101,7 +102,9 @@ public sealed class DictationController
         // Live mode: finished pieces arrive on the recognizer's thread; type them from the UI thread, in order.
         _asr.Committed += t => System.Windows.Application.Current?.Dispatcher.BeginInvoke(new Action(() =>
         {
-            if (State is DictationState.Recording or DictationState.Transcribing) _live?.Add(t);
+            if (State is not (DictationState.Recording or DictationState.Transcribing)) return;
+            _pieces.Add(t);
+            _live?.Add(t);
         }));
         _asr.PartialTranscript += t =>
         {
@@ -159,6 +162,7 @@ public sealed class DictationController
             ? InsertionContext.CaptureAsync(TimeSpan.FromMilliseconds(400))
             : Task.FromResult<InsertionContext?>(null);
         LivePartial = "";
+        _pieces.Clear();
         _micWarned = false;
         _peakLevel = 0;
         _sessionCts = new CancellationTokenSource();
@@ -214,6 +218,7 @@ public sealed class DictationController
             return;
         }
 
+        raw = Stitch(raw);
         var profile = _profiles.Active;
         var processed = raw;
         _pendingRaw = raw;
@@ -253,6 +258,20 @@ public sealed class DictationController
             return;
         }
         await InsertPendingAsync(processed);
+    }
+
+    /// <summary>
+    /// The transcript with the seams between live pieces fixed (see <see cref="FragmentStitcher"/>). The recognizer's
+    /// final text is the committed pieces plus the tail; if it isn't (live mode failed and the whole recording was
+    /// decoded at once), there are no seams and the text is only tidied.
+    /// </summary>
+    string Stitch(string raw)
+    {
+        if (_pieces.Count == 0) return FragmentStitcher.Join(new[] { raw });
+        var pieces = new List<string>(_pieces) { _asr.FinalTail };
+        static string Words(string s) => string.Join(" ", s.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        var same = Words(OutputSanitizer.CollapseDots(string.Join(" ", pieces))) == Words(raw);
+        return FragmentStitcher.Join(same ? pieces : new List<string> { raw });
     }
 
     /// <summary>Hotkey pressed again while previewing: insert the processed text.</summary>
