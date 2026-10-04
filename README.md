@@ -80,7 +80,8 @@ The folder keeps its pre-rename name so updates from Local Dictation 1.x keep yo
   The ⌄ button shows the whole text, scrolling along as it is read. The player's opacity is a setting under *Read aloud*.
 * **Settings** (bottom of the sidebar): grouped into Dictation, Speech & AI, Look & feel and App. **Appearance** follows the
   Windows light/dark setting, or pick Light or Dark.
-* **Profiles** (sidebar): *Light Cleanup*, *Grammar & Clarity*, *Natural Phrasing*, *Custom*, plus your own. Edit the prompt, pick a model, toggle
+* **Profiles** (sidebar): *Light Cleanup*, *Grammar & Clarity*, *Natural Phrasing*, *Custom*, *Raw* (no AI: the recognizer's words,
+  with the seams between live pieces fixed), plus your own. Edit the prompt, pick a model, toggle
   *auto-process*, *preview before inserting* (shows the edits; hotkey or *Insert* inserts, `Esc` discards, *Use original* inserts raw), *preserve paragraphs*, *remove fillers*.
   *Rewrite the whole dictation* is for prompts that reshape what you say ("turn my thoughts into an email"): the AI gets the
   whole dictation in one go when you stop. With *Type as you speak*, your words are typed as spoken and the rewrite replaces them at the end.

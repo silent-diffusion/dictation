@@ -61,13 +61,16 @@ public partial class ProfilePage : UserControl
         var input = TestInput.Text;
         try
         {
-            var result = await App.Services.Llm.ProcessAsync(input, _profile);
+            var result = _profile.AutoProcess
+                ? await App.Services.Llm.ProcessAsync(input, _profile)
+                : new ProcessResult(FragmentStitcher.Tidy(input), false, null); // no AI: only spacing and the first capital
             TestOutput.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Text");
             DiffText.Render(TestOutput, WordDiff.Compute(input, result.Text),
                 (Brush)FindResource("Ob.DiffRemoved"), (Brush)FindResource("Ob.DiffAdded"));
             TestMeta.Text = !result.SafetyNet ? LengthChange(input, result.Text)
                 : result.Modified ? "safety net: some parts kept as spoken" : "safety net: original kept";
             if (result.Warning != null && !result.SafetyNet) TestMeta.Text = result.Warning;
+            if (!_profile.AutoProcess) TestMeta.Text = "no AI";
         }
         catch (UserFacingException ex) { ShowProblem(ex.Message); }
         catch (Exception ex) { Log.Error("Profile test failed", ex); ShowProblem("Something went wrong. See the log."); }
