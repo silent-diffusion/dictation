@@ -45,6 +45,23 @@ public sealed class KokoroSpeech : IAsyncDisposable
     public KokoroSpeech(SettingsService settings) => _settings = settings;
 
     bool ProcessAlive => _proc is { HasExited: false };
+    /// <summary>The voice engine is running (its model is in memory).</summary>
+    public bool IsRunning => ProcessAlive;
+    /// <summary>When the voice was last asked to speak; for unloading it when idle.</summary>
+    public DateTime LastUsed { get; private set; } = DateTime.Now;
+
+    /// <summary>Stop the voice engine to free its memory; it starts again on the next reading.</summary>
+    public async Task UnloadAsync()
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            if (!ProcessAlive) return;
+            Stop();
+            Log.Info("Read aloud voice unloaded after being idle");
+        }
+        finally { _lock.Release(); }
+    }
     bool Connected => _ws?.State == WebSocketState.Open && ProcessAlive;
 
     /// <summary>Start the voice server if it isn't running. Takes a few seconds the first time.</summary>
@@ -101,7 +118,7 @@ public sealed class KokoroSpeech : IAsyncDisposable
             Log.Info("tts: " + e.Data);
             if (e.Data.StartsWith("READY")) started.TrySetResult();
             else if (e.Data.StartsWith("ERROR")) started.TrySetException(new UserFacingException(
-                "The voice model could not be loaded. Try reinstalling Read aloud under Settings › Read aloud."));
+                "The voice model could not be loaded. Try downloading the voice again under Text to speech."));
         };
         p.ErrorDataReceived += (_, e) => { if (!string.IsNullOrWhiteSpace(e.Data)) Log.Info("tts: " + e.Data); };
         p.Exited += (_, _) => started.TrySetException(new UserFacingException("The voice engine stopped unexpectedly."));
@@ -143,6 +160,7 @@ public sealed class KokoroSpeech : IAsyncDisposable
     public async Task<float[]> SynthesizeAsync(string text, string voice, double speed, CancellationToken ct = default)
     {
         await _lock.WaitAsync(ct);
+        LastUsed = DateTime.Now;
         try
         {
             for (var attempt = 1; ; attempt++)

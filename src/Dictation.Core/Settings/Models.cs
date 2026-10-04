@@ -10,6 +10,23 @@ public enum AppTheme { System, Light, Dark }
 /// <summary>Where the overlay sits on the screen. Declared row by row (top, middle, bottom), left to right.</summary>
 public enum OverlayPosition { TopLeft, TopCenter, TopRight, MiddleLeft, Center, MiddleRight, BottomLeft, BottomCenter, BottomRight }
 
+/// <summary>How the History page lists dictations: all by time, or grouped by the app they went into.</summary>
+public enum HistoryGrouping { Chronological, ByApp }
+
+/// <summary>Cloud AI models (optional). Off unless the user turns off "Keep everything offline" and adds a key.</summary>
+public sealed class CloudSettings
+{
+    /// <summary>The master switch: while on, nothing is sent to a cloud model, whatever a profile selects.</summary>
+    public bool KeepOffline { get; set; } = true;
+    /// <summary>API keys, encrypted for the current Windows user (DPAPI). Never stored in plain text.</summary>
+    public string? AnthropicKey { get; set; }
+    public string? OpenAiKey { get; set; }
+    /// <summary>OpenAI or any OpenAI-compatible service (OpenRouter, Groq, Azure-style proxies…).</summary>
+    public string OpenAiBaseUrl { get; set; } = "https://api.openai.com/v1";
+    /// <summary>The OpenAI-compatible model to offer, e.g. gpt-4.1-mini.</summary>
+    public string OpenAiModel { get; set; } = "gpt-4.1-mini";
+}
+
 public sealed class AsrSettings
 {
     public string Engine { get; set; } = "faster-whisper";
@@ -31,6 +48,7 @@ public sealed class LlmSettings
     /// <summary>Ollama-compatible endpoint. Must be a local address.</summary>
     public string Endpoint { get; set; } = "http://127.0.0.1:11435";
     public string DefaultModel { get; set; } = "qwen2.5:3b";
+    /// <summary>Superseded by <see cref="AppSettings.UnloadAfterMinutes"/>; kept so older settings files still load.</summary>
     public string KeepAlive { get; set; } = "30m";
     public bool AutoStartRuntime { get; set; } = true;
     public int TimeoutSeconds { get; set; } = 60;
@@ -74,8 +92,21 @@ public sealed class AppSettings
     /// <summary>In Auto mode, text longer than this (or containing line breaks) is pasted instead of typed.</summary>
     public int TypingMaxChars { get; set; } = 400;
     public int MaxRecordingSeconds { get; set; } = 600;
-    /// <summary>Keep the last sessions (raw + processed) in memory only; never written to disk.</summary>
+    /// <summary>Keep recent dictations (text, and audio if <see cref="SaveHistoryAudio"/>) in data\history on this PC.
+    /// That folder survives app updates.</summary>
     public bool KeepHistory { get; set; } = true;
+    /// <summary>How many recent dictations History keeps; older ones are deleted.</summary>
+    public int HistoryLimit { get; set; } = 50;
+    /// <summary>Keep each dictation's recording (16 kHz WAV, about 2 MB a minute) so it can be played back.</summary>
+    public bool SaveHistoryAudio { get; set; } = true;
+    public HistoryGrouping HistoryGrouping { get; set; } = HistoryGrouping.Chronological;
+    /// <summary>Unload a model after this many minutes without use, to free memory (GPU memory especially).
+    /// 0 = keep loaded. It loads again by itself the next time it is needed.</summary>
+    public int UnloadAfterMinutes { get; set; } = 30;
+    /// <summary>The same as an Ollama keep_alive value (a negative duration keeps the model loaded; it needs a unit).</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string OllamaKeepAlive => UnloadAfterMinutes <= 0 ? "-1m" : UnloadAfterMinutes + "m";
+    public CloudSettings Cloud { get; set; } = new();
     /// <summary>Ask GitHub for a newer release when the app starts. Off by default: the app makes no network calls unless asked.</summary>
     public bool CheckUpdatesOnStartup { get; set; }
     /// <summary>Per-application insertion override keyed by process name, e.g. "notepad": "Typing".</summary>

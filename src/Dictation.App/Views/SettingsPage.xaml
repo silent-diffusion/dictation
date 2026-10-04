@@ -18,10 +18,12 @@
                         <ListBoxItem Content="General" Tag="General"/>
                         <ListBoxItem Content="Hotkeys" Tag="Hotkeys"/>
                         <ListBoxItem Content="Microphone" Tag="Audio"/>
-                        <ListBoxItem Content="SPEECH &amp; AI" Style="{StaticResource NavGroupHeader}"/>
+                        <ListBoxItem Content="History" Tag="HistorySettings"/>
+                        <ListBoxItem Content="MODELS &amp; AI" Style="{StaticResource NavGroupHeader}"/>
+                        <ListBoxItem Content="Models" Tag="Models"/>
                         <ListBoxItem Content="Speech recognition" Tag="Speech"/>
-                        <ListBoxItem Content="AI models" Tag="Models"/>
-                        <ListBoxItem Content="Read aloud" Tag="ReadAloud"/>
+                        <ListBoxItem Content="Cloud AI" Tag="Cloud"/>
+                        <ListBoxItem Content="Model unloading" Tag="Unloading"/>
                         <ListBoxItem Content="LOOK &amp; FEEL" Style="{StaticResource NavGroupHeader}"/>
                         <ListBoxItem Content="Appearance" Tag="Appearance"/>
                         <ListBoxItem Content="APP" Style="{StaticResource NavGroupHeader}"/>

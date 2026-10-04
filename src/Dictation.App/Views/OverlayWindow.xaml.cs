@@ -42,6 +42,8 @@ public partial class OverlayWindow : Window
     string _hotkey = "";
     bool _pinnedByState;
     InsertReceipt? _receipt; // set while the receipt is showing
+    string _liveText = ""; // the transcript so far, while recording
+    bool _engineLoading;
     bool _compareOpen;
     readonly WindowDrag _drag;
 
@@ -126,7 +128,7 @@ public partial class OverlayWindow : Window
         RecDot.Opacity = 1;
         RecDot.Fill = RecordFill;
         Wave.Visibility = Dots.Visibility = Chip.Visibility = CancelButton.Visibility = Visibility.Collapsed;
-        BodyText.Visibility = Actions.Visibility = Compare.Visibility = Visibility.Collapsed;
+        BodyText.Visibility = Actions.Visibility = Compare.Visibility = LiveText.Visibility = Visibility.Collapsed;
         _receipt = null;
         _compareOpen = false;
         Card.Cursor = null;
@@ -187,6 +189,7 @@ public partial class OverlayWindow : Window
         switch (state)
         {
             case DictationState.Starting:
+                _liveText = ""; // a new dictation
                 ShowSpinner();
                 TitleText.Text = "Starting";
                 ShowChip(profileName);
@@ -206,14 +209,16 @@ public partial class OverlayWindow : Window
                 Wave.Visibility = Visibility.Visible;
                 ShowChip(profileName);
                 CancelButton.Visibility = Visibility.Visible;
+                ShowLiveText();
                 break;
 
             case DictationState.Transcribing:
                 _recordClock.Stop();
                 ShowSpinner();
-                TitleText.Text = "Transcribing";
+                TitleText.Text = _engineLoading ? "Loading the speech model" : "Transcribing";
                 SubtitleText.Text = $"{Math.Max(1, (int)Math.Round(_recordClock.Elapsed.TotalSeconds))} s of audio";
                 ShowChip(profileName);
+                ShowLiveText();
                 break;
 
             case DictationState.Processing:
@@ -243,6 +248,37 @@ public partial class OverlayWindow : Window
                 break;
         }
         Display(width, expanded);
+    }
+
+    /// <summary>While recording: the words recognized so far, above the pill (the last few lines).</summary>
+    public void SetLiveTranscript(string text)
+    {
+        _liveText = text;
+        if (_state is DictationState.Recording or DictationState.Transcribing) ShowLiveText();
+    }
+
+    /// <summary>The speech model is loading while the user already speaks; recording goes on and it catches up.</summary>
+    public void SetEngineLoading(bool loading)
+    {
+        _engineLoading = loading;
+        if (_state is DictationState.Recording or DictationState.Transcribing) ShowLiveText();
+        if (!loading && _state == DictationState.Transcribing) TitleText.Text = "Transcribing";
+    }
+
+    void ShowLiveText()
+    {
+        LiveText.Inlines.Clear();
+        if (_liveText.Length > 0)
+        {
+            LiveText.Foreground = new SolidColorBrush(Color.FromArgb(0xD9, 0xFF, 0xFF, 0xFF));
+            LiveText.Text = Tail(_liveText, 180);
+        }
+        else if (_engineLoading)
+        {
+            LiveText.Foreground = Muted;
+            LiveText.Text = "Loading the speech model… keep talking, it will catch up.";
+        }
+        LiveText.Visibility = LiveText.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     /// <summary>After text was inserted: a small, dimmed receipt. Hover to see it clearly; click it to compare

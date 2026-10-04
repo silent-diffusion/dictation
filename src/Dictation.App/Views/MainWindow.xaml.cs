@@ -19,18 +19,11 @@ public partial class MainWindow : Window
         DataContext = s.Status;
         s.Status.PropertyChanged += (_, _) => UpdateDots();
         UpdateDots();
-        s.Settings.Changed += UpdateCycleHint;
-        UpdateCycleHint();
-        ProfileList.ItemsSource = s.Profiles.Profiles;
-        ProfileList.SelectedItem = s.Profiles.Active;
-        s.Profiles.Profiles.CollectionChanged += (_, e) =>
-        {
-            if (e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Remove && ProfileList.SelectedItem == null
-                && Host.Content is ProfilePage)
-                ProfileList.SelectedItem = s.Profiles.Active;
-        };
+        s.Settings.Changed += UpdatePrivacy;
+        UpdatePrivacy();
         Icon = System.Windows.Interop.Imaging.CreateBitmapSourceFromHIcon(
             Services.TrayIcon.CreateIcon().Handle, Int32Rect.Empty, System.Windows.Media.Imaging.BitmapSizeOptions.FromEmptyOptions());
+        NavList.SelectedItem = DashboardItem;
     }
 
     void UpdateDots()
@@ -41,38 +34,38 @@ public partial class MainWindow : Window
         AiDot.SetResourceReference(Shape.FillProperty, s.AiOk ? "Ob.Ok" : "Ob.Busy");
     }
 
-    void UpdateCycleHint()
-    {
-        var hotkey = App.Services.Settings.Current.CycleProfileHotkey;
-        CycleHint.Text = string.IsNullOrEmpty(hotkey) ? "" : hotkey + " cycles";
-    }
-
-    void ProfileList_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (ProfileList.SelectedItem is not Profile p) return;
-        NavList.SelectedIndex = -1;
-        Host.Content = new ProfilePage(p);
-    }
+    void UpdatePrivacy() => PrivacyText.Text = App.Services.Settings.Current.Cloud.KeepOffline
+        ? "Everything stays on this PC."
+        : "Cloud AI allowed: profiles with a cloud model send their text to it.";
 
     void NavList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (NavList.SelectedItem is not ListBoxItem item) return;
-        ProfileList.SelectedItem = null;
-        Host.Content = item == HistoryItem ? new HistoryPage() : new SettingsPage();
+        if (NavList.SelectedItem is not ListBoxItem { Tag: string tag }) return;
+        Host.Content = tag switch
+        {
+            "SpeechToText" => new SpeechToTextPage(),
+            "TextToSpeech" => new ReadAloudPage(),
+            "History" => new HistoryPage(),
+            "Settings" => new SettingsPage(),
+            _ => (object)new DashboardPage(),
+        };
     }
 
-    /// <summary>Open "History" or a settings section by tag (e.g. "About" from the tray's update check).</summary>
+    /// <summary>Open a section ("Dashboard", "SpeechToText", "TextToSpeech", "History") or a settings section by its tag
+    /// (e.g. "About" from the tray's update check).</summary>
     public void ShowPage(string tag)
     {
-        if (tag == "History") { NavList.SelectedItem = HistoryItem; return; }
+        var item = NavList.Items.OfType<ListBoxItem>().FirstOrDefault(i => i.Tag as string == tag);
+        if (item != null) { NavList.SelectedItem = item; return; }
         NavList.SelectedItem = SettingsItem;
         if (Host.Content is SettingsPage settings) settings.Show(tag);
     }
 
-    void NewProfile_Click(object sender, RoutedEventArgs e)
+    /// <summary>Speech to text, with a profile open.</summary>
+    public void ShowProfile(Profile p)
     {
-        var p = App.Services.Profiles.Create();
-        ProfileList.SelectedItem = p;
+        NavList.SelectedItem = SpeechItem;
+        if (Host.Content is SpeechToTextPage page) page.Select(p);
     }
 
     protected override void OnClosing(CancelEventArgs e)

@@ -141,7 +141,7 @@
                     <ComboBox x:Name="ModelBox" IsEditable="True" Text="{Binding Model, UpdateSourceTrigger=LostFocus}"
                               MaxWidth="360" MinWidth="260" HorizontalAlignment="Left" AutomationProperties.Name="AI model"/>
                     <TextBlock Style="{StaticResource Caption}" Margin="0,6,0,0"
-                               Text="Leave empty to use the default model (Settings › AI models). Models must be installed in Ollama."/>
+                               Text="Leave empty to use the active model (Settings › Models). Names starting with anthropic: or openai: are cloud models: they need a key and &quot;Keep everything offline&quot; turned off (Settings › Cloud AI)."/>
                 </StackPanel>
 
                 <StackPanel Grid.Column="2">

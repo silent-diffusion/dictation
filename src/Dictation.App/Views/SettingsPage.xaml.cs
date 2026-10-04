@@ -2,7 +2,7 @@ using System.Windows.Controls;
 
 namespace Dictation.App.Views;
 
-/// <summary>All app settings in one place, grouped into sections, so the main sidebar only holds profiles.</summary>
+/// <summary>All app settings in one place, grouped into sections.</summary>
 public partial class SettingsPage : UserControl
 {
     public SettingsPage(string section = "General")
@@ -11,7 +11,8 @@ public partial class SettingsPage : UserControl
         Show(section);
     }
 
-    /// <summary>Open a section by its tag (General, Hotkeys, Audio, Speech, Models, ReadAloud, Appearance, Advanced, About).</summary>
+    /// <summary>Open a section by its tag (General, Hotkeys, Audio, HistorySettings, Models, Speech, Cloud, Unloading,
+    /// Appearance, Advanced, About).</summary>
     public void Show(string section)
     {
         foreach (var item in Nav.Items.OfType<ListBoxItem>())
@@ -26,8 +27,10 @@ public partial class SettingsPage : UserControl
             "Hotkeys" => new HotkeysPage(),
             "Audio" => new AudioPage(),
             "Speech" => new SpeechPage(),
+            "HistorySettings" => new HistorySettingsPage(),
             "Models" => new ModelsPage(),
-            "ReadAloud" => new ReadAloudPage(),
+            "Cloud" => new CloudPage(),
+            "Unloading" => new UnloadingPage(),
             "Appearance" => new AppearancePage(),
             "Advanced" => new AdvancedPage(),
             "About" => new AboutPage(),

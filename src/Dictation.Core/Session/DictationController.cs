@@ -1,4 +1,3 @@
-using System.Collections.ObjectModel;
 using System.Diagnostics;
 using Dictation.Core.Audio;
 using Dictation.Core.Infrastructure;
@@ -11,18 +10,6 @@ namespace Dictation.Core.Session;
 
 public enum DictationState { Idle, Starting, Recording, Transcribing, Processing, Confirming, Inserting }
 public enum NoticeLevel { Info, Warning, Error }
-
-/// <summary>One finished dictation. Raw is never overwritten by Processed.</summary>
-public sealed class SessionRecord
-{
-    public DateTime Time { get; init; } = DateTime.Now;
-    public string Raw { get; init; } = "";
-    public string Processed { get; set; } = "";
-    public string ProfileName { get; init; } = "";
-    public string Target { get; init; } = "";
-    public bool Inserted { get; set; }
-    public string Summary => $"{Time:HH:mm:ss}  {ProfileName}  ·  {Target}";
-}
 
 /// <summary>What happened to a dictation that was inserted, for the overlay's receipt.</summary>
 /// <param name="Elapsed">From the stop press until the text was in place.</param>
@@ -38,6 +25,7 @@ public sealed record InsertReceipt(string Raw, string Inserted, TimeSpan Elapsed
     public bool Edited => Inserted != Raw;
 }
 
+
 /// <summary>
 /// The dictation state machine: hotkey → mic → recognizer → (LLM) → insert.
 /// Must be used from the UI thread (it awaits on the captured context so clipboard access stays on an STA thread).
@@ -51,6 +39,7 @@ public sealed class DictationController
     readonly TextInserter _inserter;
     readonly SettingsService _settings;
     readonly ProfileService _profiles;
+    readonly HistoryStore _history;
     readonly Stopwatch _recordClock = new();
     readonly Stopwatch _finishClock = new();
     CancellationTokenSource? _sessionCts;
@@ -59,7 +48,7 @@ public sealed class DictationController
     Task<InsertionContext?> _context = Task.FromResult<InsertionContext?>(null);
     string _pendingProcessed = "";
     string _pendingRaw = "";
-    SessionRecord? _pendingRecord;
+    string _pendingProfile = "";
     bool _pendingSafetyNet;
     string? _pendingNote;
     string? _pendingAiEdit; // the AI's output for the pending dictation, if the AI ran
@@ -67,28 +56,39 @@ public sealed class DictationController
     float _peakLevel; // loudest input level of the current recording, for SpeechGuard
     LiveInsertion? _live; // "type as you speak" for the current dictation, when enabled
     readonly List<string> _pieces = new(); // live mode: the pieces the recognizer committed, in order
+    string _partial = ""; // the recognizer's running guess at the speech not committed yet
+
+    // Audio: everything recorded (for History), and what arrived before the speech engine was ready.
+    readonly object _audioLock = new();
+    MemoryStream _recording = new();
+    readonly List<byte[]> _waiting = new();
+    bool _streaming; // the recognizer has the session; chunks go straight to it
+    Task _engine = Task.CompletedTask; // loads the engine if needed, then starts the recognizer's session
 
     public DictationState State { get; private set; } = DictationState.Idle;
-    public string LivePartial { get; private set; } = "";
     public string PreviewText => _pendingProcessed;
     /// <summary>The raw transcript of the dictation being cleaned up or previewed.</summary>
     public string PendingRaw => _pendingRaw;
-    public ObservableCollection<SessionRecord> History { get; } = new();
     /// <summary>Text was typed while speaking, so the cleanup now is the final pass over it.</summary>
     public bool IsLive => _live?.HasTyped == true;
+    /// <summary>When a dictation last started or finished; for unloading idle models.</summary>
+    public DateTime LastActivity { get; private set; } = DateTime.Now;
 
     public event Action<DictationState>? StateChanged;
-    public event Action<string>? PartialTranscript;
+    /// <summary>The transcript so far, while recording (UI thread). Empty at the start of a dictation.</summary>
+    public event Action<string>? LiveTranscript;
+    /// <summary>True while a dictation waits for the speech model to load (recording goes on meanwhile).</summary>
+    public event Action<bool>? EngineLoading;
     public event Action<float>? AudioLevel;
     public event Action<string, NoticeLevel>? Notice;
     /// <summary>Raised after text was inserted, once the state is back to Idle.</summary>
     public event Action<InsertReceipt>? Inserted;
 
     public DictationController(IAudioCapture mic, ISpeechRecognizer asr, ITextProcessor llm, TextInserter inserter,
-        SettingsService settings, ProfileService profiles)
+        SettingsService settings, ProfileService profiles, HistoryStore history)
     {
-        _mic = mic; _asr = asr; _llm = llm; _inserter = inserter; _settings = settings; _profiles = profiles;
-        _mic.DataAvailable += chunk => { if (State == DictationState.Recording) _asr.AcceptAudio(chunk); };
+        _mic = mic; _asr = asr; _llm = llm; _inserter = inserter; _settings = settings; _profiles = profiles; _history = history;
+        _mic.DataAvailable += OnAudio;
         _mic.LevelChanged += l =>
         {
             if (State != DictationState.Recording) return;
@@ -104,18 +104,41 @@ public sealed class DictationController
             }
         };
         // Live mode: finished pieces arrive on the recognizer's thread; type them from the UI thread, in order.
-        _asr.Committed += t => System.Windows.Application.Current?.Dispatcher.BeginInvoke(new Action(() =>
+        _asr.Committed += t => OnUi(() =>
         {
             if (State is not (DictationState.Recording or DictationState.Transcribing)) return;
             _pieces.Add(t);
+            _partial = "";
             _live?.Add(t);
-        }));
-        _asr.PartialTranscript += t =>
+            RaiseTranscript();
+        });
+        _asr.PartialTranscript += t => OnUi(() =>
         {
             if (State != DictationState.Recording) return;
-            LivePartial = t;
-            PartialTranscript?.Invoke(t);
-        };
+            _partial = t;
+            RaiseTranscript();
+        });
+    }
+
+    static void OnUi(Action a) => System.Windows.Application.Current?.Dispatcher.BeginInvoke(a);
+
+    /// <summary>Microphone audio (background thread): kept for History, and passed to the recognizer once it is ready.</summary>
+    void OnAudio(byte[] chunk)
+    {
+        if (State != DictationState.Recording) return;
+        lock (_audioLock)
+        {
+            _recording.Write(chunk, 0, chunk.Length);
+            if (_streaming) _asr.AcceptAudio(chunk);
+            else _waiting.Add(chunk);
+        }
+    }
+
+    void RaiseTranscript()
+    {
+        var parts = new List<string>(_pieces);
+        if (_partial.Length > 0) parts.Add(_partial);
+        LiveTranscript?.Invoke(parts.Count == 0 ? "" : FragmentStitcher.Join(parts));
     }
 
     public string TargetDescription => string.IsNullOrEmpty(_target.ProcessName) ? "" : _target.ProcessName;
@@ -134,7 +157,7 @@ public sealed class DictationController
             switch (State)
             {
                 case DictationState.Idle: await StartAsync(); break;
-                case DictationState.Recording: await StopAsync(); break;
+                case DictationState.Recording: await StopCancellableAsync(); break;
                 case DictationState.Confirming: await ConfirmInsertAsync(); break;
                 // Starting / Transcribing / Processing / Inserting: ignore presses until done
             }
@@ -145,13 +168,30 @@ public sealed class DictationController
         }
     }
 
+    /// <summary>
+    /// A dictation cancelled (Esc / ✕) while it was finishing still completes its awaits afterwards, often with an error
+    /// (the model it waited for loaded, a request was cancelled). That is not a failure, and it must not touch a newer
+    /// dictation, so it ends quietly.
+    /// </summary>
+    async Task StopCancellableAsync()
+    {
+        var session = _sessionCts;
+        try { await StopAsync(); }
+        catch (Exception e) when (session is { IsCancellationRequested: true })
+        {
+            Log.Info("A cancelled dictation ended: " + e.GetType().Name);
+        }
+    }
+
     void Fail(Exception e)
     {
         _mic.Stop();
         _asr.Cancel();
         _maxDuration?.Cancel();
+        _sessionCts?.Cancel();
         _live?.Stop(); // whatever was typed live stays
         _live = null;
+        LastActivity = DateTime.Now;
         if (e is UserFacingException) Log.Warn("Dictation failed: " + e.Message);
         else Log.Error("Dictation failed", e);
         SetState(DictationState.Idle);
@@ -165,41 +205,77 @@ public sealed class DictationController
         _context = _settings.Current.MatchSurroundingText
             ? InsertionContext.CaptureAsync(TimeSpan.FromMilliseconds(400))
             : Task.FromResult<InsertionContext?>(null);
-        LivePartial = "";
         _pieces.Clear();
+        _partial = "";
         _micWarned = false;
         _peakLevel = 0;
         _sessionCts = new CancellationTokenSource();
-        SetState(DictationState.Starting);
-
-        if (!_asr.IsReady)
+        LastActivity = DateTime.Now;
+        lock (_audioLock)
         {
-            // Not warmed up yet (or crashed): try to bring the engine up, but tell the user what is happening.
-            Notice?.Invoke("Loading the speech model…", NoticeLevel.Info);
-            await _asr.InitializeAsync(_sessionCts.Token);
+            _recording = new MemoryStream();
+            _waiting.Clear();
+            _streaming = false;
         }
+        SetState(DictationState.Starting);
 
         var profile = _profiles.Active;
         // Live typing needs the text to go straight in, so it is off for profiles that preview before inserting.
         _live = _settings.Current.TypeWhileSpeaking && !profile.ShowPreview
             ? new LiveInsertion(_inserter, _llm, _target, profile, _context)
             : null;
-        _asr.Start(live: _live != null);
+
+        // Start listening right away. If the speech model isn't loaded (first use, or unloaded after a while), it loads
+        // meanwhile and catches up on what was said.
         _mic.Start(_settings.Current.MicrophoneName);
         _recordClock.Restart();
         SetState(DictationState.Recording);
+        LiveTranscript?.Invoke("");
+        _engine = StartEngineAsync(_live != null, _sessionCts.Token);
+        _ = WatchEngineAsync(_engine);
+        // The AI model too, so the cleanup at the end doesn't wait for it to load.
+        if (profile.AutoProcess) _ = _llm.WarmUpAsync(profile.Model);
 
         _maxDuration = new CancellationTokenSource();
         var token = _maxDuration.Token;
         _ = Task.Delay(TimeSpan.FromSeconds(Math.Max(10, _settings.Current.MaxRecordingSeconds)), token).ContinueWith(t =>
         {
             if (t.IsCanceled || State != DictationState.Recording) return;
-            System.Windows.Application.Current?.Dispatcher.BeginInvoke(new Action(async () =>
+            OnUi(async () =>
             {
                 Notice?.Invoke("Maximum recording length reached; finishing up.", NoticeLevel.Info);
                 try { await StopAsync(); } catch (Exception e) { Fail(e); }
-            }));
+            });
         }, TaskScheduler.Default);
+        await Task.CompletedTask;
+    }
+
+    /// <summary>Load the speech engine if needed, then hand it the session and everything recorded so far.</summary>
+    async Task StartEngineAsync(bool live, CancellationToken ct)
+    {
+        if (!_asr.IsReady)
+        {
+            EngineLoading?.Invoke(true);
+            // Not cancelled with the dictation: a model half loaded would only have to load again next time.
+            try { await _asr.InitializeAsync(CancellationToken.None); }
+            finally { EngineLoading?.Invoke(false); }
+        }
+        ct.ThrowIfCancellationRequested();
+        lock (_audioLock)
+        {
+            _asr.Start(live);
+            foreach (var chunk in _waiting) _asr.AcceptAudio(chunk);
+            _waiting.Clear();
+            _streaming = true;
+        }
+    }
+
+    /// <summary>The engine failed to start while the user was still speaking: say so now, not at the end.</summary>
+    async Task WatchEngineAsync(Task engine)
+    {
+        try { await engine; }
+        catch (OperationCanceledException) { }
+        catch (Exception e) { if (State == DictationState.Recording && engine == _engine) Fail(e); }
     }
 
     async Task StopAsync()
@@ -211,12 +287,14 @@ public sealed class DictationController
         var ct = _sessionCts?.Token ?? CancellationToken.None;
         SetState(DictationState.Transcribing);
 
+        await _engine; // if the model was still loading, it now catches up on the whole recording
         var raw = OutputSanitizer.CollapseDots(await _asr.StopAsync(ct));
         if (_live != null) await _live.DrainAsync(); // let pieces already on their way finish typing
         if (_live?.HasTyped != true && SpeechGuard.ShouldDiscard(raw, _recordClock.Elapsed, _peakLevel))
         {
             if (OutputSanitizer.HasContent(raw))
                 Log.Info($"Discarded a likely phantom transcript ({raw.Length} chars, {_recordClock.Elapsed.TotalSeconds:0.0} s, peak {_peakLevel:0.00})");
+            LastActivity = DateTime.Now;
             SetState(DictationState.Idle);
             Notice?.Invoke("I didn't catch anything. Try again.", NoticeLevel.Info);
             return;
@@ -226,6 +304,7 @@ public sealed class DictationController
         var profile = _profiles.Active;
         var processed = raw;
         _pendingRaw = raw;
+        _pendingProfile = profile.Name;
         _pendingSafetyNet = false;
         _pendingNote = null;
         _pendingAiEdit = null;
@@ -251,12 +330,6 @@ public sealed class DictationController
 
         _pendingRaw = raw;
         _pendingProcessed = processed;
-        _pendingRecord = new SessionRecord
-        {
-            Raw = raw, Processed = processed, ProfileName = profile.Name,
-            Target = string.IsNullOrEmpty(_target.ProcessName) ? "unknown app" : _target.ProcessName,
-        };
-
         if (profile.ShowPreview && !IsLive) // the profile may have been switched mid-dictation
         {
             _finishClock.Stop(); // time spent reading the preview isn't processing time
@@ -294,16 +367,16 @@ public sealed class DictationController
     async Task InsertPendingAsync(string text)
     {
         SetState(DictationState.Inserting);
-        var rec = _pendingRecord;
         InsertReceipt? receipt = null;
+        var inserted = false;
         try
         {
             var ct = _sessionCts?.Token ?? CancellationToken.None;
             if (_live?.HasTyped == true)
             {
                 // Replace what was typed while speaking with the final pass over the whole recording.
-                var (inserted, note) = await _live.FinishAsync(text, _asr.FinalTail, ct);
-                text = inserted;
+                var (final, note) = await _live.FinishAsync(text, _asr.FinalTail, ct);
+                text = final;
                 _pendingNote = note ?? _pendingNote;
             }
             else
@@ -313,7 +386,7 @@ public sealed class DictationController
                 text = ContextFit.Fit(text, await _context, spacingOnly: profile.RewriteWhole && profile.AutoProcess && text != _pendingRaw);
                 await _inserter.InsertAsync(text, _target, ct);
             }
-            if (rec != null) { rec.Processed = text; rec.Inserted = true; }
+            inserted = true;
             receipt = new InsertReceipt(_pendingRaw, text, _finishClock.Elapsed, _pendingSafetyNet, _pendingNote, _pendingAiEdit);
         }
         catch (UserFacingException e)
@@ -324,18 +397,34 @@ public sealed class DictationController
         }
         finally
         {
-            if (rec != null && _settings.Current.KeepHistory)
-            {
-                History.Insert(0, rec);
-                while (History.Count > 25) History.RemoveAt(History.Count - 1);
-            }
-            _pendingRecord = null;
+            SaveToHistory(text, inserted);
             _pendingProcessed = _pendingRaw = "";
             _pendingSafetyNet = false;
             _live = null;
+            LastActivity = DateTime.Now;
             SetState(DictationState.Idle);
         }
         if (receipt != null) Inserted?.Invoke(receipt);
+    }
+
+    void SaveToHistory(string final, bool inserted)
+    {
+        byte[] pcm;
+        lock (_audioLock) pcm = _recording.ToArray();
+        _history.Add(new HistoryEntry
+        {
+            Time = DateTime.Now - _finishClock.Elapsed - _recordClock.Elapsed,
+            Profile = _pendingProfile,
+            App = _target.ProcessName,
+            WindowTitle = _target.Title,
+            Transcript = _pendingRaw,
+            AiOutput = _pendingAiEdit,
+            Final = final.Trim(),
+            WasInserted = inserted,
+            SafetyNet = _pendingSafetyNet,
+            Note = _pendingNote,
+            Seconds = Math.Round(_recordClock.Elapsed.TotalSeconds, 1),
+        }, pcm);
     }
 
     /// <summary>Esc / ✕: abandon whatever is in progress without inserting anything.</summary>
@@ -347,6 +436,7 @@ public sealed class DictationController
             case DictationState.Starting:
                 _maxDuration?.Cancel();
                 _mic.Stop();
+                _sessionCts?.Cancel(); // a recognizer still loading must not start a session afterwards
                 _asr.Cancel();
                 break;
             case DictationState.Confirming:
@@ -364,11 +454,11 @@ public sealed class DictationController
             _live = null;
             _ = live.RemoveTypedAsync();
         }
-        _pendingRecord = null;
         _pendingProcessed = _pendingRaw = "";
+        LastActivity = DateTime.Now;
         SetState(DictationState.Idle);
     }
 
-    /// <summary>Insert arbitrary text (e.g. the raw version from History) into the last target.</summary>
+    /// <summary>Insert arbitrary text (e.g. a version from History) into the last target.</summary>
     public Task InsertIntoLastTargetAsync(string text) => _inserter.InsertAsync(text, _target);
 }

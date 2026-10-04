@@ -143,14 +143,7 @@ public sealed class RuntimeInstaller
         // 4. Speech model
         var whisper = s.Asr.Model;
         if (!WhisperModelPresent(whisper))
-        {
-            var mb = whisper switch { "large-v3-turbo" => 1550, "large-v3" => 3000, "distil-large-v3" => 1500, "medium.en" or "medium" => 1500, "small.en" or "small" => 470, "base.en" or "base" => 145, _ => 1000 };
-            await RunToolAsync(AppPaths.PythonExe,
-                new[] { "-u", Path.Combine(AppPaths.InferenceDir, "asr_server.py"), "--download", "--model", whisper, "--model-dir", WhisperDir },
-                new Dictionary<string, string> { ["PYTHONUTF8"] = "1", ["HF_HUB_DISABLE_TELEMETRY"] = "1", ["DICTATION_ROOT"] = AppPaths.Root },
-                WhisperDir, mb, f => Report(progress, 4, $"Downloading the speech model ({whisper})", f, $"About {mb:N0} MB"),
-                "Downloading the speech model", ct);
-        }
+            await DownloadWhisperAsync(whisper, (f, detail) => Report(progress, 4, $"Downloading the speech model ({whisper})", f, detail), ct);
 
         // 5. Language model
         var llm = s.Llm.DefaultModel;
@@ -220,6 +213,33 @@ public sealed class RuntimeInstaller
         Step(3, "Done", 1);
     }
 
+    /// <summary>Approximate download size of a speech model, in MB.</summary>
+    public static int WhisperModelMb(string model) => model switch
+    {
+        "large-v3-turbo" => 1550, "large-v3" => 3000, "distil-large-v3" => 1500, "medium.en" or "medium" => 1500,
+        "small.en" or "small" => 470, "base.en" or "base" => 145, "tiny.en" or "tiny" => 75, _ => 1000,
+    };
+
+    /// <summary>Download one speech (Whisper) model into models\whisper. Used by setup and the Models page.</summary>
+    public async Task DownloadWhisperAsync(string model, Action<double?, string> progress, CancellationToken ct)
+    {
+        if (!File.Exists(AppPaths.PythonExe))
+            throw new UserFacingException("Oberton's speech engine isn't set up yet. Restart Oberton to finish setup.");
+        Directory.CreateDirectory(WhisperDir);
+        var mb = WhisperModelMb(model);
+        await RunToolAsync(AppPaths.PythonExe,
+            new[] { "-u", Path.Combine(AppPaths.InferenceDir, "asr_server.py"), "--download", "--model", model, "--model-dir", WhisperDir },
+            new Dictionary<string, string> { ["PYTHONUTF8"] = "1", ["HF_HUB_DISABLE_TELEMETRY"] = "1", ["DICTATION_ROOT"] = AppPaths.Root },
+            WhisperDir, mb, f => progress(f, $"About {mb:N0} MB"), "Downloading the speech model", ct);
+    }
+
+    /// <summary>Download one local AI model through Ollama. Used by setup and the Models page.</summary>
+    public async Task DownloadAiModelAsync(string model, Action<double?> progress, CancellationToken ct)
+    {
+        await _ollama.EnsureRunningAsync(ct);
+        await PullAsync(model, progress, ct);
+    }
+
     static void Report(IProgress<SetupProgress> p, int step, string title, double? fraction, string detail) =>
         p.Report(new SetupProgress(step, Steps, title, fraction, detail));
 
@@ -231,11 +251,17 @@ public sealed class RuntimeInstaller
         ["UV_NO_PROGRESS"] = "1",
     };
 
-    public static bool WhisperModelPresent(string model) =>
-        Directory.Exists(WhisperDir) &&
-        Directory.GetDirectories(WhisperDir, "models--*").Any(d =>
-            d.EndsWith("faster-whisper-" + model, StringComparison.OrdinalIgnoreCase) &&
+    public static bool WhisperModelPresent(string model)
+    {
+        if (!Directory.Exists(WhisperDir)) return false;
+        // Hugging Face cache folders end in the repository name: faster-whisper-<model>, except the distilled models,
+        // which live in Systran/faster-distil-whisper-<size>.
+        var names = new List<string> { "faster-whisper-" + model };
+        if (model.StartsWith("distil-", StringComparison.OrdinalIgnoreCase)) names.Add("faster-distil-whisper-" + model["distil-".Length..]);
+        return Directory.GetDirectories(WhisperDir, "models--*").Any(d =>
+            names.Any(n => d.EndsWith(n, StringComparison.OrdinalIgnoreCase)) &&
             Directory.GetFiles(d, "model.bin", SearchOption.AllDirectories).Length > 0);
+    }
 
     async Task DownloadAsync(string url, string target, Action<double?> progress, CancellationToken ct)
     {

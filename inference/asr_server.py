@@ -176,6 +176,7 @@ ENGINES = {"faster-whisper": FasterWhisperEngine}
 
 LIVE_CHUNK_SECONDS = 5.0     # live mode: look for something to commit once this much new audio has built up
 LIVE_FORCE_SECONDS = 12.0    # ...and commit at a phrase boundary even without a sentence end after this long
+LIVE_PARTIAL_SECONDS = 1.0   # live mode: refresh the running transcript of the uncommitted speech this often (GPU)
 COMMIT_MARGIN = 0.8          # never commit a phrase ending this close to the newest audio: it may be cut off
 
 
@@ -225,12 +226,19 @@ class Session:
                 await self.send({"type": "error", "code": "partial_failed", "message": str(e)})
 
     async def _live_loop(self):
-        """Live mode: every few seconds, commit the finished sentences of the audio not yet committed."""
+        """Live mode: every few seconds, commit the finished sentences of the audio not yet committed. In between, send
+        the running transcript of the rest as a "partial", so the user can watch the words come in."""
         loop = asyncio.get_running_loop()
+        # On a CPU every decode takes longer, so the running transcript refreshes less often.
+        interval = LIVE_PARTIAL_SECONDS if self.engine.device == "cuda" else LIVE_PARTIAL_SECONDS * 2.5
+        last = 0
         while self.active:
-            await asyncio.sleep(0.5)
-            if self.samples - self.committed < SAMPLE_RATE * LIVE_CHUNK_SECONDS:
+            await asyncio.sleep(0.25)
+            pending = self.samples - self.committed
+            if self.samples - last < SAMPLE_RATE * interval or pending < SAMPLE_RATE * 0.6:
                 continue
+            last = self.samples
+            due_commit = pending >= SAMPLE_RATE * LIVE_CHUNK_SECONDS
             audio = self.audio()[self.committed:]
             # The text committed so far (plus the vocabulary hint) keeps casing and names consistent across pieces.
             prompt = " ".join(p for p in (self.prompt, self.committed_text[-200:]) if p) or None
@@ -243,13 +251,16 @@ class Session:
                 log.exception("live decode failed")
                 await self.send({"type": "error", "code": "live_failed", "message": str(e)})
                 continue
-            pick = choose_commit(segs, len(audio) / SAMPLE_RATE)
-            if not pick or not self.active:
-                continue
-            text, end = pick
-            self.committed += int(end * SAMPLE_RATE)
-            self.committed_text = (self.committed_text + " " + text).strip()
-            await self.send({"type": "commit", "text": text})
+            if not self.active:
+                break
+            pick = choose_commit(segs, len(audio) / SAMPLE_RATE) if due_commit else None
+            if pick:
+                text, end = pick
+                self.committed += int(end * SAMPLE_RATE)
+                self.committed_text = (self.committed_text + " " + text).strip()
+                await self.send({"type": "commit", "text": text})
+                segs = [(t, e) for t, e in segs if e > end]
+            await self.send({"type": "partial", "text": " ".join(t for t, _ in segs).strip()})
 
     def start(self, msg):
         self.chunks, self.samples, self.last_decoded = [], 0, 0
