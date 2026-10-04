@@ -63,9 +63,11 @@
                                    Foreground="{DynamicResource Ob.Muted}" VerticalAlignment="Center"/>
                     </DockPanel>
                     <Border Style="{StaticResource Divider}"/>
+                    <!-- What you said · what the AI changed · the clean text that would be inserted (as in the receipt) -->
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
+                            <ColumnDefinition x:Name="AiColumn" Width="*"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
                         <StackPanel Margin="16,12,16,16">
@@ -75,22 +77,52 @@
                                      Foreground="{DynamicResource Ob.Text}" AutomationProperties.Name="Sample transcript"
                                      Text="um so yesterday I I went to the the store and and bought uh three apples no wait four apples"/>
                         </StackPanel>
-                        <Border Grid.Column="1" BorderBrush="{DynamicResource Ob.Divider}" BorderThickness="1,0,0,0">
+                        <Border x:Name="AiPanel" Grid.Column="1" BorderBrush="{DynamicResource Ob.Divider}" BorderThickness="1,0,0,0">
                             <StackPanel Margin="16,12,16,16">
                                 <DockPanel Margin="0,0,0,6">
                                     <TextBlock x:Name="TestMeta" DockPanel.Dock="Right" Style="{StaticResource MonoLabel}"/>
-                                    <TextBlock Text="INSERTED" Style="{StaticResource MonoLabel}"/>
+                                    <TextBlock Text="AI EDIT" Style="{StaticResource MonoLabel}"/>
                                 </DockPanel>
-                                <TextBlock x:Name="TestOutput" TextWrapping="Wrap" FontSize="15" LineHeight="23" MinHeight="72"
+                                <TextBlock x:Name="TestDiff" TextWrapping="Wrap" FontSize="15" LineHeight="23" MinHeight="72"
                                            Foreground="{DynamicResource Ob.Muted}" Text="Run the profile to see what it changes."/>
+                            </StackPanel>
+                        </Border>
+                        <Border Grid.Column="2" BorderBrush="{DynamicResource Ob.Divider}" BorderThickness="1,0,0,0">
+                            <StackPanel Margin="16,12,16,16">
+                                <TextBlock Text="INSERTED" Style="{StaticResource MonoLabel}" Margin="0,0,0,6"/>
+                                <TextBlock x:Name="TestOutput" TextWrapping="Wrap" FontSize="15" LineHeight="23" MinHeight="72"
+                                           Foreground="{DynamicResource Ob.Muted}"/>
                             </StackPanel>
                         </Border>
                     </Grid>
                 </StackPanel>
             </Border>
 
-            <!-- Instructions and behaviour -->
-            <Grid Margin="0,24,0,0">
+            <!-- AI on or off: off hides everything that only matters to the AI -->
+            <Border Style="{StaticResource Card}" Margin="0,24,0,0">
+                <StackPanel>
+                    <CheckBox Style="{StaticResource Switch}" Margin="14,0" Content="Use AI" IsChecked="{Binding AutoProcess}"
+                              AutomationProperties.Name="Use AI"/>
+                    <TextBlock Margin="14,0,14,12" FontSize="12">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock" BasedOn="{StaticResource Caption}">
+                                <Setter Property="Text" Value="Your words go to the local AI model with these instructions before they are inserted."/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding AutoProcess}" Value="False">
+                                        <Setter Property="Text" Value="Your words are inserted as the speech recognizer heard them, with the pieces typed while you speak joined into clean sentences. Nothing goes to the AI model."/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                    <Border Style="{StaticResource Divider}"/>
+                    <CheckBox Style="{StaticResource Switch}" Margin="14,0" Content="Preview before inserting"
+                              IsChecked="{Binding ShowPreview}"/>
+                </StackPanel>
+            </Border>
+
+            <!-- Instructions and behaviour (AI only) -->
+            <Grid Margin="0,24,0,0" Visibility="{Binding AutoProcess, Converter={StaticResource B2V}}">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="3*"/>
                     <ColumnDefinition Width="24"/>
@@ -116,18 +148,12 @@
                     <TextBlock Text="Behaviour" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,8"/>
                     <Border Style="{StaticResource Card}">
                         <StackPanel>
-                            <CheckBox Style="{StaticResource Switch}" Margin="14,0" Content="Clean up automatically"
-                                      IsChecked="{Binding AutoProcess}"/>
-                            <Border Style="{StaticResource Divider}"/>
                             <StackPanel>
                                 <CheckBox Style="{StaticResource Switch}" Margin="14,0" Content="Rewrite the whole dictation"
                                           IsChecked="{Binding RewriteWhole}" IsEnabled="{Binding AutoProcess}"/>
                                 <TextBlock Style="{StaticResource Caption}" Margin="14,0,14,12" FontSize="12"
                                            Text="For instructions that reshape what you say, like turning your thoughts into an email. The AI gets everything at once when you stop. While you speak, your words are typed as spoken, then replaced by the rewrite. Off: long dictation is edited a few sentences at a time, which keeps the wording closer to yours."/>
                             </StackPanel>
-                            <Border Style="{StaticResource Divider}"/>
-                            <CheckBox Style="{StaticResource Switch}" Margin="14,0" Content="Preview before inserting"
-                                      IsChecked="{Binding ShowPreview}"/>
                             <Border Style="{StaticResource Divider}"/>
                             <CheckBox Style="{StaticResource Switch}" Margin="14,0" Content="Keep paragraph breaks"
                                       IsChecked="{Binding PreserveParagraphs}"/>

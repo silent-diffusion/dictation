@@ -18,11 +18,26 @@ public partial class ProfilePage : UserControl
         InitializeComponent();
         DataContext = profile;
         AutoSave.Hook(this, () => App.Services.Profiles.Save());
+        ShowAiColumn();
+        profile.PropertyChanged += OnProfileChanged;
+        Unloaded += (_, _) => profile.PropertyChanged -= OnProfileChanged;
         Loaded += async (_, _) =>
         {
             var models = await App.Services.Llm.ListModelsAsync();
             ModelBox.ItemsSource = models;
         };
+    }
+
+    void OnProfileChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(Profile.AutoProcess)) ShowAiColumn();
+    }
+
+    /// <summary>The AI EDIT column only exists for a profile that uses AI.</summary>
+    void ShowAiColumn()
+    {
+        AiPanel.Visibility = _profile.AutoProcess ? Visibility.Visible : Visibility.Collapsed;
+        AiColumn.Width = _profile.AutoProcess ? new GridLength(1, GridUnitType.Star) : new GridLength(0);
     }
 
     void SetActive_Click(object sender, RoutedEventArgs e) => App.Services.Profiles.SetActive(_profile);
@@ -56,21 +71,24 @@ public partial class ProfilePage : UserControl
     {
         RunButton.IsEnabled = false;
         TestMeta.Text = "";
-        TestOutput.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Muted");
-        TestOutput.Text = "Processing…";
+        TestDiff.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Muted");
+        TestDiff.Text = "Processing…";
+        TestOutput.Text = "";
         var input = TestInput.Text;
         try
         {
             var result = _profile.AutoProcess
                 ? await App.Services.Llm.ProcessAsync(input, _profile)
                 : new ProcessResult(FragmentStitcher.Tidy(input), false, null); // no AI: only spacing and the first capital
-            TestOutput.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Text");
-            DiffText.Render(TestOutput, WordDiff.Compute(input, result.Text),
+            // AI EDIT: what changed, struck through and added. INSERTED: the clean result.
+            TestDiff.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Text");
+            DiffText.Render(TestDiff, WordDiff.Compute(input, result.Text),
                 (Brush)FindResource("Ob.DiffRemoved"), (Brush)FindResource("Ob.DiffAdded"));
+            TestOutput.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Text");
+            TestOutput.Text = result.Text;
             TestMeta.Text = !result.SafetyNet ? LengthChange(input, result.Text)
                 : result.Modified ? "safety net: some parts kept as spoken" : "safety net: original kept";
             if (result.Warning != null && !result.SafetyNet) TestMeta.Text = result.Warning;
-            if (!_profile.AutoProcess) TestMeta.Text = "no AI";
         }
         catch (UserFacingException ex) { ShowProblem(ex.Message); }
         catch (Exception ex) { Log.Error("Profile test failed", ex); ShowProblem("Something went wrong. See the log."); }
@@ -79,8 +97,9 @@ public partial class ProfilePage : UserControl
 
     void ShowProblem(string message)
     {
-        TestOutput.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Error");
-        TestOutput.Text = message;
+        var target = _profile.AutoProcess ? TestDiff : TestOutput;
+        target.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Error");
+        target.Text = message;
     }
 
     /// <summary>"−52% length · within limit": the same word-count measure the safety net uses.</summary>

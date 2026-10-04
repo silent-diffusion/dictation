@@ -29,7 +29,10 @@ public sealed class SessionRecord
 /// <param name="SafetyNet">The profile's safety net rejected the AI's edit of all or part of the text,
 /// so those parts were inserted as spoken.</param>
 /// <param name="Note">What the safety net did, for the receipt.</param>
-public sealed record InsertReceipt(string Raw, string Inserted, TimeSpan Elapsed, bool SafetyNet, string? Note = null)
+/// <param name="AiEdit">What the AI made of <paramref name="Raw"/>, before it was fitted into the text around the cursor;
+/// null when no AI was used (a profile without AI, the AI failed, or the original words were chosen).</param>
+public sealed record InsertReceipt(string Raw, string Inserted, TimeSpan Elapsed, bool SafetyNet, string? Note = null,
+    string? AiEdit = null)
 {
     public int Words => Inserted.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
     public bool Edited => Inserted != Raw;
@@ -59,6 +62,7 @@ public sealed class DictationController
     SessionRecord? _pendingRecord;
     bool _pendingSafetyNet;
     string? _pendingNote;
+    string? _pendingAiEdit; // the AI's output for the pending dictation, if the AI ran
     bool _micWarned;
     float _peakLevel; // loudest input level of the current recording, for SpeechGuard
     LiveInsertion? _live; // "type as you speak" for the current dictation, when enabled
@@ -224,6 +228,7 @@ public sealed class DictationController
         _pendingRaw = raw;
         _pendingSafetyNet = false;
         _pendingNote = null;
+        _pendingAiEdit = null;
         if (profile.AutoProcess)
         {
             SetState(DictationState.Processing); // with live typing, this is the final pass over the whole recording
@@ -231,6 +236,7 @@ public sealed class DictationController
             {
                 var result = await _llm.ProcessAsync(raw, profile, ct);
                 processed = result.Text;
+                if (result.Modified) _pendingAiEdit = processed;
                 // A safety-net rejection is reported on the receipt instead of as a separate notice.
                 if (result.SafetyNet) { _pendingSafetyNet = true; _pendingNote = result.Warning; }
                 else if (result.Warning != null) Notice?.Invoke(result.Warning, NoticeLevel.Warning);
@@ -281,6 +287,7 @@ public sealed class DictationController
     public async void InsertRawInstead()
     {
         if (State != DictationState.Confirming) return;
+        _pendingAiEdit = null; // the original words, not the AI's
         try { await InsertPendingAsync(_pendingRaw); } catch (Exception e) { Fail(e); }
     }
 
@@ -307,7 +314,7 @@ public sealed class DictationController
                 await _inserter.InsertAsync(text, _target, ct);
             }
             if (rec != null) { rec.Processed = text; rec.Inserted = true; }
-            receipt = new InsertReceipt(_pendingRaw, text, _finishClock.Elapsed, _pendingSafetyNet, _pendingNote);
+            receipt = new InsertReceipt(_pendingRaw, text, _finishClock.Elapsed, _pendingSafetyNet, _pendingNote, _pendingAiEdit);
         }
         catch (UserFacingException e)
         {
