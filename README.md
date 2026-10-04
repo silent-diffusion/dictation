@@ -60,6 +60,7 @@ The folder keeps its pre-rename name so updates from Local Dictation 1.x keep yo
   it grows to show your transcript while the AI tidies it, then shows a small dimmed "Inserted" receipt. Hover it to see it clearly;
   click it to compare what you said with the AI's edit side by side (removed words struck through).
   If the safety net rejects the AI's edit, the receipt says so. Position (nine spots) and opacity are under *Settings › Appearance*.
+  Drag the pill (or the Read aloud player) anywhere; it stays there until Oberton restarts or you pick a position.
 * **Fits the surrounding text**: a sentence or two around the cursor is read (locally, via Windows accessibility) so a word or phrase
   dictated mid-sentence isn't capitalized or given a period, and missing spaces are added. Works in apps that expose their text
   (Word, browsers, most text boxes); turn it off under *Settings › General*. That text is never stored, logged or sent to the AI.
@@ -75,6 +76,7 @@ The folder keeps its pre-rename name so updates from Local Dictation 1.x keep yo
   your PC. With nothing selected, it offers to read your clipboard. The player has play/pause, back and forward 15 seconds,
   slower/faster, the time left, and the sentence being read with the current word highlighted. Pick the voice and the base
   speed under *Settings › Read aloud*. The voice (about 370 MB) downloads the first time you use it.
+  Markdown (headings, lists, **bold**, links, tables, code fences) is read as the plain text it stands for.
 * **Settings** (bottom of the sidebar): grouped into Dictation, Speech & AI, Look & feel and App. **Appearance** follows the
   Windows light/dark setting, or pick Light or Dark.
 * **Profiles** (sidebar): *Light Cleanup*, *Grammar & Clarity*, *Natural Phrasing*, *Custom*, plus your own. Edit the prompt, pick a model, toggle

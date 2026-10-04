@@ -88,10 +88,13 @@
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                         <Button Style="{StaticResource RoundButton}" Click="Back_Click" ToolTip="Back 15 seconds"
                                 AutomationProperties.Name="Back 15 seconds">
-                            <Grid>
-                                <TextBlock Text="&#xE7A7;" Style="{StaticResource Glyph}" FontSize="20" Opacity="0.55"/>
-                                <TextBlock Text="15" FontSize="9.5" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                            </Grid>
+                            <!-- The number above the arrow: overlaid, the digits ran into the arrow's curve. -->
+                            <StackPanel>
+                                <TextBlock Text="15" FontSize="10" FontWeight="SemiBold" HorizontalAlignment="Center"
+                                           LineHeight="11" LineStackingStrategy="BlockLineHeight"/>
+                                <TextBlock Text="&#xE7A7;" Style="{StaticResource Glyph}" FontSize="12" HorizontalAlignment="Center"
+                                           Margin="0,1,0,0"/>
+                            </StackPanel>
                         </Button>
                         <Button x:Name="PlayButton" Style="{StaticResource PlayButton}" Margin="8,0" Click="Play_Click"
                                 ToolTip="Pause" AutomationProperties.Name="Play or pause">
@@ -99,10 +102,13 @@
                         </Button>
                         <Button Style="{StaticResource RoundButton}" Click="Forward_Click" ToolTip="Forward 15 seconds"
                                 AutomationProperties.Name="Forward 15 seconds">
-                            <Grid>
-                                <TextBlock Text="&#xE7A6;" Style="{StaticResource Glyph}" FontSize="20" Opacity="0.55"/>
-                                <TextBlock Text="15" FontSize="9.5" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                            </Grid>
+                            <!-- The number above the arrow: overlaid, the digits ran into the arrow's curve. -->
+                            <StackPanel>
+                                <TextBlock Text="15" FontSize="10" FontWeight="SemiBold" HorizontalAlignment="Center"
+                                           LineHeight="11" LineStackingStrategy="BlockLineHeight"/>
+                                <TextBlock Text="&#xE7A6;" Style="{StaticResource Glyph}" FontSize="12" HorizontalAlignment="Center"
+                                           Margin="0,1,0,0"/>
+                            </StackPanel>
                         </Button>
                     </StackPanel>
 

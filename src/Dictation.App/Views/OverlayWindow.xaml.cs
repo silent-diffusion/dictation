@@ -16,7 +16,7 @@ namespace Dictation.App.Views;
 /// <summary>
 /// The pill (bottom center of the screen by default; the position is a setting). Small while you talk; it grows only when it has text to show
 /// (the cleanup, a preview, a receipt, a message). It is created with WS_EX_NOACTIVATE so it can never take
-/// keyboard focus away from the application being dictated into.
+/// keyboard focus away from the application being dictated into. It can be dragged anywhere (see <see cref="WindowDrag"/>).
 /// </summary>
 public partial class OverlayWindow : Window
 {
@@ -43,6 +43,7 @@ public partial class OverlayWindow : Window
     bool _pinnedByState;
     InsertReceipt? _receipt; // set while the receipt is showing
     bool _compareOpen;
+    readonly WindowDrag _drag;
 
     public event Action? CancelRequested;
     public event Action? InsertRequested;
@@ -51,6 +52,7 @@ public partial class OverlayWindow : Window
     public OverlayWindow()
     {
         InitializeComponent();
+        _drag = new WindowDrag(this);
         _hideTimer.Tick += (_, _) => { _hideTimer.Stop(); if (!_pinnedByState) Hide(); };
         _clockTimer.Tick += (_, _) => TitleText.Text = FormatClock(_recordClock.Elapsed);
         SizeChanged += (_, _) => Reposition();
@@ -76,6 +78,7 @@ public partial class OverlayWindow : Window
 
     void Reposition()
     {
+        if (_drag.Place()) return; // the user dragged it somewhere
         var wa = SystemParameters.WorkArea; // DIPs, primary monitor
         const double edge = 8; // plus the window's 16 px shadow margin: the pill sits ~24 px from the screen edge
         var pos = (int)App.Services.Settings.Current.OverlayPosition; // row by row: 0-2 top, 3-5 middle, 6-8 bottom
@@ -304,6 +307,7 @@ public partial class OverlayWindow : Window
     /// <summary>Settings › Appearance changed the position: flash the pill where it will appear.</summary>
     public void ShowPositionPreview()
     {
+        _drag.Reset(); // a new position setting wins over where it was dragged
         if (_pinnedByState) return;
         ResetView();
         RecDot.Visibility = Visibility.Visible;

@@ -123,7 +123,11 @@ public partial class App : Application
     public static UpdateInfo? AvailableUpdate { get; set; }
 
     /// <summary>Appearance page: show the overlay at its (new) position for a moment.</summary>
-    public void PreviewOverlay() => _overlay?.ShowPositionPreview();
+    public void PreviewOverlay()
+    {
+        _reader?.ResetPosition();
+        _overlay?.ShowPositionPreview();
+    }
 
     public void ShowPage(string tag)
     {
