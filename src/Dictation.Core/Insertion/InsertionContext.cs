@@ -29,7 +29,11 @@ public sealed record InsertionContext(string Before, string After)
         {
             var focused = AutomationElement.FocusedElement;
             if (focused == null || !focused.TryGetCurrentPattern(TextPattern.Pattern, out var p)) return null;
-            var selection = ((TextPattern)p).GetSelection();
+            var pattern = (TextPattern)p;
+            // An empty field can still report text: a placeholder ("Type a message"), or an invisible character that
+            // a web editor keeps in its empty paragraph. Treat both as empty, so the dictation starts a sentence.
+            if (IsEmptyField(focused, pattern)) return new InsertionContext("", "");
+            var selection = pattern.GetSelection();
             if (selection.Length == 0) return null;
             var caret = selection[0];
 
@@ -49,6 +53,27 @@ public sealed record InsertionContext(string Before, string After)
             return null;
         }
     }
+
+    static bool IsEmptyField(AutomationElement focused, TextPattern pattern)
+    {
+        var all = Visible(pattern.DocumentRange.GetText(ReadChars)).Trim();
+        if (all.Length == 0) return true;
+        // A short line that the control's own value says isn't there is a placeholder. (Only short text without a
+        // sentence end, in case a rich editor reports an empty value while holding real text.)
+        if (all.Length <= 60 && !Regex.IsMatch(all, @"[.!?]\s") &&
+            focused.TryGetCurrentPattern(ValuePattern.Pattern, out var v) && Visible(((ValuePattern)v).Current.Value ?? "").Trim().Length == 0)
+            return true;
+        var current = focused.Current;
+        return IsPlaceholder(all, current.Name) || IsPlaceholder(all, current.HelpText);
+    }
+
+    static bool IsPlaceholder(string text, string? label) =>
+        !string.IsNullOrWhiteSpace(label) && string.Equals(text, Visible(label).Trim(), StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Drop characters that take no space on screen: zero-width spaces and joiners, byte-order marks and the
+    /// object-replacement character that editors use for embedded objects or empty lines.</summary>
+    public static string Visible(string s) => Invisible.Replace(s, "");
+    static readonly Regex Invisible = new("[\u200B-\u200D\u2060\uFEFF\uFFFC]");
 
     /// <summary>
     /// Select <paramref name="expected"/> in the focused control if it is exactly the text right before the caret.
@@ -94,6 +119,9 @@ public sealed record InsertionContext(string Before, string After)
     /// <summary>Keep at most the last two sentences before the caret and the first sentence after it.</summary>
     public static InsertionContext Trim(string before, string after)
     {
+        before = Visible(before);
+        after = Visible(after);
+        if (before.Trim().Length == 0) before = ""; // only blanks before the caret: still the start of the text
         var starts = Regex.Matches(before, @"(?<=[.!?])\s+|\n").Cast<Match>().Select(m => m.Index + m.Length).ToList();
         if (starts.Count >= 2) before = before[starts[^2]..];
         var end = Regex.Match(after, @"[.!?](\s|$)|\n");
@@ -119,7 +147,7 @@ public static class ContextFit
         var before = context.Before;
         var after = context.After;
 
-        var lastBefore = before.TrimEnd(' ', '\t').LastOrDefault();
+        var lastBefore = before.TrimEnd(' ', '\t', '\u00A0').LastOrDefault();
         var atSentenceStart = lastBefore is '\0' or '.' or '!' or '?' or '\n' or '\r';
         var nextChar = after.TrimStart(' ', '\t').FirstOrDefault();
 
