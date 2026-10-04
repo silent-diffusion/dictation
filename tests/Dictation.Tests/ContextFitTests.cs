@@ -43,6 +43,22 @@ public class ContextFitTests
         Assert.StartsWith("Sarah", Fit("Sarah agreed.", "We asked Sarah and ", ""));
     }
 
+    [Theory]
+    [InlineData("\u200B")]          // zero-width space a web editor keeps in an empty paragraph
+    [InlineData("\uFFFC")]          // object replacement character
+    [InlineData("\uFEFF")]
+    [InlineData("\u00A0")]          // non-breaking space
+    [InlineData(" \n ")]
+    public void A_blank_field_starts_a_sentence_without_a_leading_space(string blank)
+    {
+        var c = InsertionContext.Trim(blank, blank);
+        Assert.Equal("Hello world.", ContextFit.Apply("hello world.", c));
+    }
+
+    [Fact]
+    public void Invisible_characters_dont_hide_a_full_stop() =>
+        Assert.Equal(" This is new.", ContextFit.Apply("this is new.", InsertionContext.Trim("Done.\u200B", "")));
+
     [Fact]
     public void Trim_keeps_two_sentences_before_and_one_after()
     {
