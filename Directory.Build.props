@@ -1,7 +1,7 @@
 <Project>
   <!-- Release builds override Version from the git tag (e.g. v1.2.0 -> 1.2.0). -->
   <PropertyGroup>
-    <Version>2.0.0</Version>
+    <Version>2.0.1</Version>
     <Product>Oberton</Product>
     <Company>silent-diffusion</Company>
     <Authors>silent-diffusion</Authors>

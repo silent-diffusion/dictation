@@ -32,15 +32,20 @@ public sealed class KokoroSpeech : IAsyncDisposable
         new VoiceOption("bm_fable", "Fable (British, male)"),
     };
 
+    /// <summary>How long one request may take before the engine counts as hung.</summary>
+    static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(60);
+
     readonly SettingsService _settings;
     readonly SemaphoreSlim _lock = new(1, 1);
     Process? _proc;
+    Task? _started; // completes when the running process prints READY
     ClientWebSocket? _ws;
     int _nextId;
 
     public KokoroSpeech(SettingsService settings) => _settings = settings;
 
-    bool Connected => _ws?.State == WebSocketState.Open && _proc is { HasExited: false };
+    bool ProcessAlive => _proc is { HasExited: false };
+    bool Connected => _ws?.State == WebSocketState.Open && ProcessAlive;
 
     /// <summary>Start the voice server if it isn't running. Takes a few seconds the first time.</summary>
     public async Task EnsureStartedAsync(CancellationToken ct = default)
@@ -55,6 +60,24 @@ public sealed class KokoroSpeech : IAsyncDisposable
         if (Connected) return;
         if (!RuntimeInstaller.ReadAloudInstalled)
             throw new UserFacingException("Read aloud isn't installed yet.");
+
+        // A dead socket doesn't mean a dead engine (a cancelled read aborts the socket, for one): reconnect to the
+        // running process instead of paying for a restart.
+        if (ProcessAlive && _started != null)
+        {
+            try
+            {
+                await WaitStartedAsync(_started, ct);
+                await ConnectLockedAsync(ct);
+                return;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception e) when (e is WebSocketException or OperationCanceledException or UserFacingException)
+            {
+                Log.Warn("Couldn't reconnect to the voice engine, restarting it: " + e.Message);
+            }
+        }
+
         Stop();
         var port = _settings.Current.TtsPort;
         var psi = new ProcessStartInfo(AppPaths.PythonExe)
@@ -87,44 +110,90 @@ public sealed class KokoroSpeech : IAsyncDisposable
         p.BeginOutputReadLine();
         p.BeginErrorReadLine();
         _proc = p;
+        _started = started.Task;
 
-        using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct))
-        {
-            timeout.CancelAfter(TimeSpan.FromMinutes(2));
-            using (timeout.Token.Register(() => started.TrySetCanceled()))
-                await started.Task;
-        }
-        _ws = new ClientWebSocket();
-        await _ws.ConnectAsync(new Uri($"ws://127.0.0.1:{port}/"), ct);
-        await ReceiveTextAsync(ct); // the "ready" greeting
+        await WaitStartedAsync(_started, ct);
+        await ConnectLockedAsync(ct);
+    }
+
+    static async Task WaitStartedAsync(Task started, CancellationToken ct)
+    {
+        try { await started.WaitAsync(TimeSpan.FromMinutes(2), ct); }
+        catch (TimeoutException) { throw new UserFacingException("The voice engine took too long to start."); }
+    }
+
+    /// <summary>Open a fresh connection to the running server and read its greeting.</summary>
+    async Task ConnectLockedAsync(CancellationToken ct)
+    {
+        DropSocket();
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(10));
+        var ws = new ClientWebSocket();
+        _ws = ws;
+        await ws.ConnectAsync(new Uri($"ws://127.0.0.1:{_settings.Current.TtsPort}/"), timeout.Token);
+        await ReceiveTextAsync(timeout.Token); // the "ready" greeting
     }
 
     /// <summary>Speak one short piece of text. Returns mono float samples at <see cref="SampleRate"/>.</summary>
     /// <param name="speed">0.5 to 2.0; Kokoro changes the pace without changing the pitch.</param>
+    /// <remarks>
+    /// <paramref name="ct"/> is only checked between socket calls, never passed to them: cancelling a pending
+    /// WebSocket call aborts the connection. A cancelled request finishes (about a second) and its audio is dropped.
+    /// </remarks>
     public async Task<float[]> SynthesizeAsync(string text, string voice, double speed, CancellationToken ct = default)
     {
         await _lock.WaitAsync(ct);
         try
         {
-            await EnsureStartedLockedAsync(ct);
-            var id = ++_nextId;
-            var request = JsonSerializer.Serialize(new { type = "speak", id, text, voice, speed });
-            await _ws!.SendAsync(Encoding.UTF8.GetBytes(request), WebSocketMessageType.Text, true, ct);
-            using var reply = JsonDocument.Parse(await ReceiveTextAsync(ct));
-            var root = reply.RootElement;
-            if (root.GetProperty("type").GetString() == "error")
-                throw new UserFacingException("The voice engine couldn't read that: " + root.GetProperty("message").GetString());
-            var pcm = await ReceiveBinaryAsync(ct);
-            var samples = new float[pcm.Length / 4];
-            Buffer.BlockCopy(pcm, 0, samples, 0, samples.Length * 4);
-            return samples;
-        }
-        catch (WebSocketException e)
-        {
-            Stop(); // restart on the next request
-            throw new UserFacingException("Lost the connection to the voice engine.", e);
+            for (var attempt = 1; ; attempt++)
+            {
+                try { await EnsureStartedLockedAsync(ct); }
+                catch (Exception e) when (e is WebSocketException || e is OperationCanceledException && !ct.IsCancellationRequested)
+                {
+                    Stop();
+                    throw new UserFacingException("Couldn't connect to the voice engine.", e);
+                }
+                try
+                {
+                    return await SpeakLockedAsync(text, voice, speed, ct);
+                }
+                catch (Exception e) when (e is WebSocketException || e is OperationCanceledException && !ct.IsCancellationRequested)
+                {
+                    DropSocket();
+                    if (!ProcessAlive) Stop(); // restart on the next request
+                    else if (attempt == 1 && e is WebSocketException)
+                    {
+                        Log.Warn("Lost the connection to the voice engine, reconnecting: " + e.Message);
+                        continue;
+                    }
+                    if (e is OperationCanceledException)
+                    {
+                        Stop(); // hung: start afresh next time
+                        throw new UserFacingException("The voice engine stopped responding.", e);
+                    }
+                    throw new UserFacingException("Lost the connection to the voice engine.", e);
+                }
+            }
         }
         finally { _lock.Release(); }
+    }
+
+    async Task<float[]> SpeakLockedAsync(string text, string voice, double speed, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        using var timeout = new CancellationTokenSource(RequestTimeout);
+        var id = ++_nextId;
+        var request = JsonSerializer.Serialize(new { type = "speak", id, text, voice, speed });
+        await _ws!.SendAsync(Encoding.UTF8.GetBytes(request), WebSocketMessageType.Text, true, timeout.Token);
+        using var reply = JsonDocument.Parse(await ReceiveTextAsync(timeout.Token));
+        var root = reply.RootElement;
+        if (root.GetProperty("type").GetString() == "error")
+            throw new UserFacingException("The voice engine couldn't read that: " + root.GetProperty("message").GetString());
+        var pcm = await ReceiveBinaryAsync(timeout.Token);
+        ct.ThrowIfCancellationRequested(); // the reading was stopped meanwhile; the connection stays usable
+        var samples = new float[pcm.Length / 4];
+        Buffer.BlockCopy(pcm, 0, samples, 0, samples.Length * 4);
+        return samples;
     }
 
     async Task<string> ReceiveTextAsync(CancellationToken ct) => Encoding.UTF8.GetString(await ReceiveAsync(WebSocketMessageType.Text, ct));
@@ -145,12 +214,18 @@ public sealed class KokoroSpeech : IAsyncDisposable
         return ms.ToArray();
     }
 
-    void Stop()
+    void DropSocket()
     {
         try { _ws?.Dispose(); } catch { }
         _ws = null;
+    }
+
+    void Stop()
+    {
+        DropSocket();
         try { if (_proc is { HasExited: false }) _proc.Kill(true); } catch { }
         _proc = null;
+        _started = null;
     }
 
     public ValueTask DisposeAsync()
