@@ -1,4 +1,4 @@
-# Test brief: Oberton 2.0.0 "Read aloud"
+# Test brief: Oberton 2.0.1 "Read aloud" (retest)
 
 You are testing a new feature of **Oberton**, a local AI dictation app for Windows, on the user's own PC. You start in
 an **empty directory**. Everything you need is described here. Work through the steps in order, record what happens,
@@ -11,7 +11,23 @@ and finish with the report described at the end. Don't fix code unless asked; yo
   at the cursor. All local.
 - Releases are built by GitHub Actions. Installed copies update via *Settings › About & updates*.
 
-## What's new in 2.0.0 (what you are testing)
+## What changed in 2.0.1 (why you are retesting)
+
+2.0.0 was tested once on this PC: dictation passed, but Read aloud made no sound. Three bugs were found and fixed:
+
+1. **Playback died on the first sentence.** `ReadAloudSession` copied floats into NAudio's buffer with `Array.Copy`,
+   which threw (NAudio's float view is a `byte[]` underneath); NAudio stopped silently and the popup froze. The
+   session now hands NAudio bytes, and a playback failure now shows an error instead of a frozen player.
+2. **The idle connection was dropped after ~45 s** (keepalive pings the client never answered), and the next reading
+   failed with "Lost the connection to the voice engine" and restarted the engine. The server no longer pings, and the
+   client reconnects to the running engine instead of restarting it.
+3. **Stopping a reading mid-sentence aborted the socket**, so the next reading restarted the engine (~5 s of
+   "Preparing voice…"). The client no longer cancels socket calls; a stopped sentence finishes (~1 s) and is dropped.
+
+If the voice is already installed from the 2.0.0 test, Step 1 and 1b can be skipped (but re-run Step 1b's server
+probe if you like: the server changed only by `ping_interval=None`). **Steps 3–6 are the point of this retest.**
+
+## What Read aloud is
 
 **Read aloud**: select text in any app, press `Ctrl+Shift+Space`, and it is spoken by **Kokoro v1.0** (an 82M-parameter
 TTS model, ONNX, CPU) running in a local Python process.
@@ -29,9 +45,7 @@ TTS model, ONNX, CPU) running in a local Python process.
 | Settings › Read aloud (voice, base speed, download, Try it) | `src/Dictation.App/Views/ReadAloudPage.xaml(.cs)` |
 | Hotkey wiring | `src/Dictation.App/App.xaml.cs` → `OnSpeakHotkey` |
 
-**Never tested outside CI.** The app compiles, and 69 unit tests pass on GitHub's Windows runners. Nothing has run on a
-real machine yet. The riskiest step is the first-use install of `kokoro-onnx` (and its dependencies `onnxruntime`,
-`espeakng-loader`, `phonemizer`) into the app's private Python. That step has never run anywhere.
+The install (Step 1) and the server (Step 1b) passed in the 2.0.0 test.
 
 ## Paths on the user's machine
 
@@ -56,14 +70,14 @@ Run in PowerShell in the empty directory:
 
 ```powershell
 git clone --depth 1 https://github.com/silent-diffusion/dictation.git src-dictation   # source, for reference only
-Invoke-WebRequest https://github.com/silent-diffusion/dictation/releases/download/v2.0.0/Oberton-Setup-2.0.0.exe -OutFile Oberton-Setup-2.0.0.exe
+Invoke-WebRequest https://github.com/silent-diffusion/dictation/releases/download/v2.0.1/Oberton-Setup-2.0.1.exe -OutFile Oberton-Setup-2.0.1.exe
 $root = "$env:LOCALAPPDATA\LocalDictation"
 Test-Path "$root\runtime\py\python.exe"          # is Oberton (or Local Dictation 1.x) already set up?
 (Get-Item "$root\app\LocalDictation.exe" -ErrorAction SilentlyContinue).VersionInfo.ProductVersion
 ```
 
-- **Already installed and older than 2.0.0:** ask the user to update in the app (*Settings › About & updates › Check
-  for updates*), or run `.\Oberton-Setup-2.0.0.exe` (it updates in place and keeps settings and models).
+- **Already installed and older than 2.0.1:** ask the user to update in the app (*Settings › About & updates › Check
+  for updates*), or run `.\Oberton-Setup-2.0.1.exe` (it updates in place and keeps settings and models).
 - **Not installed:** run the installer. First launch downloads the speech engine and models (3–5.5 GB, several
   minutes) before anything else works. Let it finish.
 - Record the Windows version, CPU, RAM, and whether there's an NVIDIA GPU (`nvidia-smi -L`).
@@ -162,8 +176,11 @@ Stop the server afterwards with `Stop-Process $srv.Id`.
 
 ## Step 2: Before testing the UI
 
-- Make sure Oberton 2.0.0 is running (tray icon: a red dot on a dark square).
+- Make sure Oberton 2.0.1 is running (tray icon: a red dot on a dark square).
 - Open `dictation.log` and note its length, so you can show only the new lines later.
+- If the 2.0.0 test left `audio_monitor.ps1` in the working folder (a Core Audio watcher), run it alongside Steps 3–6:
+  `.\audio_monitor.ps1 -TargetPid (Get-Process LocalDictation).Id -Seconds 300`. The app's audio session should
+  stay active with a non-zero peak while reading.
 - Steps 3–6 need someone to press keys and watch the screen. If you have desktop control (computer use), do them
   yourself. Otherwise give the user the steps one at a time and record what they report.
 
@@ -174,10 +191,14 @@ Stop the server afterwards with `Stop-Process $srv.Id`.
 3. If it's not installed, click **Download voice**. Watch the progress (installing the voice engine, then the model,
    then the voices) and record how long it takes and any error.
 4. Click **Try it**. A popup should appear at the overlay position (bottom center by default) and read a sample
-   sentence. Record the time from click to first sound.
-5. Change the **Voice** (e.g. George, British) and the **Base speed** (e.g. 1.30×), click **Try it** again, and check
+   sentence. Record the time from click to first sound. **Sound must be heard, the countdown must count down, the
+   progress bar must fill, and the popup must reach "Done" and close ~4 s later.** (In 2.0.0 the countdown froze
+   and nothing was heard.)
+5. **Wait 2 minutes**, then click **Try it** again. Expected: it reads at once, with no error, and `dictation.log`
+   shows no new `Kokoro loaded` line (the engine was not restarted).
+6. Change the **Voice** (e.g. George, British) and the **Base speed** (e.g. 1.30×), click **Try it** again, and check
    both changes are heard.
-6. Check that `data\settings.json` now contains the new `TtsVoice` and `TtsBaseSpeed`.
+7. Check that `data\settings.json` now contains the new `TtsVoice` and `TtsBaseSpeed`.
 
 ## Step 4: Hotkey with a selection, in different apps
 
@@ -213,6 +234,8 @@ Use a long text (~2–3 minutes, e.g. a Wikipedia article section) so there's ro
 | Control | Expected |
 | --- | --- |
 | Pause / play | Stops and resumes at the same word; the status reads "Paused" |
+| Long pause | Pause for 90 s, then play: it continues (no "Lost the connection" error) |
+| Stop then restart | Stop with the hotkey mid-sentence and start another reading at once: no "Preparing voice…" beyond a moment, no new `Kokoro loaded` log line |
 | Back 15 s / Forward 15 s | Jumps roughly 15 s; the highlighted text moves with it; forward near the end finishes |
 | − / + speed | Steps of 0.1× from 0.5× to 2.0×; the pace changes within about a second, the pitch stays natural, buttons disable at the limits |
 | Countdown | "m:ss" time left, counting down; it settles to an accurate value after a few sentences and adjusts when speed changes |

@@ -1,7 +1,6 @@
 using Dictation.Core.Infrastructure;
 using Dictation.Core.Speech;
 using NAudio.Wave;
-using NAudio.Wave.SampleProviders;
 
 namespace Dictation.Core.Reading;
 
@@ -10,8 +9,10 @@ namespace Dictation.Core.Reading;
 /// so reading starts almost at once. Skipping works on the timeline of all sentences, using real durations where the
 /// audio exists and estimates elsewhere. Changing speed re-synthesizes from the current sentence (Kokoro changes pace
 /// without changing pitch). Public members are safe to call from the UI thread; audio runs on NAudio's thread.
+/// It hands NAudio raw bytes (an <see cref="IWaveProvider"/>), not floats: NAudio's float view of its byte buffer is
+/// a byte[] underneath, and Array.Copy/Array.Clear on it throw or clear a quarter of it, which silently stopped playback.
 /// </summary>
-public sealed class ReadAloudSession : ISampleProvider, IDisposable
+public sealed class ReadAloudSession : IWaveProvider, IDisposable
 {
     public const double MinSpeed = 0.5, MaxSpeed = 2.0, SpeedStep = 0.1;
     const int LookAhead = 2;
@@ -104,7 +105,19 @@ public sealed class ReadAloudSession : ISampleProvider, IDisposable
         if (Sentences.Count == 0) { _ended = true; Finished?.Invoke(); return; }
         _ = Task.Run(SynthesisLoopAsync);
         _output = new WaveOutEvent { DesiredLatency = 150 };
-        _output.Init(new SampleToWaveProvider(this));
+        _output.PlaybackStopped += (_, e) =>
+        {
+            // NAudio stops the device when Read throws or the device fails; never leave a frozen player behind.
+            if (e.Exception == null) return;
+            Log.Error("Read aloud playback stopped", e.Exception);
+            lock (_lock)
+            {
+                if (_ended) return;
+                _ended = true;
+            }
+            Failed?.Invoke("Playback failed: " + e.Exception.Message);
+        };
+        _output.Init(this);
         _output.Play();
     }
 
@@ -206,13 +219,7 @@ public sealed class ReadAloudSession : ISampleProvider, IDisposable
                 if (next < 0) { await _wake.WaitAsync(ct); continue; }
 
                 var samples = await _tts.SynthesizeAsync(_speakable[next], _voice, speed, ct);
-                lock (_lock)
-                {
-                    if (generation != _generation) continue; // the speed changed meanwhile
-                    _audio[next] = samples;
-                    if (speed > 0 && _speakable[next].Length > 20) // learn the voice's pace for better estimates
-                        _secondsPerChar = 0.7 * _secondsPerChar + 0.3 * (samples.Length / (double)KokoroSpeech.SampleRate * speed / _speakable[next].Length);
-                }
+                Provide(next, samples, generation, speed);
             }
         }
         catch (OperationCanceledException) { }
@@ -224,23 +231,42 @@ public sealed class ReadAloudSession : ISampleProvider, IDisposable
         }
     }
 
-    /// <summary>NAudio pulls audio here. Always fills the buffer (silence while paused or waiting) so the device keeps running.</summary>
-    public int Read(float[] buffer, int offset, int count)
+    /// <summary>Store a sentence's audio, unless the speed changed since it was requested.</summary>
+    internal void Provide(int index, float[] samples, int generation, double speed)
     {
-        var written = 0;
+        lock (_lock)
+        {
+            if (generation != _generation) return; // the speed changed meanwhile
+            _audio[index] = samples;
+            if (speed > 0 && _speakable[index].Length > 20) // learn the voice's pace for better estimates
+                _secondsPerChar = 0.7 * _secondsPerChar + 0.3 * (samples.Length / (double)KokoroSpeech.SampleRate * speed / _speakable[index].Length);
+        }
+    }
+
+    internal int Generation { get { lock (_lock) return _generation; } }
+
+    /// <summary>
+    /// NAudio pulls audio here, in bytes of 32-bit float samples. Always fills the buffer (silence while paused or
+    /// waiting) so the device keeps running.
+    /// </summary>
+    public int Read(byte[] buffer, int offset, int count)
+    {
+        count -= count % 4; // whole samples only
+        var wanted = count / 4;
+        var written = 0; // in samples
         var finished = false;
         var advanced = false;
         lock (_lock)
         {
-            while (written < count && !_paused && !_ended)
+            while (written < wanted && !_paused && !_ended)
             {
                 var audio = _audio[_index];
                 if (audio == null) break; // still being synthesized
                 if (_resumeAt >= 0) { _pos = (int)(_resumeAt * audio.Length); _resumeAt = -1; }
-                var n = Math.Min(count - written, audio.Length - _pos);
+                var n = Math.Min(wanted - written, audio.Length - _pos);
                 if (n > 0)
                 {
-                    Array.Copy(audio, _pos, buffer, offset + written, n);
+                    Buffer.BlockCopy(audio, _pos * 4, buffer, offset + written * 4, n * 4);
                     _pos += n;
                     written += n;
                 }
@@ -253,7 +279,7 @@ public sealed class ReadAloudSession : ISampleProvider, IDisposable
                 }
             }
         }
-        if (written < count) Array.Clear(buffer, offset + written, count - written);
+        if (written < wanted) Array.Clear(buffer, offset + written * 4, (wanted - written) * 4);
         if (advanced) _wake.Release();
         if (finished) ThreadPool.QueueUserWorkItem(_ => Finished?.Invoke());
         return count;
