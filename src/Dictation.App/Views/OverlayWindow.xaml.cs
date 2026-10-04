@@ -101,7 +101,7 @@ public partial class OverlayWindow : Window
     {
         Body.Width = width;
         Card.CornerRadius = new CornerRadius(expanded ? 20 : 28);
-        var opacity = Math.Clamp(App.Services.Settings.Current.OverlayOpacity, 0.6, 1.0);
+        var opacity = Math.Clamp(App.Services.Settings.Current.OverlayOpacity, 0.3, 1.0);
         Card.Background = new SolidColorBrush(Color.FromArgb((byte)Math.Round(opacity * 255), 0x16, 0x16, 0x18));
         Opacity = 1;
         _hideTimer.Stop();

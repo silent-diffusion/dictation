@@ -46,6 +46,10 @@ public sealed class AppSettings
     public string TtsVoice { get; set; } = "af_heart";
     /// <summary>Default reading speed, 0.5 to 2.0. The reader's +/− buttons change it for one reading only.</summary>
     public double TtsBaseSpeed { get; set; } = 1.0;
+    /// <summary>Opacity of the Read aloud player's background (its text stays fully opaque). 0.3 to 1.</summary>
+    public double ReaderOpacity { get; set; } = 0.94;
+    /// <summary>The player shows the whole text (scrolling along) instead of the current sentence only.</summary>
+    public bool ReaderExpanded { get; set; }
     public int TtsPort { get; set; } = 8766;
     public string? MicrophoneName { get; set; }
     public string? ActiveProfileId { get; set; }
@@ -54,7 +58,7 @@ public sealed class AppSettings
     public bool MinimizeToTray { get; set; } = true;
     public bool ShowOverlay { get; set; } = true;
     public AppTheme Theme { get; set; } = AppTheme.System;
-    /// <summary>Opacity of the overlay's background (its text stays fully opaque). 0.6 to 1.</summary>
+    /// <summary>Opacity of the overlay's background (its text stays fully opaque). 0.3 to 1.</summary>
     public double OverlayOpacity { get; set; } = 0.88;
     public OverlayPosition OverlayPosition { get; set; } = OverlayPosition.BottomCenter;
     public InsertionMode Insertion { get; set; } = InsertionMode.Auto;

@@ -118,7 +118,7 @@
                                        Text="{Binding Value, ElementName=OpacitySlider, StringFormat={}{0:P0}}"/>
                             <TextBlock Text="Opacity"/>
                         </DockPanel>
-                        <Slider x:Name="OpacitySlider" Minimum="0.6" Maximum="1" Value="{Binding OverlayOpacity}"
+                        <Slider x:Name="OpacitySlider" Minimum="0.3" Maximum="1" Value="{Binding OverlayOpacity}"
                                 TickFrequency="0.02" IsSnapToTickEnabled="True" Margin="0,6,0,10"
                                 AutomationProperties.Name="Overlay opacity"/>
                         <Border Style="{StaticResource Divider}" Margin="0,2,0,12"/>
