@@ -68,6 +68,8 @@ public sealed class AppSettings
     public double ReaderOpacity { get; set; } = 0.94;
     /// <summary>The player shows the whole text (scrolling along) instead of the current sentence only.</summary>
     public bool ReaderExpanded { get; set; }
+    /// <summary>The main window's sidebar is folded away, so the page fills the window.</summary>
+    public bool SidebarCollapsed { get; set; }
     /// <summary>Ids of built-in profiles already offered, so one added in an update appears once and stays deleted
     /// if the user deletes it.</summary>
     public List<string> BuiltInProfilesAdded { get; set; } = new();
@@ -95,7 +97,7 @@ public sealed class AppSettings
     /// <summary>Keep recent dictations (text, and audio if <see cref="SaveHistoryAudio"/>) in data\history on this PC.
     /// That folder survives app updates.</summary>
     public bool KeepHistory { get; set; } = true;
-    /// <summary>How many recent dictations History keeps; older ones are deleted.</summary>
+    /// <summary>How many recent dictations History keeps; older ones are deleted. 0 = keep them all.</summary>
     public int HistoryLimit { get; set; } = 50;
     /// <summary>Keep each dictation's recording (16 kHz WAV, about 2 MB a minute) so it can be played back.</summary>
     public bool SaveHistoryAudio { get; set; } = true;

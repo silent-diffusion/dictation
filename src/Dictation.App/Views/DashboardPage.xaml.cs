@@ -115,8 +115,8 @@ public partial class DashboardPage : UserControl
         var kept = HistoryStats.AiKeptShare(entries);
         Dials.Children.Add(Dial(kept ?? 0, kept is { } k ? $"{k:P0}" : "—", "AI edits kept", "the rest went in as spoken"));
 
-        Dials.Children.Add(Dial(s.HistoryLimit > 0 ? entries.Count / (double)s.HistoryLimit : 0, entries.Count.ToString(),
-            "History", $"of {s.HistoryLimit} kept"));
+        Dials.Children.Add(Dial(s.HistoryLimit > 0 ? entries.Count / (double)s.HistoryLimit : entries.Count > 0 ? 1 : 0,
+            entries.Count.ToString(), "History", s.HistoryLimit > 0 ? $"of {s.HistoryLimit} kept" : "all kept, no limit"));
 
         if (dictating) Dials.Children.Add(Dial(1, "busy", "Speech model", "dictating now"));
         else if (!sv.Speech.IsReady) Dials.Children.Add(Dial(0, "off", "Speech model", "loads when you dictate"));

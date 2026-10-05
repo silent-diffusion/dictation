@@ -15,8 +15,9 @@ public partial class HistorySettingsPage : UserControl
         InitializeComponent();
         var s = App.Services.Settings.Current;
         var limits = new List<int> { 10, 25, 50, 100, 200, 500 };
-        if (!limits.Contains(s.HistoryLimit)) { limits.Add(s.HistoryLimit); limits.Sort(); }
-        LimitBox.ItemsSource = limits.Select(n => new Choice(n + " dictations", n)).ToList();
+        if (s.HistoryLimit > 0 && !limits.Contains(s.HistoryLimit)) { limits.Add(s.HistoryLimit); limits.Sort(); }
+        LimitBox.ItemsSource = limits.Select(n => new Choice(n + " dictations", n))
+            .Append(new Choice("All of them (never delete)", 0)).ToList();
         DataContext = s;
         FolderText.Text = HistoryStore.Dir;
         UpdateSize();

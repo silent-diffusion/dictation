@@ -25,7 +25,7 @@
             <ComboBox x:Name="LimitBox" Width="200" HorizontalAlignment="Left" DisplayMemberPath="Label" SelectedValuePath="Value"
                       SelectedValue="{Binding HistoryLimit}" AutomationProperties.Name="How many dictations to keep"/>
             <TextBlock Style="{StaticResource Caption}" Margin="0,6,0,0"
-                       Text="The oldest ones are deleted as new ones come in (also right away when you lower this)."/>
+                       Text="The oldest ones are deleted as new ones come in (also right away when you lower this). With &quot;All of them&quot;, nothing is deleted unless you delete it."/>
 
             <TextBlock Text="Stored in" Style="{StaticResource FieldLabel}" Margin="0,18,0,6"/>
             <TextBlock x:Name="FolderText" FontFamily="{StaticResource Ob.Mono}" FontSize="12" TextWrapping="Wrap"/>

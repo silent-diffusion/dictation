@@ -8,10 +8,23 @@
         <BooleanToVisibilityConverter x:Key="B2V"/>
         <Style x:Key="NavIcon" TargetType="TextBlock">
             <Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets"/>
-            <Setter Property="FontSize" Value="15"/>
+            <Setter Property="FontSize" Value="19"/>
             <Setter Property="VerticalAlignment" Value="Center"/>
-            <Setter Property="Margin" Value="0,0,12,0"/>
+            <Setter Property="Margin" Value="2,0,14,0"/>
             <Setter Property="FontWeight" Value="Normal"/>
+        </Style>
+        <!-- Big, easy-to-read section entries -->
+        <Style x:Key="BigNavItem" TargetType="ListBoxItem" BasedOn="{StaticResource NavItem}">
+            <Setter Property="Padding" Value="12,12"/>
+            <Setter Property="Margin" Value="0,2"/>
+            <Setter Property="FontSize" Value="16"/>
+        </Style>
+        <Style x:Key="IconButton" TargetType="Button" BasedOn="{StaticResource QuietButton}">
+            <Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets"/>
+            <Setter Property="FontSize" Value="15"/>
+            <Setter Property="Width" Value="36"/>
+            <Setter Property="Height" Value="36"/>
+            <Setter Property="Padding" Value="0"/>
         </Style>
         <Style x:Key="StatusDot" TargetType="Ellipse">
             <Setter Property="Width" Value="7"/>
@@ -22,20 +35,24 @@
     </Window.Resources>
     <Grid TextElement.Foreground="{DynamicResource Ob.Text}">
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="256"/>
+            <ColumnDefinition x:Name="SidebarColumn" Width="268"/>
             <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
 
         <!-- Sidebar -->
-        <Border Grid.Column="0" Background="{DynamicResource Ob.Sidebar}" BorderBrush="{DynamicResource Ob.Divider}"
+        <Border x:Name="Sidebar" Grid.Column="0" Background="{DynamicResource Ob.Sidebar}" BorderBrush="{DynamicResource Ob.Divider}"
                 BorderThickness="0,0,1,0">
             <DockPanel Margin="14,18,14,14" LastChildFill="True">
-                <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="6,0,0,22">
-                    <Border Width="26" Height="26" CornerRadius="7" Background="{DynamicResource Ob.Mark}">
-                        <Ellipse Width="8" Height="8" Fill="{DynamicResource Ob.Record}"/>
-                    </Border>
-                    <TextBlock Text="Oberton" FontSize="15" FontWeight="SemiBold" Margin="10,0,0,0" VerticalAlignment="Center"/>
-                </StackPanel>
+                <DockPanel DockPanel.Dock="Top" Margin="6,0,0,24">
+                    <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Content="&#xE76B;" Click="Collapse_Click"
+                            ToolTip="Hide the sidebar (Ctrl+B)" AutomationProperties.Name="Hide the sidebar"/>
+                    <StackPanel Orientation="Horizontal">
+                        <Border Width="30" Height="30" CornerRadius="8" Background="{DynamicResource Ob.Mark}">
+                            <Ellipse Width="9" Height="9" Fill="{DynamicResource Ob.Record}"/>
+                        </Border>
+                        <TextBlock Text="Oberton" FontSize="18" FontWeight="SemiBold" Margin="11,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </DockPanel>
 
                 <Border DockPanel.Dock="Bottom" Margin="0,12,0,0" Padding="12,10" CornerRadius="10"
                         Background="{DynamicResource Ob.Subtle}">
@@ -56,7 +73,7 @@
                 </Border>
 
                 <!-- The app's sections -->
-                <ListBox x:Name="NavList" Style="{StaticResource NavList}" SelectionChanged="NavList_SelectionChanged"
+                <ListBox x:Name="NavList" Style="{StaticResource NavList}" ItemContainerStyle="{StaticResource BigNavItem}" SelectionChanged="NavList_SelectionChanged"
                          AutomationProperties.Name="Sections">
                     <ListBoxItem x:Name="DashboardItem" Tag="Dashboard" AutomationProperties.Name="Active dashboard">
                         <StackPanel Orientation="Horizontal">
@@ -94,5 +111,10 @@
 
         <!-- Content -->
         <ContentPresenter x:Name="Host" Grid.Column="1"/>
+
+        <!-- Shown while the sidebar is hidden: brings it back -->
+        <Button x:Name="ExpandButton" Grid.Column="1" Style="{StaticResource IconButton}" Content="&#xE700;"
+                HorizontalAlignment="Left" VerticalAlignment="Top" Margin="8,8,0,0" Visibility="Collapsed"
+                Click="Expand_Click" ToolTip="Show the sidebar (Ctrl+B)" AutomationProperties.Name="Show the sidebar"/>
     </Grid>
 </Window>
