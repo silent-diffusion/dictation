@@ -4,6 +4,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using Dictation.Core.Infrastructure;
 using Dictation.Core.Settings;
+using Dictation.Core.Setup;
 using Dictation.Core.Speech;
 using Dictation.Core.Text;
 
@@ -23,6 +24,7 @@ public partial class ProfilePage : UserControl
         profile.PropertyChanged += OnProfileChanged;
         Unloaded += (_, _) => profile.PropertyChanged -= OnProfileChanged;
         FillVoices();
+        FillSpeechModels();
         Loaded += async (_, _) => FillModels(await App.Services.Llm.ListModelsAsync());
     }
 
@@ -94,6 +96,25 @@ public partial class ProfilePage : UserControl
         box.ItemsSource = choices;
         box.SelectedItem = choices.FirstOrDefault(c => string.Equals(c.Value, value, StringComparison.OrdinalIgnoreCase)) ?? choices[0];
         _filling = false;
+    }
+
+    /// <summary>Downloaded Whisper models only, plus "the one in Settings". A model the profile names that isn't
+    /// downloaded any more stays listed (marked).</summary>
+    void FillSpeechModels()
+    {
+        var asr = App.Services.Settings.Current.Asr;
+        var choices = new List<Choice> { new($"Same as Settings › Models ({SpeechModels.NameOf(asr.Model)})", "") };
+        choices.AddRange(SpeechModels.All.Where(m => RuntimeInstaller.WhisperModelPresent(m.Id)).Select(m => new Choice(m.Name, m.Id)));
+        var current = _profile.SpeechModel ?? "";
+        if (current.Length > 0 && choices.All(c => !string.Equals(c.Value, current, StringComparison.OrdinalIgnoreCase)))
+            choices.Add(new Choice(SpeechModels.NameOf(current) + " (not downloaded)", current));
+        Select(SpeechModelBox, choices, current);
+    }
+
+    void SpeechModelBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_filling || SpeechModelBox.SelectedItem is not Choice c) return;
+        _profile.SpeechModel = c.Value.Length == 0 ? null : c.Value;
     }
 
     void ModelBox_SelectionChanged(object sender, SelectionChangedEventArgs e)

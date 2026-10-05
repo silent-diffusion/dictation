@@ -6,6 +6,7 @@ using Dictation.Core.Infrastructure;
 using Dictation.Core.Insertion;
 using Dictation.Core.Session;
 using Dictation.Core.Setup;
+using Dictation.Core.Speech;
 
 namespace Dictation.App;
 
@@ -85,6 +86,7 @@ public partial class App : Application
         {
             _tray?.SetTooltip($"{AppInfo.Name} · {s.Profiles.Active.Name}");
             _ = s.Llm.WarmUpAsync(s.Profiles.Active.Model);
+            _ = SwapSpeechModelAsync();
         };
         _tray.SetTooltip($"{AppInfo.Name} · {s.Profiles.Active.Name}");
         Autostart.Apply(s.Settings.Current.StartWithWindows);
@@ -95,7 +97,7 @@ public partial class App : Application
         // Warm both models in the background so the first hotkey press is instant.
         _ = Task.Run(async () =>
         {
-            try { await s.Speech.InitializeAsync(); }
+            try { await s.Speech.InitializeAsync(s.Profiles.Active.SpeechModel, CancellationToken.None); }
             catch (UserFacingException ex)
             {
                 Log.Warn("Speech init: " + ex.Message);
@@ -141,6 +143,18 @@ public partial class App : Application
             _overlay?.ShowMessage($"{AppInfo.Name} {info.Version.ToString(3)} is available. Open Settings > About & updates to install it.", NoticeLevel.Info);
         }
         catch (Exception ex) { Log.Warn("Startup update check failed: " + ex.Message); }
+    }
+
+    /// <summary>The active profile changed to one with another speech model: load it now, while idle, so the next
+    /// dictation doesn't wait. Only when the engine is already running (an unloaded engine stays unloaded).</summary>
+    static async Task SwapSpeechModelAsync()
+    {
+        var s = Services;
+        var model = SpeechModels.For(s.Profiles.Active, s.Settings.Current.Asr);
+        if (!s.Speech.IsReady || s.Controller.State != DictationState.Idle ||
+            string.Equals(s.Speech.LoadedModel, model, StringComparison.OrdinalIgnoreCase)) return;
+        try { await s.Speech.InitializeAsync(model, CancellationToken.None); }
+        catch (Exception e) { Log.Warn("Loading the profile's speech model failed: " + e.Message); }
     }
 
     /// <summary>Set when a startup check found a newer release.</summary>
@@ -262,7 +276,7 @@ public partial class App : Application
     /// <summary>Called by the Speech page when the user presses "Apply and restart engine".</summary>
     public static async Task RestartSpeechAsync()
     {
-        try { await Services.Speech.RestartAsync(); }
+        try { await Services.Speech.RestartAsync(Services.Profiles.Active.SpeechModel); }
         catch (UserFacingException ex) { Services.Status.Speech = "Speech: " + ex.Message; }
     }
 

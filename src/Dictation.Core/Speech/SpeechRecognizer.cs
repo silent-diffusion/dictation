@@ -24,6 +24,11 @@ public interface ISpeechRecognizer : IAsyncDisposable
     string Status { get; }
     /// <summary>Load the model / start the engine. Safe to call repeatedly.</summary>
     Task InitializeAsync(CancellationToken ct = default);
+    /// <summary>Make sure the engine runs <paramref name="model"/> (null = the model in Settings), restarting it with that
+    /// model if another one is loaded. Safe to call repeatedly.</summary>
+    Task InitializeAsync(string? model, CancellationToken ct);
+    /// <summary>The model the running engine was started with; null when it isn't running.</summary>
+    string? LoadedModel { get; }
     /// <summary>Begin a new utterance. Returns immediately; audio may be pushed right away.</summary>
     /// <param name="live">Commit finished sentences every few seconds (<see cref="Committed"/>) instead of
     /// streaming partial transcripts.</param>
@@ -35,7 +40,8 @@ public interface ISpeechRecognizer : IAsyncDisposable
     Task<string> StopAsync(CancellationToken ct = default);
     void Cancel();
     /// <summary>Restart the engine with current settings (after the user changed the model, etc.).</summary>
-    Task RestartAsync();
+    /// <param name="model">null = the model in Settings.</param>
+    Task RestartAsync(string? model = null);
     /// <summary>Free the model's memory (GPU memory especially). The next <see cref="InitializeAsync"/> loads it again.</summary>
     Task UnloadAsync();
 }
@@ -75,13 +81,27 @@ public sealed class SidecarSpeechRecognizer : ISpeechRecognizer
         StatusChanged?.Invoke(s, ok);
     }
 
-    public async Task InitializeAsync(CancellationToken ct = default)
+    public Task InitializeAsync(CancellationToken ct = default) => InitializeAsync(null, ct);
+
+    public string? LoadedModel => IsReady ? _loadedModel : null;
+    string? _loadedModel;
+
+    public async Task InitializeAsync(string? model, CancellationToken ct)
     {
         await _initLock.WaitAsync(ct);
         try
         {
-            if (IsReady) return;
             var asr = _settings.Current.Asr;
+            var wanted = string.IsNullOrWhiteSpace(model) ? asr.Model : model.Trim();
+            if (IsReady && string.Equals(_loadedModel, wanted, StringComparison.OrdinalIgnoreCase)) return;
+            if (IsReady)
+            {
+                // A profile with its own speech model: swap the model (the engine loads one at a time).
+                Log.Info($"Switching the speech model from {_loadedModel} to {wanted}");
+                _ready = false;
+                _lifetime.Cancel();
+                KillProcess();
+            }
             if (!File.Exists(AppPaths.PythonExe) || !File.Exists(Path.Combine(AppPaths.InferenceDir, "asr_server.py")))
             {
                 SetStatus("Speech engine is not installed", false);
@@ -89,9 +109,10 @@ public sealed class SidecarSpeechRecognizer : ISpeechRecognizer
                     "The speech engine isn't installed yet. Run scripts\\setup.ps1 once (it needs internet), then restart the app.");
             }
 
-            SetStatus("Loading speech model…", false);
-            await StartProcessAsync(asr, ct);
+            SetStatus($"Loading speech model ({wanted})…", false);
+            await StartProcessAsync(asr, wanted, ct);
             await ConnectAsync(asr.Port, ct);
+            _loadedModel = wanted;
         }
         catch (Exception e) when (e is not UserFacingException && e is not OperationCanceledException)
         {
@@ -101,7 +122,7 @@ public sealed class SidecarSpeechRecognizer : ISpeechRecognizer
         finally { _initLock.Release(); }
     }
 
-    async Task StartProcessAsync(AsrSettings asr, CancellationToken ct)
+    async Task StartProcessAsync(AsrSettings asr, string model, CancellationToken ct)
     {
         KillProcess();
         var psi = new ProcessStartInfo(AppPaths.PythonExe)
@@ -115,7 +136,7 @@ public sealed class SidecarSpeechRecognizer : ISpeechRecognizer
         foreach (var a in new[]
         {
             "-u", Path.Combine(AppPaths.InferenceDir, "asr_server.py"),
-            "--engine", asr.Engine, "--model", asr.Model,
+            "--engine", asr.Engine, "--model", model,
             "--model-dir", Path.Combine(AppPaths.ModelsDir, "whisper"),
             "--device", asr.Device, "--compute-type", asr.ComputeType,
             "--port", asr.Port.ToString(),
@@ -295,12 +316,12 @@ public sealed class SidecarSpeechRecognizer : ISpeechRecognizer
         finally { _initLock.Release(); }
     }
 
-    public async Task RestartAsync()
+    public async Task RestartAsync(string? model = null)
     {
         _ready = false;
         _lifetime.Cancel();
         KillProcess();
-        await InitializeAsync();
+        await InitializeAsync(model, CancellationToken.None);
     }
 
     void KillProcess()
@@ -317,4 +338,26 @@ public sealed class SidecarSpeechRecognizer : ISpeechRecognizer
         KillProcess();
         return ValueTask.CompletedTask;
     }
+}
+
+/// <summary>A speech-to-text (Whisper) model Oberton offers.</summary>
+public sealed record SpeechModelOption(string Id, string Name, string Description, string Size);
+
+public static class SpeechModels
+{
+    public static readonly IReadOnlyList<SpeechModelOption> All = new SpeechModelOption[]
+    {
+        new("large-v3-turbo", "Whisper large-v3 turbo", "The best balance: nearly the accuracy of large-v3, several times faster. Needs an NVIDIA GPU to keep up.", "1.6 GB"),
+        new("large-v3", "Whisper large-v3", "The most accurate, and the slowest. GPU only.", "3 GB"),
+        new("distil-large-v3", "Distil-Whisper large-v3", "English only. Fast and accurate on a GPU.", "1.5 GB"),
+        new("medium.en", "Whisper medium (English)", "Good accuracy; slow on a CPU.", "1.5 GB"),
+        new("small.en", "Whisper small (English)", "The pick for PCs without an NVIDIA GPU.", "470 MB"),
+        new("base.en", "Whisper base (English)", "Tiny and quick; makes more mistakes.", "145 MB"),
+    };
+
+    /// <summary>The speech model a profile dictates with: its own, or the one in Settings.</summary>
+    public static string For(Profile? profile, AsrSettings asr) =>
+        string.IsNullOrWhiteSpace(profile?.SpeechModel) ? asr.Model : profile!.SpeechModel!.Trim();
+
+    public static string NameOf(string id) => All.FirstOrDefault(m => string.Equals(m.Id, id, StringComparison.OrdinalIgnoreCase))?.Name ?? id;
 }

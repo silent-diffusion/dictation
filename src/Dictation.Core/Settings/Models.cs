@@ -127,7 +127,7 @@ public sealed class Profile : Bindable
     string _name = "New Profile";
     string _description = "";
     string _prompt = "";
-    string? _model, _voice;
+    string? _model, _voice, _speechModel;
     bool _liveTyping, _autoProcess = true, _showPreview, _preserveParagraphs = true, _removeFillers = true, _rewriteWhole, _readAloud;
     double _maxChangeRatio = 0.5;
 
@@ -137,6 +137,9 @@ public sealed class Profile : Bindable
     public string Prompt { get => _prompt; set => Set(ref _prompt, value); }
     /// <summary>Ollama model tag; null/empty = use the global default model.</summary>
     public string? Model { get => _model; set => Set(ref _model, value); }
+    /// <summary>Speech-to-text (Whisper) model for this profile, e.g. small.en; null/empty = the one in Settings › Models.
+    /// Switching to a profile with another model reloads the speech engine when you next dictate.</summary>
+    public string? SpeechModel { get => _speechModel; set => Set(ref _speechModel, value); }
     /// <summary>Read aloud voice for this profile (see <see cref="AppSettings.TtsVoice"/>); null/empty = Read aloud's own.</summary>
     public string? Voice { get => _voice; set => Set(ref _voice, value); }
     /// <summary>Without AI, words go into the app as they are heard. False (default): each new bit is pasted.
