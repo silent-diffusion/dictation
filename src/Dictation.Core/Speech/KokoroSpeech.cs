@@ -9,7 +9,8 @@ using Dictation.Core.Setup;
 namespace Dictation.Core.Speech;
 
 /// <summary>
-/// Text-to-speech through inference/tts_server.py (Kokoro on ONNX Runtime). The Python process starts on first use
+/// Text-to-speech through inference/tts_server.py: the local voice server, running Kokoro and Piper voices on ONNX
+/// Runtime (see <see cref="VoiceCatalog"/>). The Python process starts on first use
 /// and then stays up so later readings start instantly. One sentence per request.
 /// </summary>
 public sealed class KokoroSpeech : ISpeechSynthesizer, IAsyncDisposable
@@ -28,6 +29,7 @@ public sealed class KokoroSpeech : ISpeechSynthesizer, IAsyncDisposable
     Task? _started; // completes when the running process prints READY
     ClientWebSocket? _ws;
     int _nextId;
+    bool _withKokoro; // the running server loaded Kokoro
 
     public KokoroSpeech(SettingsService settings) => _settings = settings;
 
@@ -61,8 +63,10 @@ public sealed class KokoroSpeech : ISpeechSynthesizer, IAsyncDisposable
 
     async Task EnsureStartedLockedAsync(CancellationToken ct)
     {
+        // A server started before Kokoro was downloaded doesn't have it: start afresh so it loads.
+        if (ProcessAlive && !_withKokoro && RuntimeInstaller.ReadAloudInstalled) Stop();
         if (Connected) return;
-        if (!RuntimeInstaller.ReadAloudInstalled)
+        if (!RuntimeInstaller.VoiceEngineInstalled)
             throw new UserFacingException("Read aloud isn't installed yet.");
 
         // A dead socket doesn't mean a dead engine (a cancelled read aborts the socket, for one): reconnect to the
@@ -90,11 +94,13 @@ public sealed class KokoroSpeech : ISpeechSynthesizer, IAsyncDisposable
             RedirectStandardOutput = true, RedirectStandardError = true,
             WorkingDirectory = AppPaths.Root,
         };
-        foreach (var a in new[]
+        var args = new List<string>
         {
-            "-u", Path.Combine(AppPaths.InferenceDir, "tts_server.py"),
-            "--model", RuntimeInstaller.KokoroModel, "--voices", RuntimeInstaller.KokoroVoices, "--port", port.ToString(),
-        }) psi.ArgumentList.Add(a);
+            "-u", Path.Combine(AppPaths.InferenceDir, "tts_server.py"), "--piper-dir", RuntimeInstaller.PiperDir, "--port", port.ToString(),
+        };
+        _withKokoro = RuntimeInstaller.ReadAloudInstalled;
+        if (_withKokoro) args.AddRange(new[] { "--model", RuntimeInstaller.KokoroModel, "--voices", RuntimeInstaller.KokoroVoices });
+        foreach (var a in args) psi.ArgumentList.Add(a);
         psi.Environment["PYTHONUTF8"] = "1";
 
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

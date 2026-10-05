@@ -20,10 +20,16 @@
                 </DockPanel>
             </Border>
 
-            <TextBlock Text="Voice" Style="{StaticResource FieldLabel}" Margin="0,24,0,6"/>
-            <ComboBox x:Name="VoiceBox" Width="380" MaxDropDownHeight="420" HorizontalAlignment="Left" DisplayMemberPath="Name" SelectedValuePath="Id"
-                      SelectedValue="{Binding TtsVoice}" AutomationProperties.Name="Voice"/>
-            <TextBlock x:Name="VoiceNote" Style="{StaticResource Caption}" Margin="0,6,0,0"/>
+            <TextBlock Text="Model" Style="{StaticResource FieldLabel}" Margin="0,24,0,6"/>
+            <ComboBox x:Name="ModelBox" Width="380" HorizontalAlignment="Left" DisplayMemberPath="Name"
+                      SelectionChanged="ModelBox_SelectionChanged" AutomationProperties.Name="Text-to-speech model"/>
+            <TextBlock x:Name="ModelNote" Style="{StaticResource Caption}" Margin="0,6,0,0"/>
+
+            <TextBlock Text="Voice" Style="{StaticResource FieldLabel}" Margin="0,18,0,6"/>
+            <ComboBox x:Name="VoiceBox" Width="380" MaxDropDownHeight="420" HorizontalAlignment="Left" DisplayMemberPath="Label"
+                      SelectionChanged="VoiceBox_SelectionChanged" AutomationProperties.Name="Voice"/>
+            <TextBlock Style="{StaticResource Caption}" Margin="0,6,0,0"
+                       Text="Used unless a profile picks its own model and voice (see its page under Speech to text)."/>
 
             <TextBlock Text="Base speed" Style="{StaticResource FieldLabel}" Margin="0,20,0,6"/>
             <StackPanel Orientation="Horizontal">
@@ -33,7 +39,7 @@
                            FontFamily="{StaticResource Ob.Mono}" VerticalAlignment="Center"/>
             </StackPanel>
             <TextBlock Style="{StaticResource Caption}" Margin="0,6,0,0"
-                       Text="Every reading starts at this speed. The − and + buttons in the reader change it for that reading only."/>
+                       Text="Every reading starts at this speed. The − and + buttons in the reader change it too, and the next reading starts where you left it."/>
 
             <TextBlock Text="Player opacity" Style="{StaticResource FieldLabel}" Margin="0,20,0,6"/>
             <StackPanel Orientation="Horizontal">

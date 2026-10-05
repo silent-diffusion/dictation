@@ -47,15 +47,45 @@ public partial class ProfilePage : UserControl
         Select(ModelBox, choices, current);
     }
 
+    /// <summary>Read aloud model, then voice. Only what can be used right now (downloaded); "Read aloud's" follows the
+    /// Read aloud page. A voice the profile names that isn't downloaded any more stays listed (marked).</summary>
     void FillVoices()
     {
         var s = App.Services.Settings.Current;
-        var choices = new List<Choice> { new($"Read aloud's voice ({VoiceCatalog.ShortName(s.TtsVoice)})", "") };
-        choices.AddRange(VoiceCatalog.Available().Select(v => new Choice(v.Name, v.Id)));
+        var available = VoiceCatalog.Available();
+        var models = new List<Choice>
+        {
+            new($"Same as Read aloud ({VoiceCatalog.Model(VoiceCatalog.ModelOf(s.TtsVoice)).Name} · {VoiceCatalog.ShortName(s.TtsVoice)})", ""),
+        };
+        models.AddRange(VoiceCatalog.Models.Where(m => available.Any(v => v.Model == m.Id) || VoiceCatalog.ModelOf(_profile.Voice) == m.Id && !string.IsNullOrEmpty(_profile.Voice))
+            .Select(m => new Choice(m.Name, m.Id)));
+        Select(TtsModelBox, models, string.IsNullOrEmpty(_profile.Voice) ? "" : VoiceCatalog.ModelOf(_profile.Voice));
+        FillVoicesOf((TtsModelBox.SelectedItem as Choice)?.Value ?? "");
+    }
+
+    void FillVoicesOf(string model)
+    {
+        if (model.Length == 0)
+        {
+            VoiceBox.IsEnabled = false;
+            Select(VoiceBox, new List<Choice> { new(VoiceCatalog.ShortName(App.Services.Settings.Current.TtsVoice), "") }, "");
+            return;
+        }
+        VoiceBox.IsEnabled = true;
+        var voices = VoiceCatalog.Available().Where(v => v.Model == model).Select(v => new Choice(v.Name, v.Id)).ToList();
         var current = _profile.Voice ?? "";
-        if (current.Length > 0 && choices.All(c => c.Value != current))
-            choices.Add(new Choice(VoiceCatalog.ShortName(current) + (VoiceCatalog.IsWindowsVoice(current) ? " (not installed)" : " (download Kokoro under Read aloud)"), current));
-        Select(VoiceBox, choices, current);
+        if (VoiceCatalog.ModelOf(current) == model && current.Length > 0 && voices.All(v => v.Value != current))
+            voices.Add(new Choice(VoiceCatalog.ShortName(current) + " (not downloaded)", current));
+        if (voices.Count == 0) { Select(VoiceBox, new List<Choice> { new("No voices downloaded", "") }, ""); return; }
+        Select(VoiceBox, voices, current);
+        if (VoiceBox.SelectedItem is Choice c && c.Value != current) _profile.Voice = c.Value; // a new model: its first voice
+    }
+
+    void TtsModelBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_filling || TtsModelBox.SelectedItem is not Choice c) return;
+        if (c.Value.Length == 0) _profile.Voice = null;
+        FillVoicesOf(c.Value);
     }
 
     void Select(ComboBox box, List<Choice> choices, string value)

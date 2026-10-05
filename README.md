@@ -83,22 +83,25 @@ with its chevron (or **Ctrl+B**) to give the page the whole window; the ☰ butt
   what it typed; otherwise that text is kept and only the rest is added. `Esc` takes the typed text back the same way.
   Turn it off under *Settings › General*; profiles that preview before inserting don't use it.
   With a profile that doesn't use AI (*Raw*), the words go into the app as they are heard, about every second, the same
-  words the overlay shows, and are corrected in place (with Backspace) when the recognizer revises its guess.
+  words the overlay shows, and are corrected in place (with Backspace) when the recognizer revises its guess. Each new bit
+  is pasted; the profile can type it key by key instead (*Type the words in, instead of pasting them*).
 * **No phantom text**: very short or silent recordings insert nothing, so Whisper's habit of hearing "Thank you." in silence never reaches your document.
 * **Long dictation** is cleaned up a few sentences at a time (small models stay faithful on short passages), and the safety net applies to each piece separately.
-* **Read aloud** (`Ctrl+Shift+Space`): reads the selected text in any app with Kokoro, a high-quality voice that runs on
+* **Read aloud** (`Ctrl+Shift+Space`): reads the selected text in any app with a natural voice that runs on
   your PC. With nothing selected, it offers to read your clipboard. The player has play/pause, back and forward 15 seconds,
   slower/faster, the time left, and the sentence being read with the current word highlighted. Pick the voice and the base
-  speed under *Read aloud*. Voices: Kokoro's 36 natural voices (American and British English, Spanish, French, Italian,
-  Brazilian Portuguese, Hindi; about 370 MB, downloaded the first time you use one) and the voices installed with Windows
-  (instant, no download). A profile can use its own voice, for reading its dictations back and for the hotkey while it is active.
+  speed under *Read aloud*; changing the speed in the player is remembered for the next reading. Three text-to-speech models:
+  **Kokoro v1.0** (the most natural; 8 voices, about 370 MB, downloaded the first time you use it), **Piper** (light and fast,
+  even on slower PCs; 6 English voices, each a separate 60 to 120 MB download) and **Windows voices** (the ones installed
+  with Windows; nothing to download, more robotic). Kokoro and Piper both run in Oberton's local voice server on this PC.
+  A profile can pick its own model and voice, for reading its dictations back and for the hotkey while it is active.
   Text is read as plain text: Markdown (headings, lists, **bold**, links, tables, code fences) and stray symbols are dropped.
   The ⌄ button shows the whole text, scrolling along as it is read. The player's opacity is a setting under *Read aloud*.
 * **Settings**: grouped into Dictation, Models & AI, Look & feel and App. **Appearance** follows the
   Windows light/dark setting, or pick Light or Dark.
 * **Profiles** (*Speech to text*): *Light Cleanup*, *Grammar & Clarity*, *Natural Phrasing*, *Custom*, *Raw* (no AI: the recognizer's words,
   with the seams between live pieces fixed), plus your own. Edit the prompt, pick a model (only models downloaded to this PC are listed, plus cloud models once
-  they are set up), pick a Read aloud voice, toggle
+  they are set up), pick a Read aloud model and voice (downloaded ones only), toggle
   *Use AI* (off hides the instructions, model and other AI settings; only *Raw* has it off), *preview before inserting* (shows the edits; hotkey or *Insert* inserts, `Esc` discards, *Use original* inserts raw),
   *read aloud after inserting* (Read aloud reads what went in), *preserve paragraphs*, *remove fillers*.
   *Rewrite the whole dictation* is for prompts that reshape what you say ("turn my thoughts into an email"): the AI gets the

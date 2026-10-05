@@ -127,15 +127,37 @@
                         </StackPanel>
                     </CheckBox>
                     <Border Style="{StaticResource Divider}"/>
-                    <DockPanel Margin="14,10,14,12">
-                        <ComboBox x:Name="VoiceBox" DockPanel.Dock="Right" Width="320" MaxDropDownHeight="420" DisplayMemberPath="Label"
-                                  SelectionChanged="VoiceBox_SelectionChanged" AutomationProperties.Name="Read aloud voice"/>
-                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
-                            <TextBlock Text="Read aloud voice" TextWrapping="Wrap"/>
-                            <TextBlock FontSize="12" Foreground="{DynamicResource Ob.Muted}" TextWrapping="Wrap" Margin="0,2,0,0"
-                                       Text="Used to read this profile's dictations back, and by the Read aloud hotkey while this profile is active."/>
+                    <StackPanel Margin="14,10,14,12">
+                        <TextBlock Text="Read aloud model and voice" TextWrapping="Wrap"/>
+                        <TextBlock FontSize="12" Foreground="{DynamicResource Ob.Muted}" TextWrapping="Wrap" Margin="0,2,0,8"
+                                   Text="Used to read this profile's dictations back, and by the Read aloud hotkey while this profile is active. Only downloaded voices are listed (download more under Read aloud or Settings › Models)."/>
+                        <StackPanel Orientation="Horizontal">
+                            <ComboBox x:Name="TtsModelBox" Width="260" DisplayMemberPath="Label"
+                                      SelectionChanged="TtsModelBox_SelectionChanged" AutomationProperties.Name="Read aloud model"/>
+                            <ComboBox x:Name="VoiceBox" Width="260" Margin="8,0,0,0" MaxDropDownHeight="420" DisplayMemberPath="Label"
+                                      SelectionChanged="VoiceBox_SelectionChanged" AutomationProperties.Name="Read aloud voice"/>
                         </StackPanel>
-                    </DockPanel>
+                    </StackPanel>
+                    <!-- Without AI: how the words go into the app while you speak -->
+                    <StackPanel>
+                        <StackPanel.Style>
+                            <Style TargetType="StackPanel">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding AutoProcess}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </StackPanel.Style>
+                        <Border Style="{StaticResource Divider}"/>
+                        <CheckBox Style="{StaticResource Switch}" Margin="14,4" IsChecked="{Binding LiveTyping}">
+                            <StackPanel>
+                                <TextBlock Text="Type the words in, instead of pasting them" TextWrapping="Wrap"/>
+                                <TextBlock FontSize="12" Foreground="{DynamicResource Ob.Muted}" TextWrapping="Wrap" Margin="0,2,0,0"
+                                           Text="While you speak, your words go into the app as they are heard. Off (recommended): each new bit is pasted. On: it is typed key by key, which some apps (browsers, chat apps, editors with autocomplete) can garble."/>
+                            </StackPanel>
+                        </CheckBox>
+                    </StackPanel>
                 </StackPanel>
             </Border>
 

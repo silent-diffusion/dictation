@@ -60,7 +60,8 @@ public sealed class AppSettings
     public string CycleProfileHotkey { get; set; } = "Ctrl+Alt+P";
     /// <summary>Read the selected text aloud (or offer the clipboard when nothing is selected).</summary>
     public string SpeakHotkey { get; set; } = "Ctrl+Shift+Space";
-    /// <summary>Read aloud's voice: a Kokoro voice id (af_heart) or a Windows voice ("win:Microsoft Zira Desktop").
+    /// <summary>Read aloud's voice, which also picks the model: a Kokoro voice id (af_heart), a Piper voice
+    /// ("piper:en_US-lessac-medium") or a Windows voice ("win:Microsoft Zira Desktop").
     /// A profile can pick its own (<see cref="Profile.Voice"/>).</summary>
     public string TtsVoice { get; set; } = "af_heart";
     /// <summary>Default reading speed, 0.5 to 2.0. The reader's +/− buttons change it for one reading only.</summary>
@@ -127,7 +128,7 @@ public sealed class Profile : Bindable
     string _description = "";
     string _prompt = "";
     string? _model, _voice;
-    bool _autoProcess = true, _showPreview, _preserveParagraphs = true, _removeFillers = true, _rewriteWhole, _readAloud;
+    bool _liveTyping, _autoProcess = true, _showPreview, _preserveParagraphs = true, _removeFillers = true, _rewriteWhole, _readAloud;
     double _maxChangeRatio = 0.5;
 
     public string Id { get => _id; set => Set(ref _id, value); }
@@ -138,6 +139,9 @@ public sealed class Profile : Bindable
     public string? Model { get => _model; set => Set(ref _model, value); }
     /// <summary>Read aloud voice for this profile (see <see cref="AppSettings.TtsVoice"/>); null/empty = Read aloud's own.</summary>
     public string? Voice { get => _voice; set => Set(ref _voice, value); }
+    /// <summary>Without AI, words go into the app as they are heard. False (default): each new bit is pasted.
+    /// True: typed key by key, which some apps garble.</summary>
+    public bool LiveTyping { get => _liveTyping; set => Set(ref _liveTyping, value); }
     public bool AutoProcess { get => _autoProcess; set => Set(ref _autoProcess, value); }
     public bool ShowPreview { get => _showPreview; set => Set(ref _showPreview, value); }
     public bool PreserveParagraphs { get => _preserveParagraphs; set => Set(ref _preserveParagraphs, value); }
