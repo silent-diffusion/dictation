@@ -14,6 +14,8 @@ namespace Dictation.Core.Session;
 /// happens after confirming (via UI Automation) that the text before the caret is exactly what was typed.
 /// With a profile that rewrites the whole dictation (an email, say), pieces are typed as spoken, since the
 /// instructions only make sense for the whole, and the rewrite replaces them at the end.
+/// A profile without AI goes further: the recognizer's running guess is typed as it is heard (about every second, the
+/// same words the overlay shows), and corrected in place with Backspace when the guess changes.
 /// Use from the UI thread only.
 /// </summary>
 public sealed class LiveInsertion
@@ -29,6 +31,9 @@ public sealed class LiveInsertion
     readonly StringBuilder _typed = new();
     readonly List<string> _held = new(); // cleaned pieces not typed: the target lost focus, or typing failed
     Task _queue = Task.CompletedTask;
+    string _partialTyped = "";   // typed from the running guess, after _typed; revised as the guess changes
+    string? _pendingPartial;     // the newest guess, not typed yet (older ones are skipped)
+    bool _partialQueued;
 
     public LiveInsertion(TextInserter inserter, ITextProcessor llm, InsertionTarget target, Profile profile,
         Task<InsertionContext?> context)
@@ -37,8 +42,63 @@ public sealed class LiveInsertion
     }
 
     /// <summary>Exactly what has been typed so far, in order.</summary>
-    public string Typed => _typed.ToString();
-    public bool HasTyped => _typed.Length > 0;
+    public string Typed => _typed + _partialTyped;
+    public bool HasTyped => _typed.Length + _partialTyped.Length > 0;
+
+    /// <summary>No AI: the words go in as they are heard, not only once a piece is finished.</summary>
+    bool Streams => !_profile.AutoProcess;
+
+    /// <summary>The recognizer's running guess at the speech since the last finished piece. Typed right away for a
+    /// profile without AI; ignored otherwise (the AI needs finished sentences).</summary>
+    public void SetPartial(string partial)
+    {
+        if (!Streams || _cts.IsCancellationRequested) return;
+        _pendingPartial = partial;
+        if (_partialQueued) return; // the queued update will pick up this newer guess
+        _partialQueued = true;
+        _queue = ApplyPartialAsync(_queue);
+    }
+
+    async Task ApplyPartialAsync(Task previous)
+    {
+        await previous;
+        _partialQueued = false;
+        var partial = _pendingPartial;
+        _pendingPartial = null;
+        try
+        {
+            if (partial == null || _cts.IsCancellationRequested || SpeechGuard.IsStockPhrase(partial)) return;
+            // Never pull focus back mid-dictation; the finished piece or the final pass catches up.
+            if (_held.Count > 0 || Native.GetForegroundWindow() != _target.Hwnd) return;
+            await ReplacePartialAsync(await FitAsync(partial), _cts.Token);
+        }
+        catch (OperationCanceledException) { }
+        catch (UserFacingException e) { Log.Warn("Live typing of the running guess failed: " + e.Message); }
+        catch (Exception e) { Log.Error("Live guess failed", e); }
+    }
+
+    /// <summary>Spacing and capitals for text that follows what has been typed for good so far.</summary>
+    async Task<string> FitAsync(string text) =>
+        text.Trim().Length == 0 ? "" : ContextFit.Apply(text.Trim(), await ContextAfterTypedAsync());
+
+    /// <summary>Make the typed guess read <paramref name="want"/>: keep the part that already matches, erase the rest
+    /// with Backspace, type the difference.</summary>
+    async Task ReplacePartialAsync(string want, CancellationToken ct)
+    {
+        var keep = 0;
+        while (keep < _partialTyped.Length && keep < want.Length && _partialTyped[keep] == want[keep]) keep++;
+        if (keep > 0 && keep < _partialTyped.Length && char.IsLowSurrogate(_partialTyped[keep])) keep--; // whole characters only
+        if (keep < _partialTyped.Length)
+        {
+            await _inserter.EraseAsync(_partialTyped[keep..], _target, ct);
+            _partialTyped = _partialTyped[..keep];
+        }
+        if (keep < want.Length)
+        {
+            await _inserter.TypeAsync(want[keep..], _target, ct);
+            _partialTyped = want;
+        }
+    }
 
     /// <summary>Queue a finished piece; pieces are cleaned and typed strictly in order.</summary>
     public void Add(string piece) => _queue = AddAsync(_queue, piece);
@@ -62,7 +122,13 @@ public sealed class LiveInsertion
             var text = ContextFit.Apply(cleaned, await ContextAfterTypedAsync());
             try
             {
-                await _inserter.InsertAsync(text, _target, _cts.Token);
+                if (_partialTyped.Length > 0)
+                {
+                    // The piece's words are mostly typed already, as they were heard: correct them into the final piece.
+                    await ReplacePartialAsync(text, _cts.Token);
+                    _partialTyped = "";
+                }
+                else await _inserter.InsertAsync(text, _target, _cts.Token);
                 _typed.Append(text);
             }
             catch (UserFacingException e)
@@ -86,12 +152,13 @@ public sealed class LiveInsertion
         }
     }
 
-    /// <summary>The original context, with what live dictation already typed appended to the text before the caret.</summary>
+    /// <summary>The original context, with the finished pieces live dictation already typed appended to the text
+    /// before the caret (not the running guess, which the next text replaces).</summary>
     async Task<InsertionContext?> ContextAfterTypedAsync()
     {
         var ctx = await _context;
-        if (!HasTyped) return ctx;
-        return new InsertionContext((ctx?.Before ?? "") + Typed, ctx?.After ?? "");
+        if (_typed.Length == 0) return ctx;
+        return new InsertionContext((ctx?.Before ?? "") + _typed, ctx?.After ?? "");
     }
 
     /// <summary>
@@ -118,7 +185,14 @@ public sealed class LiveInsertion
         var rest = new List<string>(_held);
         if (!string.IsNullOrWhiteSpace(tailRaw)) rest.Add(await CleanAsync(tailRaw, ct));
         var missing = ContextFit.Apply(string.Join(" ", rest.Where(r => r.Length > 0)), await ContextAfterTypedAsync());
-        if (missing.Length > 0) await _inserter.InsertAsync(missing, _target, ct);
+        if (_partialTyped.Length > 0)
+        {
+            // The last words went in as they were heard: correct them into the rest rather than typing them twice.
+            try { await ReplacePartialAsync(missing, ct); }
+            catch (UserFacingException e) { Log.Warn("Couldn't correct the last words typed live: " + e.Message); }
+            missing = "";
+        }
+        else if (missing.Length > 0) await _inserter.InsertAsync(missing, _target, ct);
         Log.Info("Live dictation: couldn't confirm the typed text, so the final pass was skipped");
         if (rewrite && !string.IsNullOrWhiteSpace(finalText))
         {

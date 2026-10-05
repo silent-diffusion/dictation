@@ -123,9 +123,19 @@
                         <StackPanel>
                             <TextBlock Text="Read aloud after inserting" TextWrapping="Wrap"/>
                             <TextBlock FontSize="12" Foreground="{DynamicResource Ob.Muted}" TextWrapping="Wrap" Margin="0,2,0,0"
-                                       Text="Once the text is in place, Read aloud reads it to you with your voice settings from Read aloud. Press the Read aloud hotkey to stop it."/>
+                                       Text="Once the text is in place, Read aloud reads it to you with the voice below. Press the Read aloud hotkey to stop it."/>
                         </StackPanel>
                     </CheckBox>
+                    <Border Style="{StaticResource Divider}"/>
+                    <DockPanel Margin="14,10,14,12">
+                        <ComboBox x:Name="VoiceBox" DockPanel.Dock="Right" Width="320" MaxDropDownHeight="420" DisplayMemberPath="Label"
+                                  SelectionChanged="VoiceBox_SelectionChanged" AutomationProperties.Name="Read aloud voice"/>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="Read aloud voice" TextWrapping="Wrap"/>
+                            <TextBlock FontSize="12" Foreground="{DynamicResource Ob.Muted}" TextWrapping="Wrap" Margin="0,2,0,0"
+                                       Text="Used to read this profile's dictations back, and by the Read aloud hotkey while this profile is active."/>
+                        </StackPanel>
+                    </DockPanel>
                 </StackPanel>
             </Border>
 
@@ -146,10 +156,10 @@
                                Text="Sent to the local AI model along with your transcript. It is told to reply with only the edited text."/>
 
                     <TextBlock Text="AI model" Style="{StaticResource FieldLabel}"/>
-                    <ComboBox x:Name="ModelBox" IsEditable="True" Text="{Binding Model, UpdateSourceTrigger=LostFocus}"
+                    <ComboBox x:Name="ModelBox" DisplayMemberPath="Label" SelectionChanged="ModelBox_SelectionChanged"
                               MaxWidth="360" MinWidth="260" HorizontalAlignment="Left" AutomationProperties.Name="AI model"/>
                     <TextBlock Style="{StaticResource Caption}" Margin="0,6,0,0"
-                               Text="Leave empty to use the active model (Settings › Models). Names starting with anthropic: or openai: are cloud models: they need a key and &quot;Keep everything offline&quot; turned off (Settings › Cloud AI)."/>
+                               Text="Only models on this PC are listed (download more under Settings › Models). Cloud models appear once you add a key and turn off &quot;Keep everything offline&quot; (Settings › Cloud AI)."/>
                 </StackPanel>
 
                 <StackPanel Grid.Column="2">

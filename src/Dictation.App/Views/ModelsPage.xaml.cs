@@ -141,11 +141,17 @@ public partial class ModelsPage : UserControl
         VoiceList.Children.Clear();
         var voice = RuntimeInstaller.ReadAloudInstalled;
         var voiceBadges = new List<(string, string)>();
-        if (voice) voiceBadges.Add(("ACTIVE", "active"));
+        if (voice && !VoiceCatalog.IsWindowsVoice(s.TtsVoice)) voiceBadges.Add(("ACTIVE", "active"));
         if (App.Services.Tts.IsRunning) voiceBadges.Add(("LOADED", "ok"));
         voiceBadges.Add(voice ? ("DOWNLOADED", "plain") : ("NOT DOWNLOADED", "outline"));
-        VoiceList.Children.Add(Row("Kokoro v1.0", $"The Read aloud voice, with 8 voices to choose from under Read aloud · {RuntimeInstaller.ReadAloudDownloadMb} MB",
+        VoiceList.Children.Add(Row("Kokoro v1.0", $"Natural voices: {VoiceCatalog.KokoroVoices.Count} to choose from under Read aloud (English, " +
+            $"Spanish, French, Italian, Portuguese, Hindi) · {RuntimeInstaller.ReadAloudDownloadMb} MB",
             voiceBadges, row => voice ? null : MakeButton("Download", () => DownloadVoiceAsync(row))));
+        var windowsVoices = WindowsSpeech.InstalledVoices();
+        VoiceList.Children.Add(Row("Windows voices", windowsVoices.Count == 0
+                ? "No Windows voices found. Add some under Windows Settings › Time & language › Speech."
+                : $"{windowsVoices.Count} installed with Windows ({string.Join(", ", windowsVoices.Select(v => v.Name.Split(" (")[0]))}); instant, no download",
+            new List<(string, string)> { windowsVoices.Count > 0 ? ("INSTALLED", "plain") : ("NONE", "outline") }, _ => null));
     }
 
     async Task UseAiAsync(string id)

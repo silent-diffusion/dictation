@@ -27,7 +27,7 @@ public partial class AppearancePage : UserControl
             : " ";
 
     /// <summary>"BottomCenter" → "Bottom center".</summary>
-    static string Describe(OverlayPosition p)
+    internal static string Describe(OverlayPosition p)
     {
         if (p == OverlayPosition.Center) return "Center of the screen";
         var words = System.Text.RegularExpressions.Regex.Replace(p.ToString(), "(?<=[a-z])(?=[A-Z])", " ").ToLowerInvariant();

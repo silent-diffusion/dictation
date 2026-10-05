@@ -55,4 +55,11 @@ public partial class HistorySettingsPage : UserControl
         App.Services.History.Clear();
         UpdateSize();
     }
+
+    void ResetUsage_Click(object sender, RoutedEventArgs e)
+    {
+        if (MessageBox.Show("Reset the dashboard's daily counts (words per day, streaks, apps)? History itself is not touched.",
+                AppInfo.Name, MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+        App.Services.Usage.Clear();
+    }
 }

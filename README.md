@@ -58,7 +58,9 @@ The folder keeps its pre-rename name so updates from Local Dictation 1.x keep yo
 
 The sidebar has five sections: **Active dashboard** (one screen, no scrolling: what's active and loaded, dials for
 words today, turnaround, AI edits kept, history and the speech model's unload countdown, and charts of words per day and
-the apps you dictate into), **Speech to text** (profiles), **Read aloud**, **History** and **Settings**. Hide the sidebar
+the apps you dictate into; the top tiles' text grows with the window. The figures come from daily counts in
+`data\usage.json` (dictations, words, seconds spoken, turnaround, AI edits kept, readings and dictations per app name; never
+any text, audio or window titles), so they survive History being trimmed, cleared or off), **Speech to text** (profiles), **Read aloud**, **History** and **Settings**. Hide the sidebar
 with its chevron (or **Ctrl+B**) to give the page the whole window; the ☰ button brings it back.
 
 * **Hotkey** (default `Ctrl+Space`, change under *Hotkeys*): start/stop. `Ctrl+Alt+P` cycles profiles.
@@ -67,7 +69,10 @@ with its chevron (or **Ctrl+B**) to give the page the whole window; the ☰ butt
   click it to see the three boxes used everywhere in the app (the receipt, profile pages, History): **Transcription**,
   **AI Edit** (removed words struck through, new ones highlighted) and **Inserted** (the clean text that went in).
   If the safety net rejects the AI's edit, the receipt says so. Position (nine spots) and opacity are under *Settings › Appearance*.
-  Drag the pill (or the Read aloud player) anywhere; it stays there until Oberton restarts or you pick a position.
+  With *preview before inserting*, the preview shows the same three boxes, with **Inserted** (what *Insert* puts in) brought
+  forward, larger and more solid, and the other two dimmed.
+  Drag the pill (or the Read aloud player) anywhere; it stays there until Oberton restarts or you pick a position. The Read
+  aloud player can have its own position (*Read aloud › Player position*) or follow the pill's.
 * **Fits the surrounding text**: a sentence or two around the cursor is read (locally, via Windows accessibility) so a word or phrase
   dictated mid-sentence isn't capitalized or given a period, and missing spaces are added. Works in apps that expose their text
   (Word, browsers, most text boxes); turn it off under *Settings › General*. That text is never stored, logged or sent to the AI.
@@ -77,18 +82,23 @@ with its chevron (or **Ctrl+B**) to give the page the whole window; the ☰ butt
   replacement only happens after Oberton confirms, through Windows accessibility, that the text before the cursor is exactly
   what it typed; otherwise that text is kept and only the rest is added. `Esc` takes the typed text back the same way.
   Turn it off under *Settings › General*; profiles that preview before inserting don't use it.
+  With a profile that doesn't use AI (*Raw*), the words go into the app as they are heard, about every second, the same
+  words the overlay shows, and are corrected in place (with Backspace) when the recognizer revises its guess.
 * **No phantom text**: very short or silent recordings insert nothing, so Whisper's habit of hearing "Thank you." in silence never reaches your document.
 * **Long dictation** is cleaned up a few sentences at a time (small models stay faithful on short passages), and the safety net applies to each piece separately.
 * **Read aloud** (`Ctrl+Shift+Space`): reads the selected text in any app with Kokoro, a high-quality voice that runs on
   your PC. With nothing selected, it offers to read your clipboard. The player has play/pause, back and forward 15 seconds,
   slower/faster, the time left, and the sentence being read with the current word highlighted. Pick the voice and the base
-  speed under *Read aloud*. The voice (about 370 MB) downloads the first time you use it.
+  speed under *Read aloud*. Voices: Kokoro's 36 natural voices (American and British English, Spanish, French, Italian,
+  Brazilian Portuguese, Hindi; about 370 MB, downloaded the first time you use one) and the voices installed with Windows
+  (instant, no download). A profile can use its own voice, for reading its dictations back and for the hotkey while it is active.
   Text is read as plain text: Markdown (headings, lists, **bold**, links, tables, code fences) and stray symbols are dropped.
   The ⌄ button shows the whole text, scrolling along as it is read. The player's opacity is a setting under *Read aloud*.
 * **Settings**: grouped into Dictation, Models & AI, Look & feel and App. **Appearance** follows the
   Windows light/dark setting, or pick Light or Dark.
 * **Profiles** (*Speech to text*): *Light Cleanup*, *Grammar & Clarity*, *Natural Phrasing*, *Custom*, *Raw* (no AI: the recognizer's words,
-  with the seams between live pieces fixed), plus your own. Edit the prompt, pick a model, toggle
+  with the seams between live pieces fixed), plus your own. Edit the prompt, pick a model (only models downloaded to this PC are listed, plus cloud models once
+  they are set up), pick a Read aloud voice, toggle
   *Use AI* (off hides the instructions, model and other AI settings; only *Raw* has it off), *preview before inserting* (shows the edits; hotkey or *Insert* inserts, `Esc` discards, *Use original* inserts raw),
   *read aloud after inserting* (Read aloud reads what went in), *preserve paragraphs*, *remove fillers*.
   *Rewrite the whole dictation* is for prompts that reshape what you say ("turn my thoughts into an email"): the AI gets the

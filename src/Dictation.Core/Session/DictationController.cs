@@ -40,6 +40,7 @@ public sealed class DictationController
     readonly SettingsService _settings;
     readonly ProfileService _profiles;
     readonly HistoryStore _history;
+    readonly UsageStore? _usage; // counts for the dashboard, kept even when History is off
     readonly Stopwatch _recordClock = new();
     readonly Stopwatch _finishClock = new();
     CancellationTokenSource? _sessionCts;
@@ -85,9 +86,9 @@ public sealed class DictationController
     public event Action<InsertReceipt>? Inserted;
 
     public DictationController(IAudioCapture mic, ISpeechRecognizer asr, ITextProcessor llm, TextInserter inserter,
-        SettingsService settings, ProfileService profiles, HistoryStore history)
+        SettingsService settings, ProfileService profiles, HistoryStore history, UsageStore? usage = null)
     {
-        _mic = mic; _asr = asr; _llm = llm; _inserter = inserter; _settings = settings; _profiles = profiles; _history = history;
+        _mic = mic; _asr = asr; _llm = llm; _inserter = inserter; _settings = settings; _profiles = profiles; _history = history; _usage = usage;
         _mic.DataAvailable += OnAudio;
         _mic.LevelChanged += l =>
         {
@@ -117,6 +118,7 @@ public sealed class DictationController
             if (State != DictationState.Recording) return;
             _partial = t;
             RaiseTranscript();
+            _live?.SetPartial(t); // a profile without AI types it right away, so the app shows what the overlay shows
         });
     }
 
@@ -411,7 +413,7 @@ public sealed class DictationController
     {
         byte[] pcm;
         lock (_audioLock) pcm = _recording.ToArray();
-        _history.Add(new HistoryEntry
+        var entry = new HistoryEntry
         {
             Time = DateTime.Now - _finishClock.Elapsed - _recordClock.Elapsed,
             Profile = _pendingProfile,
@@ -425,7 +427,9 @@ public sealed class DictationController
             Note = _pendingNote,
             Seconds = Math.Round(_recordClock.Elapsed.TotalSeconds, 1),
             FinishSeconds = Math.Round(_finishClock.Elapsed.TotalSeconds, 2),
-        }, pcm);
+        };
+        _history.Add(entry, pcm);
+        _usage?.Record(entry);
     }
 
     /// <summary>Esc / ✕: abandon whatever is in progress without inserting anything.</summary>

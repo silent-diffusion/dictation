@@ -34,6 +34,12 @@
                 <Button Content="Open folder" Style="{StaticResource QuietButton}" Margin="0,0,8,0" Click="Open_Click"/>
                 <Button Content="Delete all history…" Style="{StaticResource QuietButton}" Click="Clear_Click"/>
             </StackPanel>
+
+            <TextBlock Text="Dashboard counts" Style="{StaticResource FieldLabel}" Margin="0,24,0,6"/>
+            <TextBlock Style="{StaticResource Caption}"
+                       Text="The dashboard keeps its own daily tallies in usage.json next to History: per day, how many dictations and words, seconds spoken, the turnaround, AI edits kept, texts read aloud, and dictations per app (the app's name only). Never any text, audio or window titles. They stay when you delete History or turn it off."/>
+            <Button Content="Reset dashboard counts…" Style="{StaticResource QuietButton}" HorizontalAlignment="Left" Margin="0,8,0,0"
+                    Click="ResetUsage_Click"/>
         </StackPanel>
     </ScrollViewer>
 </UserControl>

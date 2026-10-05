@@ -8,29 +8,16 @@ using Dictation.Core.Setup;
 
 namespace Dictation.Core.Speech;
 
-/// <summary>A voice that Read aloud can use.</summary>
-public sealed record VoiceOption(string Id, string Name);
-
 /// <summary>
 /// Text-to-speech through inference/tts_server.py (Kokoro on ONNX Runtime). The Python process starts on first use
 /// and then stays up so later readings start instantly. One sentence per request.
 /// </summary>
-public sealed class KokoroSpeech : IAsyncDisposable
+public sealed class KokoroSpeech : ISpeechSynthesizer, IAsyncDisposable
 {
     public const int SampleRate = 24000;
 
-    /// <summary>A short list of Kokoro v1.0's best English voices.</summary>
-    public static readonly IReadOnlyList<VoiceOption> Voices = new[]
-    {
-        new VoiceOption("af_heart", "Heart (American, female)"),
-        new VoiceOption("af_bella", "Bella (American, female)"),
-        new VoiceOption("af_nicole", "Nicole (American, female, soft)"),
-        new VoiceOption("am_michael", "Michael (American, male)"),
-        new VoiceOption("am_fenrir", "Fenrir (American, male)"),
-        new VoiceOption("bf_emma", "Emma (British, female)"),
-        new VoiceOption("bm_george", "George (British, male)"),
-        new VoiceOption("bm_fable", "Fable (British, male)"),
-    };
+    /// <summary>Kokoro's voices; see <see cref="VoiceCatalog"/>.</summary>
+    public static IReadOnlyList<VoiceOption> Voices => VoiceCatalog.KokoroVoices;
 
     /// <summary>How long one request may take before the engine counts as hung.</summary>
     static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(60);
