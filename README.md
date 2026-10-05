@@ -92,6 +92,8 @@ history, privacy), **Speech to text** (profiles), **Text to speech** (Read aloud
   *Rewrite the whole dictation* is for prompts that reshape what you say ("turn my thoughts into an email"): the AI gets the
   whole dictation in one go when you stop. With *Type as you speak*, your words are typed as spoken and the rewrite replaces them at the end.
   The **Try it** panel runs a profile on sample text and shows what it changed, so you can tune prompts without dictating.
+  It follows the profile's switches: with *preview before inserting* the real preview appears, with *read aloud after
+  inserting* the result is read to you.
 * **History**: the last 50 dictations (adjustable under *Settings › History*), kept in Oberton's data folder so they survive
   updates. Each has its recording (play it, also at 2×), the Transcription, AI Edit and Inserted boxes,
   and the app and window it went into. List them newest first, or grouped by app.
