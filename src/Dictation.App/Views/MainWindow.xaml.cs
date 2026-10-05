@@ -44,14 +44,14 @@ public partial class MainWindow : Window
         Host.Content = tag switch
         {
             "SpeechToText" => new SpeechToTextPage(),
-            "TextToSpeech" => new ReadAloudPage(),
+            "ReadAloud" => new ReadAloudPage(),
             "History" => new HistoryPage(),
             "Settings" => new SettingsPage(),
             _ => (object)new DashboardPage(),
         };
     }
 
-    /// <summary>Open a section ("Dashboard", "SpeechToText", "TextToSpeech", "History") or a settings section by its tag
+    /// <summary>Open a section ("Dashboard", "SpeechToText", "ReadAloud", "History") or a settings section by its tag
     /// (e.g. "About" from the tray's update check).</summary>
     public void ShowPage(string tag)
     {

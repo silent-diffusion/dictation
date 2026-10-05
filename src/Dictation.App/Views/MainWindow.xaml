@@ -70,10 +70,10 @@
                             <TextBlock Text="Speech to text"/>
                         </StackPanel>
                     </ListBoxItem>
-                    <ListBoxItem x:Name="ReadItem" Tag="TextToSpeech" AutomationProperties.Name="Text to speech">
+                    <ListBoxItem x:Name="ReadItem" Tag="ReadAloud" AutomationProperties.Name="Read aloud">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE767;" Style="{StaticResource NavIcon}"/>
-                            <TextBlock Text="Text to speech"/>
+                            <TextBlock Text="Read aloud"/>
                         </StackPanel>
                     </ListBoxItem>
                     <ListBoxItem x:Name="HistoryItem" Tag="History" AutomationProperties.Name="History">
