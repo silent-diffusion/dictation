@@ -372,6 +372,7 @@ public sealed class DictationController
         SetState(DictationState.Inserting);
         InsertReceipt? receipt = null;
         var inserted = false;
+        var live = _live;
         try
         {
             var ct = _sessionCts?.Token ?? CancellationToken.None;
@@ -395,11 +396,13 @@ public sealed class DictationController
         catch (UserFacingException e)
         {
             // Last resort so the dictation isn't lost: leave it on the clipboard.
+            live?.ForgetClipboard();
             try { System.Windows.Clipboard.SetText(text); } catch { }
             Notice?.Invoke(e.Message + " The text was copied to your clipboard.", NoticeLevel.Warning);
         }
         finally
         {
+            if (live != null) _ = live.ReleaseClipboardAsync(); // the user's clipboard, back once the last paste landed (no-op if forgotten)
             SaveToHistory(text, inserted);
             _pendingProcessed = _pendingRaw = "";
             _pendingSafetyNet = false;

@@ -78,7 +78,7 @@
                 </RadioButton>
             </UniformGrid>
 
-            <TextBlock Text="Overlay" Style="{StaticResource FieldLabel}" Margin="0,28,0,6"/>
+            <TextBlock Text="Dictation overlay" Style="{StaticResource FieldLabel}" Margin="0,28,0,6"/>
             <Border Style="{StaticResource Card}">
                 <Grid>
                     <Grid.ColumnDefinitions>
@@ -153,6 +153,75 @@
                                                Margin="10,0,0,0" VerticalAlignment="Center"/>
                                     <TextBlock x:Name="PreviewProfile" Foreground="#B8FFFFFF" FontSize="12" Margin="12,0,0,0"
                                                VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+                    </Border>
+                </Grid>
+            </Border>
+
+            <TextBlock Text="Read aloud player" Style="{StaticResource FieldLabel}" Margin="0,28,0,6"/>
+            <Border Style="{StaticResource Card}">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Margin="18,6,18,16">
+                        <CheckBox x:Name="SamePlaceBox" Style="{StaticResource Switch}" Content="Same place as the dictation overlay"
+                                  Checked="SamePlace_Changed" Unchecked="SamePlace_Changed"/>
+                        <Border Style="{StaticResource Divider}" Margin="0,2,0,12"/>
+                        <DockPanel>
+                            <TextBlock DockPanel.Dock="Right" FontFamily="{StaticResource Ob.Mono}" FontSize="12"
+                                       Text="{Binding Value, ElementName=ReaderOpacitySlider, StringFormat={}{0:P0}}"/>
+                            <TextBlock Text="Opacity"/>
+                        </DockPanel>
+                        <Slider x:Name="ReaderOpacitySlider" Minimum="0.3" Maximum="1" Value="{Binding ReaderOpacity}"
+                                TickFrequency="0.02" IsSnapToTickEnabled="True" Margin="0,6,0,10"
+                                AutomationProperties.Name="Read aloud player opacity"/>
+                        <Border Style="{StaticResource Divider}" Margin="0,2,0,12"/>
+                        <DockPanel>
+                            <TextBlock x:Name="ReaderPositionName" DockPanel.Dock="Right" FontSize="12" Foreground="{DynamicResource Ob.Muted}"/>
+                            <TextBlock Text="Position"/>
+                        </DockPanel>
+                        <!-- A miniature screen; click where the player should sit -->
+                        <Border x:Name="ReaderPositionPanel" Width="220" Height="124" Margin="0,8,0,12" HorizontalAlignment="Left" CornerRadius="8"
+                                BorderThickness="1" BorderBrush="{DynamicResource Ob.Border}" Background="{DynamicResource Ob.Window}">
+                            <UniformGrid x:Name="ReaderPositionGrid" Rows="3" Columns="3" Margin="4" AutomationProperties.Name="Read aloud player position"/>
+                        </Border>
+                        <TextBlock Style="{StaticResource Caption}" FontSize="12" Margin="0"
+                                   Text="The player that reads text aloud. Like the dictation overlay it stays dark in both themes, and you can drag it while it reads."/>
+                    </StackPanel>
+
+                    <!-- Live preview of the player over some placeholder text -->
+                    <Border Grid.Column="1" Background="{DynamicResource Ob.Subtle}" CornerRadius="0,11,11,0" MinHeight="200"
+                            ClipToBounds="True">
+                        <Grid>
+                            <StackPanel Margin="20,22,20,0" VerticalAlignment="Top">
+                                <Border Height="7" Width="120" CornerRadius="3" Background="{DynamicResource Ob.Muted}" HorizontalAlignment="Left"/>
+                                <Border Height="5" CornerRadius="2" Background="{DynamicResource Ob.Track}" Margin="0,12,0,0"/>
+                                <Border Height="5" CornerRadius="2" Background="{DynamicResource Ob.Track}" Margin="0,8,30,0"/>
+                                <Border Height="5" CornerRadius="2" Background="{DynamicResource Ob.Track}" Margin="0,8,10,0"/>
+                                <Border Height="5" CornerRadius="2" Background="{DynamicResource Ob.Track}" Margin="0,8,50,0"/>
+                            </StackPanel>
+                            <Border HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="20,0,20,18" CornerRadius="16"
+                                    Padding="14,10" BorderBrush="#1FFFFFFF" BorderThickness="1">
+                                <Border.Background>
+                                    <SolidColorBrush Color="#161618" Opacity="{Binding Value, ElementName=ReaderOpacitySlider}"/>
+                                </Border.Background>
+                                <StackPanel>
+                                    <TextBlock Foreground="White" FontSize="12" TextWrapping="Wrap" MaxWidth="220">
+                                        <Run Text="Select any text and press the shortcut "/><Run Text="to hear it" Foreground="#F4A68C"/><Run Text=" read aloud."/>
+                                    </TextBlock>
+                                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                        <Border Width="22" Height="22" CornerRadius="11" Background="#D9381E">
+                                            <Path Data="M 8,6 L 16,11 L 8,16 Z" Fill="White"/>
+                                        </Border>
+                                        <Border Height="3" Width="120" CornerRadius="1.5" Background="#38FFFFFF" Margin="10,0,0,0"
+                                                VerticalAlignment="Center"/>
+                                        <TextBlock Text="1.0×" Foreground="#B8FFFFFF" FontFamily="{StaticResource Ob.Mono}" FontSize="11"
+                                                   Margin="10,0,0,0" VerticalAlignment="Center"/>
+                                    </StackPanel>
                                 </StackPanel>
                             </Border>
                         </Grid>

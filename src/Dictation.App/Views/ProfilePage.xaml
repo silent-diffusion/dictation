@@ -123,21 +123,9 @@
                         <StackPanel>
                             <TextBlock Text="Read aloud after inserting" TextWrapping="Wrap"/>
                             <TextBlock FontSize="12" Foreground="{DynamicResource Ob.Muted}" TextWrapping="Wrap" Margin="0,2,0,0"
-                                       Text="Once the text is in place, Read aloud reads it to you with the voice below. Press the Read aloud hotkey to stop it."/>
+                                       Text="Once the text is in place, Read aloud reads it to you with the voice chosen under Models. Press the Read aloud hotkey to stop it."/>
                         </StackPanel>
                     </CheckBox>
-                    <Border Style="{StaticResource Divider}"/>
-                    <StackPanel Margin="14,10,14,12">
-                        <TextBlock Text="Read aloud model and voice" TextWrapping="Wrap"/>
-                        <TextBlock FontSize="12" Foreground="{DynamicResource Ob.Muted}" TextWrapping="Wrap" Margin="0,2,0,8"
-                                   Text="Used to read this profile's dictations back, and by the Read aloud hotkey while this profile is active. Only downloaded voices are listed (download more under Read aloud or Settings › Models)."/>
-                        <StackPanel Orientation="Horizontal">
-                            <ComboBox x:Name="TtsModelBox" Width="260" DisplayMemberPath="Label"
-                                      SelectionChanged="TtsModelBox_SelectionChanged" AutomationProperties.Name="Read aloud model"/>
-                            <ComboBox x:Name="VoiceBox" Width="260" Margin="8,0,0,0" MaxDropDownHeight="420" DisplayMemberPath="Label"
-                                      SelectionChanged="VoiceBox_SelectionChanged" AutomationProperties.Name="Read aloud voice"/>
-                        </StackPanel>
-                    </StackPanel>
                     <!-- Without AI: how the words go into the app while you speak -->
                     <StackPanel>
                         <StackPanel.Style>
@@ -161,17 +149,44 @@
                 </StackPanel>
             </Border>
 
-            <!-- Speech-to-text model: used by this profile whether or not it uses AI -->
+            <!-- Every model this profile uses, in one place -->
             <Border Style="{StaticResource Card}" Margin="0,12,0,0">
-                <DockPanel Margin="14,12">
-                    <ComboBox x:Name="SpeechModelBox" DockPanel.Dock="Right" Width="320" DisplayMemberPath="Label" VerticalAlignment="Center"
-                              SelectionChanged="SpeechModelBox_SelectionChanged" AutomationProperties.Name="Speech-to-text model"/>
-                    <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
-                        <TextBlock Text="Speech-to-text model" TextWrapping="Wrap"/>
-                        <TextBlock FontSize="12" Foreground="{DynamicResource Ob.Muted}" TextWrapping="Wrap" Margin="0,2,0,0"
-                                   Text="The Whisper model that hears you when you dictate with this profile. Only downloaded models are listed (download more under Settings › Models). Switching to a profile with a different model loads it; recording starts right away meanwhile."/>
-                    </StackPanel>
-                </DockPanel>
+                <StackPanel Margin="14,12,14,14">
+                    <TextBlock Text="Models" FontSize="14" FontWeight="SemiBold"/>
+                    <TextBlock FontSize="12" Foreground="{DynamicResource Ob.Muted}" TextWrapping="Wrap" Margin="0,2,0,10"
+                               Text="What this profile listens, edits and reads with. Only models on this PC are listed (download more under Settings › Models); cloud AI models appear once you add a key and turn off &quot;Keep everything offline&quot;."/>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="140"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Text="Speech to text" VerticalAlignment="Center"/>
+                        <ComboBox x:Name="SpeechModelBox" Grid.Column="1" Width="528" HorizontalAlignment="Left" DisplayMemberPath="Label"
+                                  SelectionChanged="SpeechModelBox_SelectionChanged" AutomationProperties.Name="Speech-to-text model"/>
+
+                        <TextBlock Grid.Row="1" Text="AI edit" VerticalAlignment="Center" Margin="0,8,0,0"
+                                   Visibility="{Binding AutoProcess, Converter={StaticResource B2V}}"/>
+                        <ComboBox x:Name="ModelBox" Grid.Row="1" Grid.Column="1" Width="528" HorizontalAlignment="Left" Margin="0,8,0,0"
+                                  DisplayMemberPath="Label" SelectionChanged="ModelBox_SelectionChanged" AutomationProperties.Name="AI model"
+                                  Visibility="{Binding AutoProcess, Converter={StaticResource B2V}}"/>
+
+                        <TextBlock Grid.Row="2" Text="Read aloud" VerticalAlignment="Center" Margin="0,8,0,0"/>
+                        <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" Margin="0,8,0,0">
+                            <ComboBox x:Name="TtsModelBox" Width="260" DisplayMemberPath="Label"
+                                      SelectionChanged="TtsModelBox_SelectionChanged" AutomationProperties.Name="Read aloud model"/>
+                            <ComboBox x:Name="VoiceBox" Width="260" Margin="8,0,0,0" MaxDropDownHeight="420" DisplayMemberPath="Label"
+                                      SelectionChanged="VoiceBox_SelectionChanged" AutomationProperties.Name="Read aloud voice"/>
+                        </StackPanel>
+                    </Grid>
+                    <TextBlock FontSize="12" Foreground="{DynamicResource Ob.Muted}" TextWrapping="Wrap" Margin="0,10,0,0"
+                               Text="Switching to a profile with a different speech model loads it; recording starts right away meanwhile. The Read aloud voice also reads this profile's dictations back, and is used by the Read aloud hotkey while this profile is active."/>
+                </StackPanel>
             </Border>
 
             <!-- Instructions and behaviour (AI only) -->
@@ -190,11 +205,6 @@
                     <TextBlock Style="{StaticResource Caption}" Margin="0,6,0,0"
                                Text="Sent to the local AI model along with your transcript. It is told to reply with only the edited text."/>
 
-                    <TextBlock Text="AI model" Style="{StaticResource FieldLabel}"/>
-                    <ComboBox x:Name="ModelBox" DisplayMemberPath="Label" SelectionChanged="ModelBox_SelectionChanged"
-                              MaxWidth="360" MinWidth="260" HorizontalAlignment="Left" AutomationProperties.Name="AI model"/>
-                    <TextBlock Style="{StaticResource Caption}" Margin="0,6,0,0"
-                               Text="Only models on this PC are listed (download more under Settings › Models). Cloud models appear once you add a key and turn off &quot;Keep everything offline&quot; (Settings › Cloud AI)."/>
                 </StackPanel>
 
                 <StackPanel Grid.Column="2">

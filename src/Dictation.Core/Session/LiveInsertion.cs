@@ -35,6 +35,13 @@ public sealed class LiveInsertion
     string _partialTyped = "";   // typed from the running guess, after _typed; revised as the guess changes
     string? _pendingPartial;     // the newest guess, not typed yet (older ones are skipped)
     bool _partialQueued;
+    // The user's clipboard, taken before the first live paste and put back once when the dictation ends. Restoring
+    // it after every paste raced the app: a paste it read a moment late got the user's old clipboard instead.
+    ClipboardSnapshot? _clipboard;
+    bool _clipboardTaken;
+    DateTime _lastInsert = DateTime.MinValue;
+    /// <summary>Breathing room between live insertions, so the app has read one paste before the next one starts.</summary>
+    static readonly TimeSpan MinGap = TimeSpan.FromMilliseconds(700);
 
     public LiveInsertion(TextInserter inserter, ITextProcessor llm, InsertionTarget target, Profile profile,
         Task<InsertionContext?> context)
@@ -78,6 +85,44 @@ public sealed class LiveInsertion
         catch (Exception e) { Log.Error("Live guess failed", e); }
     }
 
+    /// <summary>Insert during a live dictation: the clipboard stays ours until <see cref="ReleaseClipboardAsync"/>.</summary>
+    async Task InsertLiveAsync(string text, CancellationToken ct)
+    {
+        await BeforeInsertAsync(ct);
+        await _inserter.InsertAsync(text, _target, ct, keepClipboard: true);
+        _lastInsert = DateTime.Now;
+    }
+
+    async Task BeforeInsertAsync(CancellationToken ct)
+    {
+        if (!_clipboardTaken)
+        {
+            _clipboardTaken = true;
+            _clipboard = ClipboardSnapshot.Capture();
+        }
+        var wait = MinGap - (DateTime.Now - _lastInsert);
+        if (wait > TimeSpan.Zero) await Task.Delay(wait, ct);
+    }
+
+    /// <summary>The dictation is over: once the last paste has had time to land, give the user their clipboard back.</summary>
+    public async Task ReleaseClipboardAsync()
+    {
+        if (!_clipboardTaken) return;
+        _clipboardTaken = false;
+        var snapshot = _clipboard;
+        _clipboard = null;
+        try { await DrainAsync(); } catch { }
+        await Task.Delay(800);
+        snapshot?.Restore();
+    }
+
+    /// <summary>Keep whatever is on the clipboard now (the dictation was left there so it isn't lost).</summary>
+    public void ForgetClipboard()
+    {
+        _clipboardTaken = false;
+        _clipboard = null;
+    }
+
     /// <summary>Spacing and capitals for text that follows what has been typed for good so far.</summary>
     async Task<string> FitAsync(string text) =>
         text.Trim().Length == 0 ? "" : ContextFit.Apply(text.Trim(), await ContextAfterTypedAsync());
@@ -97,7 +142,12 @@ public sealed class LiveInsertion
         if (keep < want.Length)
         {
             if (_profile.LiveTyping) await _inserter.TypeAsync(want[keep..], _target, ct);
-            else await _inserter.PasteAsync(want[keep..], _target, ct);
+            else
+            {
+                await BeforeInsertAsync(ct);
+                await _inserter.PasteAsync(want[keep..], _target, ct, keepClipboard: true);
+                _lastInsert = DateTime.Now;
+            }
             _partialTyped = want;
         }
     }
@@ -108,8 +158,12 @@ public sealed class LiveInsertion
     /// <summary>Wait until every queued piece is typed (or held).</summary>
     public Task DrainAsync() => _queue;
 
-    /// <summary>Stop typing pieces (the dictation was cancelled or failed).</summary>
-    public void Stop() => _cts.Cancel();
+    /// <summary>Stop typing pieces (the dictation was cancelled or failed), and give the clipboard back.</summary>
+    public void Stop()
+    {
+        _cts.Cancel();
+        _ = ReleaseClipboardAsync();
+    }
 
     async Task AddAsync(Task previous, string piece)
     {
@@ -130,7 +184,7 @@ public sealed class LiveInsertion
                     await ReplacePartialAsync(text, _cts.Token);
                     _partialTyped = "";
                 }
-                else await _inserter.InsertAsync(text, _target, _cts.Token);
+                else await InsertLiveAsync(text, _cts.Token);
                 _typed.Append(text);
             }
             catch (UserFacingException e)
@@ -179,7 +233,7 @@ public sealed class LiveInsertion
         if (IsPlausibleReplacement(finalText, Typed, rewrite) && await InsertionContext.SelectBeforeCaretAsync(Typed, UiaTimeout))
         {
             var replacement = ContextFit.Fit(finalText, await _context, spacingOnly: rewrite);
-            await _inserter.InsertAsync(replacement, _target, ct); // replaces the selection
+            await InsertLiveAsync(replacement, ct); // replaces the selection
             Log.Info($"Live dictation: final pass replaced {Typed.Length} typed chars with {replacement.Length}");
             return (replacement, null);
         }
@@ -194,7 +248,7 @@ public sealed class LiveInsertion
             catch (UserFacingException e) { Log.Warn("Couldn't correct the last words typed live: " + e.Message); }
             missing = "";
         }
-        else if (missing.Length > 0) await _inserter.InsertAsync(missing, _target, ct);
+        else if (missing.Length > 0) await InsertLiveAsync(missing, ct);
         Log.Info("Live dictation: couldn't confirm the typed text, so the final pass was skipped");
         if (rewrite && !string.IsNullOrWhiteSpace(finalText))
         {
