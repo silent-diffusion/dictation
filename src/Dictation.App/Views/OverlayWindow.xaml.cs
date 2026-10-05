@@ -20,7 +20,7 @@ namespace Dictation.App.Views;
 /// </summary>
 public partial class OverlayWindow : Window
 {
-    const double CompactWidth = 440, WideWidth = 470, NarrowWidth = 360, CompareWidth = 640, CompareWideWidth = 860;
+    const double CompactWidth = 440, WideWidth = 470, NarrowWidth = 360, CompareWideWidth = 860;
     /// <summary>The "Inserted" receipt is dimmed so it doesn't compete with the text; hovering brings it back.</summary>
     const double ReceiptDim = 0.55;
     const int WaveBars = 30;
@@ -308,23 +308,30 @@ public partial class OverlayWindow : Window
         HideAfter(TimeSpan.FromSeconds(3));
     }
 
+    /// <summary>The three boxes used everywhere in the app: Transcription · AI Edit (struck through / added) · Inserted.</summary>
     void OpenCompare(InsertReceipt r)
     {
         _compareOpen = true;
         BodyText.Visibility = Visibility.Collapsed;
         CompareRaw.Text = r.Raw;
         CompareInserted.Text = r.Inserted.Trim();
-        // Without AI (or when its edit was rejected) there is no AI column: what you said went in as is.
-        var ai = r.AiEdit != null;
-        AiPanel.Visibility = AiDivider.Visibility = ai ? Visibility.Visible : Visibility.Collapsed;
-        AiColumn.Width = ai ? new GridLength(1, GridUnitType.Star) : new GridLength(0);
-        AiGap.Width = new GridLength(ai ? 20 : 0);
-        if (ai) DiffText.Render(CompareEdited, WordDiff.Compute(r.Raw, r.AiEdit!.Trim()), DiffRemoved, DiffAdded);
+        if (r.AiEdit != null)
+        {
+            CompareEdited.Foreground = Brushes.White;
+            DiffText.Render(CompareEdited, WordDiff.Compute(r.Raw, r.AiEdit.Trim()), DiffRemoved, DiffAdded);
+        }
+        else
+        {
+            CompareEdited.Inlines.Clear();
+            CompareEdited.Foreground = Muted;
+            CompareEdited.Text = r.SafetyNet ? "The safety net rejected the AI's edit, so your words went in as spoken."
+                : "No AI edit for this dictation.";
+        }
         Compare.Visibility = Visibility.Visible;
         CancelButton.Visibility = Visibility.Visible; // closes the receipt
         CancelButton.ToolTip = "Close";
         Card.Cursor = null;
-        Display(ai ? CompareWideWidth : CompareWidth, expanded: true);
+        Display(CompareWideWidth, expanded: true);
     }
 
     void Card_MouseEnter(object sender, System.Windows.Input.MouseEventArgs e)

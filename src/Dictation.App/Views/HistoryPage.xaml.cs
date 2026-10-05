@@ -114,13 +114,21 @@ public partial class HistoryPage : UserControl
         Seek.Value = 0;
         UpdateTime();
 
-        TranscriptBox.Text = c.Transcript;
-        AiPanel.Visibility = c.AiOutput != null ? Visibility.Visible : Visibility.Collapsed;
-        AiBox.Text = c.AiOutput ?? "";
+        TranscriptBlock.Text = c.Transcript;
         if (c.AiOutput != null)
+        {
+            DiffBlock.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Text");
             DiffText.Render(DiffBlock, WordDiff.Compute(c.Transcript, c.AiOutput),
                 (Brush)FindResource("Ob.DiffRemoved"), (Brush)FindResource("Ob.DiffAdded"));
-        FinalBox.Text = c.Final;
+        }
+        else
+        {
+            DiffBlock.Inlines.Clear();
+            DiffBlock.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Muted");
+            DiffBlock.Text = c.SafetyNet ? "The safety net rejected the AI's edit, so your words went in as spoken."
+                : "No AI edit for this dictation.";
+        }
+        FinalBlock.Text = c.Final;
         NoteText.Text = c.Note ?? (c.SafetyNet ? "The safety net kept some of your original words." : "");
     }
 

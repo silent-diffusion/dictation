@@ -34,11 +34,15 @@ public partial class ProfilePage : UserControl
         if (e.PropertyName == nameof(Profile.AutoProcess)) ShowAiColumn();
     }
 
-    /// <summary>The AI EDIT column only exists for a profile that uses AI.</summary>
+    /// <summary>The AI Edit box is always there; without AI it says so.</summary>
     void ShowAiColumn()
     {
-        AiPanel.Visibility = _profile.AutoProcess ? Visibility.Visible : Visibility.Collapsed;
-        AiColumn.Width = _profile.AutoProcess ? new GridLength(1, GridUnitType.Star) : new GridLength(0);
+        TestDiff.Inlines.Clear();
+        TestDiff.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Muted");
+        TestDiff.Text = _profile.AutoProcess ? "Run the profile to see what it changes."
+            : "No AI edit: this profile doesn't use AI.";
+        TestOutput.Text = "";
+        TestMeta.Text = "";
     }
 
     void SetActive_Click(object sender, RoutedEventArgs e) => App.Services.Profiles.SetActive(_profile);
@@ -73,7 +77,7 @@ public partial class ProfilePage : UserControl
         RunButton.IsEnabled = false;
         TestMeta.Text = "";
         TestDiff.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Muted");
-        TestDiff.Text = "Processing…";
+        TestDiff.Text = _profile.AutoProcess ? "Processing…" : "No AI edit: this profile doesn't use AI.";
         TestOutput.Text = "";
         var input = TestInput.Text;
         try
@@ -81,15 +85,20 @@ public partial class ProfilePage : UserControl
             var result = _profile.AutoProcess
                 ? await App.Services.Llm.ProcessAsync(input, _profile)
                 : new ProcessResult(FragmentStitcher.Tidy(input), false, null); // no AI: only spacing and the first capital
-            // AI EDIT: what changed, struck through and added. INSERTED: the clean result.
-            TestDiff.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Text");
-            DiffText.Render(TestDiff, WordDiff.Compute(input, result.Text),
-                (Brush)FindResource("Ob.DiffRemoved"), (Brush)FindResource("Ob.DiffAdded"));
+            // AI Edit: what the AI changed, struck through and added. Inserted: the clean result.
+            if (_profile.AutoProcess)
+            {
+                TestDiff.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Text");
+                DiffText.Render(TestDiff, WordDiff.Compute(input, result.Text),
+                    (Brush)FindResource("Ob.DiffRemoved"), (Brush)FindResource("Ob.DiffAdded"));
+            }
+            else ShowAiColumn();
             TestOutput.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Text");
             TestOutput.Text = result.Text;
             TestMeta.Text = !result.SafetyNet ? LengthChange(input, result.Text)
                 : result.Modified ? "safety net: some parts kept as spoken" : "safety net: original kept";
             if (result.Warning != null && !result.SafetyNet) TestMeta.Text = result.Warning;
+            if (!_profile.AutoProcess) TestMeta.Text = "";
         }
         catch (UserFacingException ex) { ShowProblem(ex.Message); }
         catch (Exception ex) { Log.Error("Profile test failed", ex); ShowProblem("Something went wrong. See the log."); }
