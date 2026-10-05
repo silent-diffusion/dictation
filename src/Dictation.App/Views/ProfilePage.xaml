@@ -123,7 +123,7 @@
                         <StackPanel>
                             <TextBlock Text="Read aloud after inserting" TextWrapping="Wrap"/>
                             <TextBlock FontSize="12" Foreground="{DynamicResource Ob.Muted}" TextWrapping="Wrap" Margin="0,2,0,0"
-                                       Text="Once the text is in place, Read aloud reads it to you with your voice settings from Text to speech. Press the Read aloud hotkey to stop it."/>
+                                       Text="Once the text is in place, Read aloud reads it to you with your voice settings from Read aloud. Press the Read aloud hotkey to stop it."/>
                         </StackPanel>
                     </CheckBox>
                 </StackPanel>

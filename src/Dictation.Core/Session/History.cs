@@ -25,6 +25,9 @@ public sealed class HistoryEntry
     public string? Note { get; set; }
     /// <summary>Length of the recording.</summary>
     public double Seconds { get; set; }
+    /// <summary>From pressing stop until the text was in place (0 for entries from before this was recorded).</summary>
+    public double FinishSeconds { get; set; }
+    [JsonIgnore] public int Words => (Final.Length > 0 ? Final : Transcript).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
 
     /// <summary>The entry's folder under data\history (entry.json and audio.wav).</summary>
     [JsonIgnore] public string Folder { get; set; } = "";

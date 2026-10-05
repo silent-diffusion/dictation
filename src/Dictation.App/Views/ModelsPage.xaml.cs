@@ -144,7 +144,7 @@ public partial class ModelsPage : UserControl
         if (voice) voiceBadges.Add(("ACTIVE", "active"));
         if (App.Services.Tts.IsRunning) voiceBadges.Add(("LOADED", "ok"));
         voiceBadges.Add(voice ? ("DOWNLOADED", "plain") : ("NOT DOWNLOADED", "outline"));
-        VoiceList.Children.Add(Row("Kokoro v1.0", $"The Read aloud voice, with 8 voices to choose from under Text to speech · {RuntimeInstaller.ReadAloudDownloadMb} MB",
+        VoiceList.Children.Add(Row("Kokoro v1.0", $"The Read aloud voice, with 8 voices to choose from under Read aloud · {RuntimeInstaller.ReadAloudDownloadMb} MB",
             voiceBadges, row => voice ? null : MakeButton("Download", () => DownloadVoiceAsync(row))));
     }
 

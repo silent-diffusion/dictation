@@ -424,6 +424,7 @@ public sealed class DictationController
             SafetyNet = _pendingSafetyNet,
             Note = _pendingNote,
             Seconds = Math.Round(_recordClock.Elapsed.TotalSeconds, 1),
+            FinishSeconds = Math.Round(_finishClock.Elapsed.TotalSeconds, 2),
         }, pcm);
     }
 

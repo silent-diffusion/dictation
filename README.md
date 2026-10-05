@@ -56,8 +56,9 @@ The folder keeps its pre-rename name so updates from Local Dictation 1.x keep yo
 
 ## Using it
 
-The sidebar has five sections: **Active dashboard** (what's active and loaded right now: profile, models, Read aloud,
-history, privacy), **Speech to text** (profiles), **Text to speech** (Read aloud), **History** and **Settings**.
+The sidebar has five sections: **Active dashboard** (one screen, no scrolling: what's active and loaded, dials for
+words today, turnaround, AI edits kept, history and the speech model's unload countdown, and charts of words per day and
+the apps you dictate into), **Speech to text** (profiles), **Read aloud**, **History** and **Settings**.
 
 * **Hotkey** (default `Ctrl+Space`, change under *Hotkeys*): start/stop. `Ctrl+Alt+P` cycles profiles.
 * **Overlay**: a pill, always on top, never steals focus. Small while you talk (timer, level meter, active profile, `✕` cancels);
@@ -80,9 +81,9 @@ history, privacy), **Speech to text** (profiles), **Text to speech** (Read aloud
 * **Read aloud** (`Ctrl+Shift+Space`): reads the selected text in any app with Kokoro, a high-quality voice that runs on
   your PC. With nothing selected, it offers to read your clipboard. The player has play/pause, back and forward 15 seconds,
   slower/faster, the time left, and the sentence being read with the current word highlighted. Pick the voice and the base
-  speed under *Text to speech*. The voice (about 370 MB) downloads the first time you use it.
+  speed under *Read aloud*. The voice (about 370 MB) downloads the first time you use it.
   Text is read as plain text: Markdown (headings, lists, **bold**, links, tables, code fences) and stray symbols are dropped.
-  The ⌄ button shows the whole text, scrolling along as it is read. The player's opacity is a setting under *Text to speech*.
+  The ⌄ button shows the whole text, scrolling along as it is read. The player's opacity is a setting under *Read aloud*.
 * **Settings**: grouped into Dictation, Models & AI, Look & feel and App. **Appearance** follows the
   Windows light/dark setting, or pick Light or Dark.
 * **Profiles** (*Speech to text*): *Light Cleanup*, *Grammar & Clarity*, *Natural Phrasing*, *Custom*, *Raw* (no AI: the recognizer's words,

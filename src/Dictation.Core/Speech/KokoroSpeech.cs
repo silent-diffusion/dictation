@@ -118,7 +118,7 @@ public sealed class KokoroSpeech : IAsyncDisposable
             Log.Info("tts: " + e.Data);
             if (e.Data.StartsWith("READY")) started.TrySetResult();
             else if (e.Data.StartsWith("ERROR")) started.TrySetException(new UserFacingException(
-                "The voice model could not be loaded. Try downloading the voice again under Text to speech."));
+                "The voice model could not be loaded. Try downloading the voice again under Read aloud."));
         };
         p.ErrorDataReceived += (_, e) => { if (!string.IsNullOrWhiteSpace(e.Data)) Log.Info("tts: " + e.Data); };
         p.Exited += (_, _) => started.TrySetException(new UserFacingException("The voice engine stopped unexpectedly."));

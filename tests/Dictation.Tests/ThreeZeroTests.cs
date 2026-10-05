@@ -96,3 +96,47 @@ public class HistoryEntryTests
         finally { File.Delete(path); }
     }
 }
+
+public class HistoryStatsTests
+{
+    static HistoryEntry E(DateTime t, string text, string app = "notepad", double finish = 0, string? ai = null, bool net = false) =>
+        new() { Time = t, Final = text, Transcript = text, App = app, FinishSeconds = finish, AiOutput = ai, SafetyNet = net };
+
+    static readonly DateTime Today = new(2026, 10, 5, 15, 0, 0);
+
+    [Fact]
+    public void Words_are_counted_per_day_ending_today()
+    {
+        var days = HistoryStats.PerDay(new[]
+        {
+            E(Today, "one two three"), E(Today.AddHours(-2), "four five"), E(Today.AddDays(-1), "six"), E(Today.AddDays(-30), "old"),
+        }, Today, 14);
+        Assert.Equal(14, days.Count);
+        Assert.Equal(Today.Date, days[^1].Day);
+        Assert.Equal(5, days[^1].Words);
+        Assert.Equal(2, days[^1].Dictations);
+        Assert.Equal(1, days[^2].Words);
+        Assert.Equal(6, days.Sum(d => d.Words)); // the 30-day-old one is outside the window
+    }
+
+    [Fact]
+    public void Top_apps_are_ordered_by_count()
+    {
+        var top = HistoryStats.TopApps(new[] { E(Today, "a", "slack"), E(Today, "b", "word"), E(Today, "c", "slack"), E(Today, "d", "") });
+        Assert.Equal(("slack", 2), top[0]);
+        Assert.Contains(("Unknown app", 1), top);
+    }
+
+    [Fact]
+    public void Turnaround_and_ai_share_skip_what_wasnt_recorded()
+    {
+        var entries = new[]
+        {
+            E(Today, "a", finish: 2, ai: "A"), E(Today, "b", finish: 4, net: true), E(Today, "c"), E(Today, "d", ai: "D"),
+        };
+        Assert.Equal(3.0, HistoryStats.AverageFinishSeconds(entries)!.Value);
+        Assert.Equal(2 / 3.0, HistoryStats.AiKeptShare(entries)!.Value, 3);
+        Assert.Null(HistoryStats.AverageFinishSeconds(new[] { E(Today, "x") }));
+        Assert.Null(HistoryStats.AiKeptShare(new[] { E(Today, "x") }));
+    }
+}
