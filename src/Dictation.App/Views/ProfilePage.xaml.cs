@@ -93,12 +93,27 @@ public partial class ProfilePage : UserControl
                     (Brush)FindResource("Ob.DiffRemoved"), (Brush)FindResource("Ob.DiffAdded"));
             }
             else ShowAiColumn();
-            TestOutput.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Text");
-            TestOutput.Text = result.Text;
             TestMeta.Text = !result.SafetyNet ? LengthChange(input, result.Text)
                 : result.Modified ? "safety net: some parts kept as spoken" : "safety net: original kept";
             if (result.Warning != null && !result.SafetyNet) TestMeta.Text = result.Warning;
             if (!_profile.AutoProcess) TestMeta.Text = "";
+            // Try it follows the profile's own switches: the preview decides what goes in, and Read aloud reads it.
+            var final = result.Text;
+            if (_profile.ShowPreview)
+            {
+                TestOutput.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Muted");
+                TestOutput.Text = "Waiting for your choice in the preview…";
+                var chosen = await ((App)Application.Current).PreviewTrialAsync(_profile.Name, input, result.Text);
+                if (chosen == null)
+                {
+                    TestOutput.Text = "Discarded in the preview: nothing would be inserted.";
+                    return;
+                }
+                final = chosen;
+            }
+            TestOutput.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Text");
+            TestOutput.Text = final;
+            if (_profile.ReadAloudAfterInsert && final.Trim().Length > 0) ((App)Application.Current).ReadAloud(final.Trim());
         }
         catch (UserFacingException ex) { ShowProblem(ex.Message); }
         catch (Exception ex) { Log.Error("Profile test failed", ex); ShowProblem("Something went wrong. See the log."); }

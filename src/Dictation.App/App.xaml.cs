@@ -251,6 +251,10 @@ public partial class App : Application
     /// <summary>Read aloud from the app itself (the "Try it" button in settings).</summary>
     public void ReadAloud(string text) => _reader?.Read(text);
 
+    /// <summary>A profile page's Try it shows the dictation preview; the result is the text that would go in, or null.</summary>
+    public Task<string?> PreviewTrialAsync(string profileName, string raw, string edited) =>
+        _overlay?.PreviewTrialAsync(profileName, raw, edited) ?? Task.FromResult<string?>(edited);
+
     /// <summary>Called by the Speech page when the user presses "Apply and restart engine".</summary>
     public static async Task RestartSpeechAsync()
     {

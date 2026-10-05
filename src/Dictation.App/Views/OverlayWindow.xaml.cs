@@ -174,6 +174,7 @@ public partial class OverlayWindow : Window
     public void ShowState(DictationState state, string profileName, string raw = "", string preview = "", string model = "",
         bool live = false)
     {
+        if (state != DictationState.Idle) EndTrial(null); // a real dictation takes over from a Try it preview
         _state = state;
         _pinnedByState = state != DictationState.Idle;
         if (state == DictationState.Idle)
@@ -444,9 +445,55 @@ public partial class OverlayWindow : Window
 
     void Cancel_Click(object sender, RoutedEventArgs e)
     {
+        if (_trial != null) { EndTrial(null); return; }
         if (_receipt != null) { _hideTimer.Stop(); Hide(); return; } // closing a receipt, not cancelling a dictation
         CancelRequested?.Invoke();
     }
-    void Insert_Click(object sender, RoutedEventArgs e) => InsertRequested?.Invoke();
-    void Raw_Click(object sender, RoutedEventArgs e) => InsertRawRequested?.Invoke();
+    void Insert_Click(object sender, RoutedEventArgs e)
+    {
+        if (_trial != null) EndTrial(_trialEdited);
+        else InsertRequested?.Invoke();
+    }
+
+    void Raw_Click(object sender, RoutedEventArgs e)
+    {
+        if (_trial != null) EndTrial(_trialRaw);
+        else InsertRawRequested?.Invoke();
+    }
+
+    // ----- a profile page's Try it, with "Preview before inserting" on -----
+
+    TaskCompletionSource<string?>? _trial;
+    string _trialRaw = "", _trialEdited = "";
+
+    /// <summary>
+    /// The same preview a dictation gets, for Try it: the edit with Insert, Use original and Discard. Returns the text
+    /// that would be inserted, or null when discarded. Nothing is inserted anywhere.
+    /// </summary>
+    public Task<string?> PreviewTrialAsync(string profileName, string raw, string edited)
+    {
+        EndTrial(null);
+        ResetView();
+        var tcs = new TaskCompletionSource<string?>();
+        _trial = tcs;
+        _trialRaw = raw;
+        _trialEdited = edited;
+        CheckIcon.Visibility = Visibility.Visible;
+        TitleText.Text = "Ready to insert";
+        ShowChip("Try it · " + profileName);
+        ShowDiff(raw, edited);
+        InsertButton.Content = "Insert";
+        Actions.Visibility = Visibility.Visible;
+        Display(WideWidth, expanded: true);
+        return tcs.Task;
+    }
+
+    void EndTrial(string? result)
+    {
+        var trial = _trial;
+        if (trial == null) return;
+        _trial = null;
+        trial.TrySetResult(result);
+        if (!_pinnedByState) HideAfter(TimeSpan.FromMilliseconds(150));
+    }
 }
