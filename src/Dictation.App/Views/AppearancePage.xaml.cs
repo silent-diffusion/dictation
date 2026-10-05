@@ -18,7 +18,56 @@ public partial class AppearancePage : UserControl
             if ((string)cell.Tag == s.OverlayPosition.ToString()) cell.IsChecked = true;
         PositionName.Text = Describe(s.OverlayPosition);
         UpdateSystemHint();
+        BuildReaderPositionPicker();
         AutoSave.Hook(this, () => App.Services.Settings.Save());
+    }
+
+    // ----- the Read aloud player: the same choices as the dictation overlay, or "same place" -----
+
+    void BuildReaderPositionPicker()
+    {
+        var s = App.Services.Settings.Current;
+        foreach (var pos in Enum.GetValues<OverlayPosition>())
+        {
+            var name = Describe(pos);
+            var cell = new RadioButton
+            {
+                GroupName = "ReaderPosition", Style = (Style)FindResource("PositionCell"), Tag = pos, ToolTip = name,
+                IsChecked = (s.ReaderPosition ?? s.OverlayPosition) == pos,
+            };
+            System.Windows.Automation.AutomationProperties.SetName(cell, name);
+            cell.Checked += (_, _) =>
+            {
+                if (!IsLoaded || SamePlaceBox.IsChecked == true) return;
+                s.ReaderPosition = pos;
+                App.Services.Settings.Save();
+                ShowReaderPosition();
+                ((App)Application.Current).PreviewOverlay();
+            };
+            ReaderPositionGrid.Children.Add(cell);
+        }
+        SamePlaceBox.IsChecked = s.ReaderPosition == null;
+        ShowReaderPosition();
+    }
+
+    void ShowReaderPosition()
+    {
+        var s = App.Services.Settings.Current;
+        var same = SamePlaceBox.IsChecked == true;
+        ReaderPositionPanel.IsEnabled = !same;
+        ReaderPositionPanel.Opacity = same ? 0.45 : 1;
+        ReaderPositionName.Text = Describe(s.ReaderPosition ?? s.OverlayPosition) + (same ? " (with the overlay)" : "");
+    }
+
+    void SamePlace_Changed(object sender, RoutedEventArgs e)
+    {
+        if (!IsLoaded) return;
+        var s = App.Services.Settings.Current;
+        s.ReaderPosition = SamePlaceBox.IsChecked == true ? null : s.ReaderPosition ?? s.OverlayPosition;
+        App.Services.Settings.Save();
+        foreach (var cell in ReaderPositionGrid.Children.OfType<RadioButton>())
+            cell.IsChecked = (OverlayPosition)cell.Tag == (s.ReaderPosition ?? s.OverlayPosition);
+        ShowReaderPosition();
     }
 
     void UpdateSystemHint() =>
@@ -40,6 +89,7 @@ public partial class AppearancePage : UserControl
         App.Services.Settings.Current.OverlayPosition = pos;
         App.Services.Settings.Save();
         PositionName.Text = Describe(pos);
+        ShowReaderPosition(); // a player that follows the overlay moves with it
         ((App)Application.Current).PreviewOverlay(); // show the pill where it will now appear
     }
 

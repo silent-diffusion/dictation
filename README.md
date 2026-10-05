@@ -72,7 +72,7 @@ with its chevron (or **Ctrl+B**) to give the page the whole window; the ☰ butt
   With *preview before inserting*, the preview shows the same three boxes, with **Inserted** (what *Insert* puts in) brought
   forward, larger and more solid, and the other two dimmed.
   Drag the pill (or the Read aloud player) anywhere; it stays there until Oberton restarts or you pick a position. The Read
-  aloud player can have its own position (*Read aloud › Player position*) or follow the pill's.
+  aloud player has its own card under *Settings › Appearance* (opacity, and a position of its own or the pill's).
 * **Fits the surrounding text**: a sentence or two around the cursor is read (locally, via Windows accessibility) so a word or phrase
   dictated mid-sentence isn't capitalized or given a period, and missing spaces are added. Works in apps that expose their text
   (Word, browsers, most text boxes); turn it off under *Settings › General*. That text is never stored, logged or sent to the AI.
@@ -85,6 +85,8 @@ with its chevron (or **Ctrl+B**) to give the page the whole window; the ☰ butt
   With a profile that doesn't use AI (*Raw*), the words go into the app as they are heard, about every second, the same
   words the overlay shows, and are corrected in place (with Backspace) when the recognizer revises its guess. Each new bit
   is pasted; the profile can type it key by key instead (*Type the words in, instead of pasting them*).
+  While you dictate, Oberton holds the clipboard and leaves at least 0.7 s between pastes; your own clipboard comes
+  back once the dictation is done, so a paste the app reads late can never insert what you had copied before.
 * **No phantom text**: very short or silent recordings insert nothing, so Whisper's habit of hearing "Thank you." in silence never reaches your document.
 * **Long dictation** is cleaned up a few sentences at a time (small models stay faithful on short passages), and the safety net applies to each piece separately.
 * **Read aloud** (`Ctrl+Shift+Space`): reads the selected text in any app with a natural voice that runs on
@@ -101,7 +103,7 @@ with its chevron (or **Ctrl+B**) to give the page the whole window; the ☰ butt
   Windows light/dark setting, or pick Light or Dark.
 * **Profiles** (*Speech to text*): *Light Cleanup*, *Grammar & Clarity*, *Natural Phrasing*, *Custom*, *Raw* (no AI: the recognizer's words,
   with the seams between live pieces fixed), plus your own. Edit the prompt, pick a model (only models downloaded to this PC are listed, plus cloud models once
-  they are set up), pick a speech-to-text (Whisper) model and a Read aloud model and voice (downloaded ones only; a profile with
+  they are set up), pick its models in one *Models* card: a speech-to-text (Whisper) model, the AI model and a Read aloud model and voice (downloaded ones only; a profile with
   its own speech model loads it when you switch to it, and recording starts right away meanwhile), toggle
   *Use AI* (off hides the instructions, model and other AI settings; only *Raw* has it off), *preview before inserting* (shows the edits; hotkey or *Insert* inserts, `Esc` discards, *Use original* inserts raw),
   *read aloud after inserting* (Read aloud reads what went in), *preserve paragraphs*, *remove fillers*.

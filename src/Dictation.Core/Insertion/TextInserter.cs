@@ -67,9 +67,14 @@ public sealed class ClipboardPasteStrategy : ITextInsertionStrategy
 {
     public string Name => "Clipboard";
 
-    public async Task InsertAsync(string text, InsertionTarget target, CancellationToken ct)
+    public Task InsertAsync(string text, InsertionTarget target, CancellationToken ct) => InsertAsync(text, target, ct, restore: true);
+
+    /// <param name="restore">Put the user's clipboard back afterwards. False while dictating live: the caller holds
+    /// the clipboard for the whole dictation and restores it once at the end, so a paste the app reads late can never
+    /// pick up the user's own clipboard instead.</param>
+    public async Task InsertAsync(string text, InsertionTarget target, CancellationToken ct, bool restore)
     {
-        var snapshot = ClipboardSnapshot.Capture();
+        var snapshot = restore ? ClipboardSnapshot.Capture() : null;
         try
         {
             var data = new DataObject();
@@ -88,7 +93,7 @@ public sealed class ClipboardPasteStrategy : ITextInsertionStrategy
                 Native.Key(Native.VK_CONTROL, 0, Native.KEYEVENTF_KEYUP),
             });
             if (ok != 4) throw new InvalidOperationException("SendInput for Ctrl+V failed (target may be running as administrator).");
-            await Task.Delay(Math.Min(1200, 350 + text.Length / 20), ct); // let the target read the clipboard first
+            await Task.Delay(Math.Min(1300, 450 + text.Length / 20), ct); // let the target read the clipboard first
         }
         finally
         {
@@ -164,7 +169,9 @@ public sealed class TextInserter
 
     public TextInserter(SettingsService settings) => _settings = settings;
 
-    public async Task InsertAsync(string text, InsertionTarget target, CancellationToken ct = default)
+    /// <param name="keepClipboard">Don't restore the clipboard after pasting (see <see cref="ClipboardPasteStrategy"/>);
+    /// the caller restores it.</param>
+    public async Task InsertAsync(string text, InsertionTarget target, CancellationToken ct = default, bool keepClipboard = false)
     {
         if (!target.IsAlive)
             throw new UserFacingException("The window you were dictating into was closed.");
@@ -185,7 +192,7 @@ public sealed class TextInserter
 
         try
         {
-            await primary.InsertAsync(text, target, ct);
+            await Strategy(primary, text, target, ct, keepClipboard);
             Log.Info($"Inserted {text.Length} chars into {target.ProcessName} via {primary.Name}");
         }
         catch (Exception e) when (e is not OperationCanceledException)
@@ -195,7 +202,7 @@ public sealed class TextInserter
                 throw new UserFacingException("Text could not be inserted into that application.", e);
             try
             {
-                await fallback.InsertAsync(text, target, ct);
+                await Strategy(fallback, text, target, ct, keepClipboard);
                 Log.Info($"Inserted {text.Length} chars into {target.ProcessName} via {fallback.Name} (fallback)");
             }
             catch (Exception e2) when (e2 is not OperationCanceledException)
@@ -205,6 +212,9 @@ public sealed class TextInserter
             }
         }
     }
+
+    Task Strategy(ITextInsertionStrategy s, string text, InsertionTarget target, CancellationToken ct, bool keepClipboard) =>
+        s == _paste ? _paste.InsertAsync(text, target, ct, restore: !keepClipboard) : s.InsertAsync(text, target, ct);
 
     /// <summary>Bring the dictation target back to the front (it normally still is).</summary>
     public async Task<bool> FocusAsync(InsertionTarget target, CancellationToken ct = default)
@@ -235,12 +245,12 @@ public sealed class TextInserter
 
     /// <summary>Paste a short piece straight into the target (clipboard, restored after), for text that streams in as
     /// it is heard. Never steals focus: if the target isn't in front any more, it throws.</summary>
-    public async Task PasteAsync(string text, InsertionTarget target, CancellationToken ct = default)
+    public async Task PasteAsync(string text, InsertionTarget target, CancellationToken ct = default, bool keepClipboard = false)
     {
         await WaitForModifiersReleasedAsync(ct);
         if (!target.IsAlive || Native.GetForegroundWindow() != target.Hwnd)
             throw new UserFacingException("The app you were dictating into isn't in front any more.");
-        try { await _paste.InsertAsync(text, target, ct); }
+        try { await _paste.InsertAsync(text, target, ct, restore: !keepClipboard); }
         catch (Exception e) when (e is not (OperationCanceledException or UserFacingException))
         {
             throw new UserFacingException("Pasting into that app failed: " + e.Message, e);
