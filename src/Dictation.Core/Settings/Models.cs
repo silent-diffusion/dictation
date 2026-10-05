@@ -122,7 +122,7 @@ public sealed class Profile : Bindable
     string _description = "";
     string _prompt = "";
     string? _model;
-    bool _autoProcess = true, _showPreview, _preserveParagraphs = true, _removeFillers = true, _rewriteWhole;
+    bool _autoProcess = true, _showPreview, _preserveParagraphs = true, _removeFillers = true, _rewriteWhole, _readAloud;
     double _maxChangeRatio = 0.5;
 
     public string Id { get => _id; set => Set(ref _id, value); }
@@ -139,6 +139,8 @@ public sealed class Profile : Bindable
     /// (into an email, a list, ...). Off: long dictation is edited a few sentences at a time, which keeps small models
     /// faithful. While speaking, a rewriting profile types the words as spoken; the rewrite replaces them at the end.</summary>
     public bool RewriteWhole { get => _rewriteWhole; set => Set(ref _rewriteWhole, value); }
+    /// <summary>Read the inserted text aloud (Read aloud's voice) once it is in place.</summary>
+    public bool ReadAloudAfterInsert { get => _readAloud; set => Set(ref _readAloud, value); }
     bool _isActive, _isDefault;
     /// <summary>UI-only flags (not persisted).</summary>
     [System.Text.Json.Serialization.JsonIgnore] public bool IsActive { get => _isActive; set => Set(ref _isActive, value); }

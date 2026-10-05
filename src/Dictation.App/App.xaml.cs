@@ -180,7 +180,15 @@ public partial class App : Application
             var model = string.IsNullOrWhiteSpace(profile.Model) ? Services.Settings.Current.Llm.DefaultModel : profile.Model;
             overlay.ShowState(state, profile.Name, c.PendingRaw, c.PreviewText, model, c.IsLive);
         };
-        c.Inserted += r => { if (Services.Settings.Current.ShowOverlay) overlay.ShowReceipt(r); };
+        c.Inserted += r =>
+        {
+            // A profile can read what went in aloud. The player then takes the receipt's place (unless the receipt has a
+            // warning to show); the details are in History.
+            var text = r.Inserted.Trim();
+            var readIt = Services.Profiles.Active.ReadAloudAfterInsert && text.Length > 0;
+            if (Services.Settings.Current.ShowOverlay && (!readIt || r.SafetyNet || r.Note != null)) overlay.ShowReceipt(r);
+            if (readIt) _reader?.Read(text);
+        };
         c.AudioLevel += l => overlay.SetLevel(l);
         c.LiveTranscript += t => overlay.SetLiveTranscript(t);
         c.EngineLoading += loading => overlay.SetEngineLoading(loading);

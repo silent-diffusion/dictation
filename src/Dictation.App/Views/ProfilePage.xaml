@@ -63,25 +63,25 @@
                                    Foreground="{DynamicResource Ob.Muted}" VerticalAlignment="Center"/>
                     </DockPanel>
                     <Border Style="{StaticResource Divider}"/>
-                    <!-- What you said · what the AI changed · the clean text that would be inserted (as in the receipt) -->
+                    <!-- The three boxes used everywhere: Transcription · AI Edit (struck through / added) · Inserted -->
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
-                            <ColumnDefinition x:Name="AiColumn" Width="*"/>
+                            <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
                         <StackPanel Margin="16,12,16,16">
-                            <TextBlock Text="YOU SAID" Style="{StaticResource MonoLabel}" Margin="0,0,0,6"/>
+                            <TextBlock Text="Transcription" Style="{StaticResource MonoLabel}" Margin="0,0,0,6"/>
                             <TextBox x:Name="TestInput" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="72" Padding="0"
                                      BorderThickness="0" Background="Transparent" FontFamily="{StaticResource Ob.Mono}" FontSize="13"
                                      Foreground="{DynamicResource Ob.Text}" AutomationProperties.Name="Sample transcript"
                                      Text="um so yesterday I I went to the the store and and bought uh three apples no wait four apples"/>
                         </StackPanel>
-                        <Border x:Name="AiPanel" Grid.Column="1" BorderBrush="{DynamicResource Ob.Divider}" BorderThickness="1,0,0,0">
+                        <Border Grid.Column="1" BorderBrush="{DynamicResource Ob.Divider}" BorderThickness="1,0,0,0">
                             <StackPanel Margin="16,12,16,16">
                                 <DockPanel Margin="0,0,0,6">
                                     <TextBlock x:Name="TestMeta" DockPanel.Dock="Right" Style="{StaticResource MonoLabel}"/>
-                                    <TextBlock Text="AI EDIT" Style="{StaticResource MonoLabel}"/>
+                                    <TextBlock Text="AI Edit" Style="{StaticResource MonoLabel}"/>
                                 </DockPanel>
                                 <TextBlock x:Name="TestDiff" TextWrapping="Wrap" FontSize="15" LineHeight="23" MinHeight="72"
                                            Foreground="{DynamicResource Ob.Muted}" Text="Run the profile to see what it changes."/>
@@ -89,7 +89,7 @@
                         </Border>
                         <Border Grid.Column="2" BorderBrush="{DynamicResource Ob.Divider}" BorderThickness="1,0,0,0">
                             <StackPanel Margin="16,12,16,16">
-                                <TextBlock Text="INSERTED" Style="{StaticResource MonoLabel}" Margin="0,0,0,6"/>
+                                <TextBlock Text="Inserted" Style="{StaticResource MonoLabel}" Margin="0,0,0,6"/>
                                 <TextBlock x:Name="TestOutput" TextWrapping="Wrap" FontSize="15" LineHeight="23" MinHeight="72"
                                            Foreground="{DynamicResource Ob.Muted}"/>
                             </StackPanel>
@@ -118,6 +118,14 @@
                     <Border Style="{StaticResource Divider}"/>
                     <CheckBox Style="{StaticResource Switch}" Margin="14,0" Content="Preview before inserting"
                               IsChecked="{Binding ShowPreview}"/>
+                    <Border Style="{StaticResource Divider}"/>
+                    <CheckBox Style="{StaticResource Switch}" Margin="14,4" IsChecked="{Binding ReadAloudAfterInsert}">
+                        <StackPanel>
+                            <TextBlock Text="Read aloud after inserting" TextWrapping="Wrap"/>
+                            <TextBlock FontSize="12" Foreground="{DynamicResource Ob.Muted}" TextWrapping="Wrap" Margin="0,2,0,0"
+                                       Text="Once the text is in place, Read aloud reads it to you with your voice settings from Text to speech. Press the Read aloud hotkey to stop it."/>
+                        </StackPanel>
+                    </CheckBox>
                 </StackPanel>
             </Border>
 

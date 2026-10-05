@@ -53,6 +53,7 @@ public partial class DashboardPage : UserControl
             ("Model", p.AutoProcess ? aiModel + (string.IsNullOrWhiteSpace(p.Model) ? " (default)" : "") : "—"),
             ("Rewrites the whole dictation", p.AutoProcess && p.RewriteWhole ? "yes" : "no"),
             ("Preview before inserting", p.ShowPreview ? "yes" : "no"),
+            ("Read aloud after inserting", p.ReadAloudAfterInsert ? "yes" : "no"),
             ("Type as you speak", s.TypeWhileSpeaking && !p.ShowPreview ? "on" : "off"),
             ("Switch profile", s.CycleProfileHotkey),
         }, ("Open profile", () => ((MainWindow)Window.GetWindow(this)!).ShowProfile(p))));
