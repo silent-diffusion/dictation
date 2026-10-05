@@ -101,7 +101,8 @@ with its chevron (or **Ctrl+B**) to give the page the whole window; the ☰ butt
   Windows light/dark setting, or pick Light or Dark.
 * **Profiles** (*Speech to text*): *Light Cleanup*, *Grammar & Clarity*, *Natural Phrasing*, *Custom*, *Raw* (no AI: the recognizer's words,
   with the seams between live pieces fixed), plus your own. Edit the prompt, pick a model (only models downloaded to this PC are listed, plus cloud models once
-  they are set up), pick a Read aloud model and voice (downloaded ones only), toggle
+  they are set up), pick a speech-to-text (Whisper) model and a Read aloud model and voice (downloaded ones only; a profile with
+  its own speech model loads it when you switch to it, and recording starts right away meanwhile), toggle
   *Use AI* (off hides the instructions, model and other AI settings; only *Raw* has it off), *preview before inserting* (shows the edits; hotkey or *Insert* inserts, `Esc` discards, *Use original* inserts raw),
   *read aloud after inserting* (Read aloud reads what went in), *preserve paragraphs*, *remove fillers*.
   *Rewrite the whole dictation* is for prompts that reshape what you say ("turn my thoughts into an email"): the AI gets the

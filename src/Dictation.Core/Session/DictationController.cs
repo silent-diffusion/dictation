@@ -233,7 +233,7 @@ public sealed class DictationController
         _recordClock.Restart();
         SetState(DictationState.Recording);
         LiveTranscript?.Invoke("");
-        _engine = StartEngineAsync(_live != null, _sessionCts.Token);
+        _engine = StartEngineAsync(_live != null, SpeechModels.For(profile, _settings.Current.Asr), _sessionCts.Token);
         _ = WatchEngineAsync(_engine);
         // The AI model too, so the cleanup at the end doesn't wait for it to load.
         if (profile.AutoProcess) _ = _llm.WarmUpAsync(profile.Model);
@@ -253,13 +253,14 @@ public sealed class DictationController
     }
 
     /// <summary>Load the speech engine if needed, then hand it the session and everything recorded so far.</summary>
-    async Task StartEngineAsync(bool live, CancellationToken ct)
+    /// <param name="model">The profile's speech model; another loaded model is swapped for it.</param>
+    async Task StartEngineAsync(bool live, string model, CancellationToken ct)
     {
-        if (!_asr.IsReady)
+        if (!_asr.IsReady || !string.Equals(_asr.LoadedModel, model, StringComparison.OrdinalIgnoreCase))
         {
             EngineLoading?.Invoke(true);
             // Not cancelled with the dictation: a model half loaded would only have to load again next time.
-            try { await _asr.InitializeAsync(CancellationToken.None); }
+            try { await _asr.InitializeAsync(model, CancellationToken.None); }
             finally { EngineLoading?.Invoke(false); }
         }
         ct.ThrowIfCancellationRequested();

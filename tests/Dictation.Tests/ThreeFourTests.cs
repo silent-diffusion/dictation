@@ -147,3 +147,20 @@ public class VoiceTests
         Assert.Null(new AppSettings().ReaderPosition); // the player follows the dictation overlay by default
     }
 }
+
+public class SpeechModelTests
+{
+    [Fact]
+    public void A_profile_uses_its_own_speech_model_or_the_one_in_settings()
+    {
+        var asr = new AsrSettings { Model = "large-v3-turbo" };
+        Assert.Equal("large-v3-turbo", SpeechModels.For(new Profile(), asr));
+        Assert.Equal("large-v3-turbo", SpeechModels.For(new Profile { SpeechModel = " " }, asr));
+        Assert.Equal("small.en", SpeechModels.For(new Profile { SpeechModel = "small.en" }, asr));
+        Assert.Equal("large-v3-turbo", SpeechModels.For(null, asr));
+    }
+
+    [Fact]
+    public void Speech_models_have_names() =>
+        Assert.Equal("Whisper small (English)", SpeechModels.NameOf("small.en"));
+}

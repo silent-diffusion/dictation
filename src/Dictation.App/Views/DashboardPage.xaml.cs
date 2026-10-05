@@ -78,9 +78,11 @@ public partial class DashboardPage : UserControl
             () => ((MainWindow)Window.GetWindow(this)!).ShowProfile(p)));
 
         var dictating = sv.Controller.State != DictationState.Idle;
-        Tiles.Children.Add(Tile("SPEECH RECOGNITION", s.Asr.Model,
-            dictating || sv.Speech.IsReady ? Dot.Ok : Dot.Busy,
-            dictating ? "Dictating…" : sv.Speech.IsReady ? "Loaded" : "Not loaded · loads when you dictate",
+        var speechModel = SpeechModels.For(p, s.Asr);
+        var speechLoaded = string.Equals(sv.Speech.LoadedModel, speechModel, StringComparison.OrdinalIgnoreCase);
+        Tiles.Children.Add(Tile("SPEECH RECOGNITION", speechModel,
+            dictating || speechLoaded ? Dot.Ok : Dot.Busy,
+            dictating ? "Dictating…" : speechLoaded ? "Loaded" : "Not loaded · loads when you dictate",
             (s.Asr.Device == "auto" ? "GPU if available" : s.Asr.Device.ToUpperInvariant()) + " · " +
             (string.IsNullOrEmpty(s.Asr.Language) ? "any language" : s.Asr.Language),
             () => TheApp.ShowPage("Models")));

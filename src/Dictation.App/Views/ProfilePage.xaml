@@ -161,6 +161,19 @@
                 </StackPanel>
             </Border>
 
+            <!-- Speech-to-text model: used by this profile whether or not it uses AI -->
+            <Border Style="{StaticResource Card}" Margin="0,12,0,0">
+                <DockPanel Margin="14,12">
+                    <ComboBox x:Name="SpeechModelBox" DockPanel.Dock="Right" Width="320" DisplayMemberPath="Label" VerticalAlignment="Center"
+                              SelectionChanged="SpeechModelBox_SelectionChanged" AutomationProperties.Name="Speech-to-text model"/>
+                    <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                        <TextBlock Text="Speech-to-text model" TextWrapping="Wrap"/>
+                        <TextBlock FontSize="12" Foreground="{DynamicResource Ob.Muted}" TextWrapping="Wrap" Margin="0,2,0,0"
+                                   Text="The Whisper model that hears you when you dictate with this profile. Only downloaded models are listed (download more under Settings › Models). Switching to a profile with a different model loads it; recording starts right away meanwhile."/>
+                    </StackPanel>
+                </DockPanel>
+            </Border>
+
             <!-- Instructions and behaviour (AI only) -->
             <Grid Margin="0,24,0,0" Visibility="{Binding AutoProcess, Converter={StaticResource B2V}}">
                 <Grid.ColumnDefinitions>

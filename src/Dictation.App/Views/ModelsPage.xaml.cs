@@ -16,15 +16,8 @@ public partial class ModelsPage : UserControl
 {
     sealed record Option(string Id, string Name, string Description, string Size);
 
-    static readonly Option[] SpeechModels =
-    {
-        new("large-v3-turbo", "Whisper large-v3 turbo", "The best balance: nearly the accuracy of large-v3, several times faster. Needs an NVIDIA GPU to keep up.", "1.6 GB"),
-        new("large-v3", "Whisper large-v3", "The most accurate, and the slowest. GPU only.", "3 GB"),
-        new("distil-large-v3", "Distil-Whisper large-v3", "English only. Fast and accurate on a GPU.", "1.5 GB"),
-        new("medium.en", "Whisper medium (English)", "Good accuracy; slow on a CPU.", "1.5 GB"),
-        new("small.en", "Whisper small (English)", "The pick for PCs without an NVIDIA GPU.", "470 MB"),
-        new("base.en", "Whisper base (English)", "Tiny and quick; makes more mistakes.", "145 MB"),
-    };
+    static readonly Option[] SpeechModelOptions = Dictation.Core.Speech.SpeechModels.All
+        .Select(m => new Option(m.Id, m.Name, m.Description, m.Size)).ToArray();
 
     static readonly Option[] LocalModels =
     {
@@ -57,7 +50,7 @@ public partial class ModelsPage : UserControl
 
         // Speech recognition
         SpeechList.Children.Clear();
-        foreach (var m in SpeechModels)
+        foreach (var m in SpeechModelOptions)
         {
             var downloaded = RuntimeInstaller.WhisperModelPresent(m.Id);
             var active = string.Equals(s.Asr.Model, m.Id, StringComparison.OrdinalIgnoreCase);
