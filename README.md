@@ -58,7 +58,8 @@ The folder keeps its pre-rename name so updates from Local Dictation 1.x keep yo
 
 The sidebar has five sections: **Active dashboard** (one screen, no scrolling: what's active and loaded, dials for
 words today, turnaround, AI edits kept, history and the speech model's unload countdown, and charts of words per day and
-the apps you dictate into), **Speech to text** (profiles), **Read aloud**, **History** and **Settings**.
+the apps you dictate into), **Speech to text** (profiles), **Read aloud**, **History** and **Settings**. Hide the sidebar
+with its chevron (or **Ctrl+B**) to give the page the whole window; the ☰ button brings it back.
 
 * **Hotkey** (default `Ctrl+Space`, change under *Hotkeys*): start/stop. `Ctrl+Alt+P` cycles profiles.
 * **Overlay**: a pill, always on top, never steals focus. Small while you talk (timer, level meter, active profile, `✕` cancels);
@@ -95,9 +96,9 @@ the apps you dictate into), **Speech to text** (profiles), **Read aloud**, **His
   The **Try it** panel runs a profile on sample text and shows what it changed, so you can tune prompts without dictating.
   It follows the profile's switches: with *preview before inserting* the real preview appears, with *read aloud after
   inserting* the result is read to you.
-* **History**: the last 50 dictations (adjustable under *Settings › History*), kept in Oberton's data folder so they survive
+* **History**: the last 50 dictations (adjustable under *Settings › History*, up to *All of them*), kept in Oberton's data folder so they survive
   updates. Each has its recording (play it, also at 2×), the Transcription, AI Edit and Inserted boxes,
-  and the app and window it went into. List them newest first, or grouped by app.
+  and the app and window it went into. List them newest first, or grouped by app (each app's group folds away).
 * **Models** (*Settings › Models*): every speech, AI and voice model as a list, showing whether it is downloaded, active and
   loaded, with **Download** and **Use this** buttons. Cloud models are marked CLOUD.
 * **Model unloading** (*Settings*): unload models unused for 5 minutes to 4 hours (default 30 minutes), or never. Dictating

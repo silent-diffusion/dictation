@@ -58,6 +58,7 @@ public partial class HistoryPage : UserControl
         var n = App.Services.History.Entries.Count;
         CountText.Text = !s.KeepHistory
             ? "History is off (Settings › History). Earlier dictations stay until you clear them."
+            : s.HistoryLimit <= 0 ? $"{n} dictations, all kept on this PC (they survive updates). Change this under Settings › History."
             : $"{n} of the last {s.HistoryLimit} dictations, kept on this PC (they survive updates). Change how many under Settings › History.";
         EmptyText.Visibility = n == 0 ? Visibility.Visible : Visibility.Collapsed;
     }

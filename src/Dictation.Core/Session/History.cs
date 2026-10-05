@@ -100,7 +100,8 @@ public sealed class HistoryStore
     /// <summary>Drop the oldest entries beyond the limit (also when the limit is lowered).</summary>
     public void Prune()
     {
-        var limit = Math.Max(1, _settings.Current.HistoryLimit);
+        var limit = _settings.Current.HistoryLimit;
+        if (limit <= 0) return; // keep them all
         while (Entries.Count > limit) Delete(Entries[^1]);
     }
 

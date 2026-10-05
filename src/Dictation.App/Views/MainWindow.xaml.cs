@@ -24,6 +24,32 @@ public partial class MainWindow : Window
         Icon = System.Windows.Interop.Imaging.CreateBitmapSourceFromHIcon(
             Services.TrayIcon.CreateIcon().Handle, Int32Rect.Empty, System.Windows.Media.Imaging.BitmapSizeOptions.FromEmptyOptions());
         NavList.SelectedItem = DashboardItem;
+        SetSidebar(!s.Settings.Current.SidebarCollapsed, save: false);
+        PreviewKeyDown += (_, e) =>
+        {
+            if (e.Key == System.Windows.Input.Key.B && System.Windows.Input.Keyboard.Modifiers == System.Windows.Input.ModifierKeys.Control)
+            {
+                SetSidebar(Sidebar.Visibility != Visibility.Visible);
+                e.Handled = true;
+            }
+        };
+    }
+
+    void Collapse_Click(object sender, RoutedEventArgs e) => SetSidebar(false);
+    void Expand_Click(object sender, RoutedEventArgs e) => SetSidebar(true);
+
+    /// <summary>Show or fold away the sidebar; folded, the page gets the whole window.</summary>
+    void SetSidebar(bool visible, bool save = true)
+    {
+        Sidebar.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        SidebarColumn.Width = visible ? new GridLength(268) : new GridLength(0);
+        ExpandButton.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
+        // Keep the page's top-left content clear of the floating button.
+        Host.Margin = visible ? new Thickness(0) : new Thickness(32, 0, 0, 0);
+        if (!save) return;
+        var settings = App.Services.Settings;
+        settings.Current.SidebarCollapsed = !visible;
+        settings.Save();
     }
 
     void UpdateDots()
