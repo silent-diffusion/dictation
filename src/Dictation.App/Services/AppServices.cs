@@ -36,8 +36,12 @@ public sealed class AppServices
     public DictationController Controller { get; }
     /// <summary>Recent dictations, kept in data\history.</summary>
     public HistoryStore History { get; }
+    /// <summary>Daily counts for the dashboard (no text), in data\usage.json.</summary>
+    public UsageStore Usage { get; }
     /// <summary>Read aloud's voice (Kokoro); its process starts on first use.</summary>
     public KokoroSpeech Tts { get; }
+    /// <summary>Every Read aloud voice: Kokoro's and the ones installed with Windows.</summary>
+    public SpeechVoices Voices { get; }
     public AppStatus Status { get; } = new();
 
     public AppServices()
@@ -48,8 +52,10 @@ public sealed class AppServices
         Llm = new OllamaTextProcessor(Settings, OllamaHost);
         Inserter = new TextInserter(Settings);
         History = new HistoryStore(Settings);
-        Controller = new DictationController(Mic, Speech, Llm, Inserter, Settings, Profiles, History);
+        Usage = new UsageStore(UsageStore.DefaultPath, History.Entries);
+        Controller = new DictationController(Mic, Speech, Llm, Inserter, Settings, Profiles, History, Usage);
         Tts = new KokoroSpeech(Settings);
+        Voices = new SpeechVoices(Tts);
 
         var d = Application.Current.Dispatcher;
         Speech.StatusChanged += (s, ok) => d.BeginInvoke(() => { Status.Speech = "Speech: " + s; Status.SpeechOk = ok; });

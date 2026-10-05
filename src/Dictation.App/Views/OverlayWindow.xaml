@@ -117,34 +117,42 @@
 
             <!-- Receipt, expanded by a click: what you said next to what the AI made of it -->
             <!-- What you said · what the AI changed (struck through / added) · the clean text that was inserted -->
+            <!-- The three boxes: what you said · what the AI changed (struck through / added) · the text that goes in.
+                 In a preview the last one is in focus: larger and more solid, the other two dimmed. -->
             <Grid x:Name="Compare" Margin="0,6,10,8" Visibility="Collapsed">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="20"/>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="20"/>
-                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition x:Name="InsertColumn" Width="*"/>
                 </Grid.ColumnDefinitions>
-                <StackPanel>
+                <StackPanel x:Name="RawPanel" VerticalAlignment="Top">
                     <TextBlock Text="Transcription" Foreground="#99FFFFFF" FontFamily="Cascadia Mono, Consolas" FontSize="11" Margin="0,0,0,6"/>
                     <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto" Focusable="False">
                         <TextBlock x:Name="CompareRaw" Foreground="#D9FFFFFF" FontSize="14" LineHeight="21" TextWrapping="Wrap"/>
                     </ScrollViewer>
                 </StackPanel>
                 <Border Grid.Column="1" Width="1" Background="#26FFFFFF" HorizontalAlignment="Center"/>
-                <StackPanel Grid.Column="2">
+                <StackPanel x:Name="EditPanel" Grid.Column="2" VerticalAlignment="Top">
                     <TextBlock Text="AI Edit" Foreground="#99FFFFFF" FontFamily="Cascadia Mono, Consolas" FontSize="11" Margin="0,0,0,6"/>
                     <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto" Focusable="False">
                         <TextBlock x:Name="CompareEdited" Foreground="White" FontSize="14" LineHeight="21" TextWrapping="Wrap"/>
                     </ScrollViewer>
                 </StackPanel>
-                <Border Grid.Column="3" Width="1" Background="#26FFFFFF" HorizontalAlignment="Center"/>
-                <StackPanel Grid.Column="4">
-                    <TextBlock Text="Inserted" Foreground="#99FFFFFF" FontFamily="Cascadia Mono, Consolas" FontSize="11" Margin="0,0,0,6"/>
-                    <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto" Focusable="False">
-                        <TextBlock x:Name="CompareInserted" Foreground="White" FontSize="14" LineHeight="21" TextWrapping="Wrap"/>
-                    </ScrollViewer>
-                </StackPanel>
+                <Border x:Name="InsertDivider" Grid.Column="3" Width="1" Background="#26FFFFFF" HorizontalAlignment="Center"/>
+                <Border x:Name="InsertFrame" Grid.Column="4" CornerRadius="12" BorderThickness="1" BorderBrush="Transparent"
+                        Background="Transparent" VerticalAlignment="Top" RenderTransformOrigin="0.5,0.5">
+                    <Border.RenderTransform>
+                        <ScaleTransform x:Name="InsertScale" ScaleX="1" ScaleY="1"/>
+                    </Border.RenderTransform>
+                    <StackPanel>
+                        <TextBlock x:Name="InsertLabel" Text="Inserted" Foreground="#99FFFFFF" FontFamily="Cascadia Mono, Consolas" FontSize="11" Margin="0,0,0,6"/>
+                        <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto" Focusable="False">
+                            <TextBlock x:Name="CompareInserted" Foreground="White" FontSize="14" LineHeight="21" TextWrapping="Wrap"/>
+                        </ScrollViewer>
+                    </StackPanel>
+                </Border>
             </Grid>
 
             <DockPanel x:Name="Actions" Margin="0,4,0,6" LastChildFill="False" Visibility="Collapsed">

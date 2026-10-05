@@ -24,8 +24,9 @@ log = logging.getLogger("tts")
 
 
 def lang_for(voice):
-    """Kokoro voice names start with a language letter: a = American English, b = British English."""
-    return "en-gb" if voice.startswith("b") else "en-us"
+    """Kokoro voice names start with a language letter: a = American English, b = British English, e = Spanish,
+    f = French, h = Hindi, i = Italian, p = Brazilian Portuguese."""
+    return {"b": "en-gb", "e": "es", "f": "fr-fr", "h": "hi", "i": "it", "p": "pt-br"}.get(voice[:1], "en-us")
 
 
 class Engine:

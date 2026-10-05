@@ -214,6 +214,49 @@ public sealed class TextInserter
         return await EnsureForegroundAsync(target, ct);
     }
 
+    /// <summary>
+    /// Type a short piece straight into the target, keystroke by keystroke (no clipboard), for text that streams in
+    /// as it is heard. Pieces with line breaks, and apps set to paste, go through <see cref="InsertAsync"/>.
+    /// Never steals focus: if the target isn't in front any more, it throws.
+    /// </summary>
+    public async Task TypeAsync(string text, InsertionTarget target, CancellationToken ct = default)
+    {
+        var s = _settings.Current;
+        if (text.Contains('\n') || s.AppOverrides.TryGetValue(target.ProcessName, out var o) && o == InsertionMode.Clipboard)
+        {
+            await InsertAsync(text, target, ct);
+            return;
+        }
+        await WaitForModifiersReleasedAsync(ct);
+        if (!target.IsAlive || Native.GetForegroundWindow() != target.Hwnd)
+            throw new UserFacingException("The app you were dictating into isn't in front any more.");
+        await _typing.InsertAsync(text, target, ct);
+    }
+
+    /// <summary>Erase the last <paramref name="text"/> typed (one Backspace per character) in the target.</summary>
+    public async Task EraseAsync(string text, InsertionTarget target, CancellationToken ct = default)
+    {
+        var count = text.Count(c => !char.IsLowSurrogate(c)); // one Backspace removes a whole surrogate pair
+        if (count == 0) return;
+        await WaitForModifiersReleasedAsync(ct);
+        if (!target.IsAlive || Native.GetForegroundWindow() != target.Hwnd)
+            throw new UserFacingException("The app you were dictating into isn't in front any more.");
+        const int batch = 4; // a few at a time, like typing: Chromium apps drop floods of keystrokes
+        for (var i = 0; i < count; i += batch)
+        {
+            ct.ThrowIfCancellationRequested();
+            var n = Math.Min(batch, count - i);
+            var inputs = new Native.INPUT[n * 2];
+            for (var k = 0; k < n; k++)
+            {
+                inputs[k * 2] = Native.Key(Native.VK_BACK, 0, 0);
+                inputs[k * 2 + 1] = Native.Key(Native.VK_BACK, 0, Native.KEYEVENTF_KEYUP);
+            }
+            Native.Send(inputs);
+            if (i + n < count) await Task.Delay(10, ct);
+        }
+    }
+
     /// <summary>Delete the current selection in the focused app (Backspace).</summary>
     public async Task DeleteSelectionAsync(CancellationToken ct = default)
     {

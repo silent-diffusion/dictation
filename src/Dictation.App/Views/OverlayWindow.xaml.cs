@@ -5,6 +5,7 @@ using System.Windows.Documents;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Windows.Media.Effects;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 using Dictation.Core.Insertion;
@@ -55,7 +56,7 @@ public partial class OverlayWindow : Window
     {
         InitializeComponent();
         _drag = new WindowDrag(this);
-        _hideTimer.Tick += (_, _) => { _hideTimer.Stop(); if (!_pinnedByState) Hide(); };
+        _hideTimer.Tick += (_, _) => { _hideTimer.Stop(); if (!_pinnedByState) Conceal(); };
         _clockTimer.Tick += (_, _) => TitleText.Text = FormatClock(_recordClock.Elapsed);
         SizeChanged += (_, _) => Reposition();
         for (var i = 0; i < WaveBars; i++)
@@ -111,6 +112,22 @@ public partial class OverlayWindow : Window
         Reposition();
     }
 
+    /// <summary>
+    /// Hide without leaving the last picture behind: Windows shows a layered window's last frame again for a moment
+    /// when it reappears, which flashed the old receipt at the start of the next dictation. So render one fully
+    /// transparent frame first, then hide.
+    /// </summary>
+    void Conceal()
+    {
+        _hideTimer.Stop();
+        if (!IsVisible) return;
+        Opacity = 0;
+        Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
+        {
+            if (Opacity == 0 && !_pinnedByState) Hide(); // unless it was shown again meanwhile
+        });
+    }
+
     void HideAfter(TimeSpan delay)
     {
         _hideTimer.Interval = delay;
@@ -131,6 +148,7 @@ public partial class OverlayWindow : Window
         BodyText.Visibility = Actions.Visibility = Compare.Visibility = LiveText.Visibility = Visibility.Collapsed;
         _receipt = null;
         _compareOpen = false;
+        FocusInserted(false);
         Card.Cursor = null;
         CancelButton.ToolTip = "Cancel";
         BodyText.Foreground = Brushes.White;
@@ -158,12 +176,6 @@ public partial class OverlayWindow : Window
     void ShowBody(string text)
     {
         BodyText.Text = Tail(text, 260);
-        BodyText.Visibility = Visibility.Visible;
-    }
-
-    void ShowDiff(string raw, string edited)
-    {
-        DiffText.Render(BodyText, WordDiff.Compute(raw, edited), DiffRemoved, DiffAdded, maxWords: 60);
         BodyText.Visibility = Visibility.Visible;
     }
 
@@ -236,10 +248,10 @@ public partial class OverlayWindow : Window
                 CheckIcon.Visibility = Visibility.Visible;
                 TitleText.Text = "Ready to insert";
                 ShowChip(profileName);
-                ShowDiff(raw, preview);
+                ShowPreviewBoxes(raw, preview, App.Services.Profiles.Active.AutoProcess);
                 InsertButton.Content = string.IsNullOrEmpty(_hotkey) ? "Insert" : $"Insert   {_hotkey}";
                 Actions.Visibility = Visibility.Visible;
-                width = WideWidth;
+                width = CompareWideWidth;
                 expanded = true;
                 break;
 
@@ -314,25 +326,65 @@ public partial class OverlayWindow : Window
     {
         _compareOpen = true;
         BodyText.Visibility = Visibility.Collapsed;
-        CompareRaw.Text = r.Raw;
-        CompareInserted.Text = r.Inserted.Trim();
-        if (r.AiEdit != null)
+        FillCompare(r.Raw, r.AiEdit, r.Inserted, r.SafetyNet
+            ? "The safety net rejected the AI's edit, so your words went in as spoken."
+            : "No AI edit for this dictation.");
+        CancelButton.Visibility = Visibility.Visible; // closes the receipt
+        CancelButton.ToolTip = "Close";
+        Card.Cursor = null;
+        Display(CompareWideWidth, expanded: true);
+    }
+
+    void FillCompare(string raw, string? aiEdit, string inserted, string noEdit)
+    {
+        CompareRaw.Text = raw;
+        CompareInserted.Text = inserted.Trim();
+        if (aiEdit != null)
         {
             CompareEdited.Foreground = Brushes.White;
-            DiffText.Render(CompareEdited, WordDiff.Compute(r.Raw, r.AiEdit.Trim()), DiffRemoved, DiffAdded);
+            DiffText.Render(CompareEdited, WordDiff.Compute(raw, aiEdit.Trim()), DiffRemoved, DiffAdded);
         }
         else
         {
             CompareEdited.Inlines.Clear();
             CompareEdited.Foreground = Muted;
-            CompareEdited.Text = r.SafetyNet ? "The safety net rejected the AI's edit, so your words went in as spoken."
-                : "No AI edit for this dictation.";
+            CompareEdited.Text = noEdit;
         }
         Compare.Visibility = Visibility.Visible;
-        CancelButton.Visibility = Visibility.Visible; // closes the receipt
-        CancelButton.ToolTip = "Close";
-        Card.Cursor = null;
-        Display(CompareWideWidth, expanded: true);
+    }
+
+    /// <summary>Before inserting: the three boxes, with the one that will go in brought forward.</summary>
+    void ShowPreviewBoxes(string raw, string toInsert, bool usesAi)
+    {
+        FillCompare(raw, usesAi ? toInsert : null, toInsert, "No AI edit: this profile doesn't use AI.");
+        FocusInserted(true);
+    }
+
+    /// <summary>The Inserted box pops out (a little larger, on a more solid backing); the other two step back.</summary>
+    void FocusInserted(bool on)
+    {
+        RawPanel.Opacity = EditPanel.Opacity = on ? 0.45 : 1;
+        InsertColumn.Width = new GridLength(on ? 1.4 : 1, GridUnitType.Star);
+        InsertDivider.Visibility = on ? Visibility.Hidden : Visibility.Visible;
+        InsertFrame.Background = on ? new SolidColorBrush(Color.FromArgb(0x24, 0xFF, 0xFF, 0xFF)) : Brushes.Transparent;
+        InsertFrame.BorderBrush = on ? new SolidColorBrush(Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF)) : Brushes.Transparent;
+        InsertFrame.Padding = on ? new Thickness(14, 10, 14, 12) : new Thickness(0);
+        InsertFrame.Effect = on ? new DropShadowEffect { BlurRadius = 18, ShadowDepth = 2, Opacity = 0.45 } : null;
+        InsertLabel.Foreground = on ? Brushes.White : new SolidColorBrush(Color.FromArgb(0x99, 0xFF, 0xFF, 0xFF));
+        CompareInserted.FontSize = on ? 15.5 : 14;
+        CompareInserted.LineHeight = on ? 23 : 21;
+        if (on)
+        {
+            var pop = new DoubleAnimation(0.96, 1.02, TimeSpan.FromMilliseconds(220)) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } };
+            InsertScale.BeginAnimation(ScaleTransform.ScaleXProperty, pop);
+            InsertScale.BeginAnimation(ScaleTransform.ScaleYProperty, pop);
+        }
+        else
+        {
+            InsertScale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
+            InsertScale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
+            InsertScale.ScaleX = InsertScale.ScaleY = 1;
+        }
     }
 
     void Card_MouseEnter(object sender, System.Windows.Input.MouseEventArgs e)
@@ -446,7 +498,7 @@ public partial class OverlayWindow : Window
     void Cancel_Click(object sender, RoutedEventArgs e)
     {
         if (_trial != null) { EndTrial(null); return; }
-        if (_receipt != null) { _hideTimer.Stop(); Hide(); return; } // closing a receipt, not cancelling a dictation
+        if (_receipt != null) { Conceal(); return; } // closing a receipt, not cancelling a dictation
         CancelRequested?.Invoke();
     }
     void Insert_Click(object sender, RoutedEventArgs e)
@@ -470,7 +522,7 @@ public partial class OverlayWindow : Window
     /// The same preview a dictation gets, for Try it: the edit with Insert, Use original and Discard. Returns the text
     /// that would be inserted, or null when discarded. Nothing is inserted anywhere.
     /// </summary>
-    public Task<string?> PreviewTrialAsync(string profileName, string raw, string edited)
+    public Task<string?> PreviewTrialAsync(string profileName, string raw, string edited, bool usesAi = true)
     {
         EndTrial(null);
         ResetView();
@@ -481,10 +533,10 @@ public partial class OverlayWindow : Window
         CheckIcon.Visibility = Visibility.Visible;
         TitleText.Text = "Ready to insert";
         ShowChip("Try it · " + profileName);
-        ShowDiff(raw, edited);
+        ShowPreviewBoxes(raw, edited, usesAi);
         InsertButton.Content = "Insert";
         Actions.Visibility = Visibility.Visible;
-        Display(WideWidth, expanded: true);
+        Display(CompareWideWidth, expanded: true);
         return tcs.Task;
     }
 

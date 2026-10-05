@@ -4,6 +4,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using Dictation.Core.Infrastructure;
 using Dictation.Core.Settings;
+using Dictation.Core.Speech;
 using Dictation.Core.Text;
 
 namespace Dictation.App.Views;
@@ -21,12 +22,60 @@ public partial class ProfilePage : UserControl
         ShowAiColumn();
         profile.PropertyChanged += OnProfileChanged;
         Unloaded += (_, _) => profile.PropertyChanged -= OnProfileChanged;
-        Loaded += async (_, _) =>
-        {
-            var models = await App.Services.Llm.ListModelsAsync();
-            // Local models first; cloud models (sent only while "Keep everything offline" is off) after them.
-            ModelBox.ItemsSource = models.Concat(CloudModels.Catalog(App.Services.Settings.Current.Cloud).Select(c => c.Id)).ToList();
-        };
+        FillVoices();
+        Loaded += async (_, _) => FillModels(await App.Services.Llm.ListModelsAsync());
+    }
+
+    /// <summary>A choice in one of the page's drop-downs; Value "" = use the app-wide setting.</summary>
+    sealed record Choice(string Label, string Value);
+    bool _filling;
+
+    /// <summary>Only what can actually run: the models downloaded to this PC, and cloud models that have a key while
+    /// "Keep everything offline" is off. A model the profile names that isn't available any more stays listed (marked)
+    /// so the setting isn't lost silently.</summary>
+    void FillModels(IReadOnlyList<string> downloaded)
+    {
+        var s = App.Services.Settings.Current;
+        var choices = new List<Choice> { new($"Active model ({s.Llm.DefaultModel})", "") };
+        choices.AddRange(downloaded.Select(m => new Choice(m, m)));
+        if (!s.Cloud.KeepOffline)
+            choices.AddRange(CloudModels.Catalog(s.Cloud).Where(c => CloudModels.HasKey(s.Cloud, CloudModels.Split(c.Id).Provider))
+                .Select(c => new Choice($"{c.Name} · cloud", c.Id)));
+        var current = _profile.Model ?? "";
+        if (current.Length > 0 && choices.All(c => !string.Equals(c.Value, current, StringComparison.OrdinalIgnoreCase)))
+            choices.Add(new Choice(current + " (not available)", current));
+        Select(ModelBox, choices, current);
+    }
+
+    void FillVoices()
+    {
+        var s = App.Services.Settings.Current;
+        var choices = new List<Choice> { new($"Read aloud's voice ({VoiceCatalog.ShortName(s.TtsVoice)})", "") };
+        choices.AddRange(VoiceCatalog.Available().Select(v => new Choice(v.Name, v.Id)));
+        var current = _profile.Voice ?? "";
+        if (current.Length > 0 && choices.All(c => c.Value != current))
+            choices.Add(new Choice(VoiceCatalog.ShortName(current) + (VoiceCatalog.IsWindowsVoice(current) ? " (not installed)" : " (download Kokoro under Read aloud)"), current));
+        Select(VoiceBox, choices, current);
+    }
+
+    void Select(ComboBox box, List<Choice> choices, string value)
+    {
+        _filling = true;
+        box.ItemsSource = choices;
+        box.SelectedItem = choices.FirstOrDefault(c => string.Equals(c.Value, value, StringComparison.OrdinalIgnoreCase)) ?? choices[0];
+        _filling = false;
+    }
+
+    void ModelBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_filling || ModelBox.SelectedItem is not Choice c) return;
+        _profile.Model = c.Value.Length == 0 ? null : c.Value;
+    }
+
+    void VoiceBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_filling || VoiceBox.SelectedItem is not Choice c) return;
+        _profile.Voice = c.Value.Length == 0 ? null : c.Value;
     }
 
     void OnProfileChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
@@ -103,7 +152,7 @@ public partial class ProfilePage : UserControl
             {
                 TestOutput.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Muted");
                 TestOutput.Text = "Waiting for your choice in the preview…";
-                var chosen = await ((App)Application.Current).PreviewTrialAsync(_profile.Name, input, result.Text);
+                var chosen = await ((App)Application.Current).PreviewTrialAsync(_profile.Name, input, result.Text, _profile.AutoProcess);
                 if (chosen == null)
                 {
                     TestOutput.Text = "Discarded in the preview: nothing would be inserted.";
@@ -113,7 +162,7 @@ public partial class ProfilePage : UserControl
             }
             TestOutput.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Text");
             TestOutput.Text = final;
-            if (_profile.ReadAloudAfterInsert && final.Trim().Length > 0) ((App)Application.Current).ReadAloud(final.Trim());
+            if (_profile.ReadAloudAfterInsert && final.Trim().Length > 0) ((App)Application.Current).ReadAloud(final.Trim(), App.VoiceFor(_profile));
         }
         catch (UserFacingException ex) { ShowProblem(ex.Message); }
         catch (Exception ex) { Log.Error("Profile test failed", ex); ShowProblem("Something went wrong. See the log."); }

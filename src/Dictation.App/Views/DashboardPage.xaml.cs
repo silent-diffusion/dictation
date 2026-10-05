@@ -61,7 +61,7 @@ public partial class DashboardPage : UserControl
         Summary.Text = sv.Controller.State != DictationState.Idle
             ? $"Dictating with {p.Name} right now."
             : $"Press {s.Hotkey} to dictate with {p.Name}. Select text and press {s.SpeakHotkey} to hear it.";
-        Footer.Text = $"{AppInfo.Name} {AppInfo.VersionText}  ·  " +
+        Footer.Text = $"{AppInfo.Name} {AppInfo.VersionText}  ·  {sv.Usage.TotalWords:N0} words dictated in all  ·  " +
                       (s.Cloud.KeepOffline ? "Everything stays on this PC" : "Cloud AI allowed") +
                       $"  ·  {s.CycleProfileHotkey} switches profile  ·  models unload after {unload} unused";
 
@@ -92,28 +92,31 @@ public partial class DashboardPage : UserControl
             _loadedAi.Count == 0 ? "Nothing in memory" : "In memory: " + string.Join(", ", _loadedAi),
             () => TheApp.ShowPage("Models")));
 
-        var installed = RuntimeInstaller.ReadAloudInstalled;
-        var voice = KokoroSpeech.Voices.FirstOrDefault(v => v.Id == s.TtsVoice)?.Name ?? s.TtsVoice;
-        Tiles.Children.Add(Tile("READ ALOUD", installed ? voice.Split(" (")[0] : "Not installed",
-            sv.Tts.IsRunning ? Dot.Ok : installed ? Dot.Busy : Dot.Off,
-            sv.Tts.IsRunning ? "Voice loaded" : installed ? "Starts when you read" : "Downloads on first use",
+        var voiceId = App.VoiceFor(p);
+        var windowsVoice = VoiceCatalog.IsWindowsVoice(voiceId);
+        var installed = windowsVoice || RuntimeInstaller.ReadAloudInstalled;
+        Tiles.Children.Add(Tile("READ ALOUD", installed ? VoiceCatalog.ShortName(voiceId) : "Not installed",
+            windowsVoice || sv.Tts.IsRunning ? Dot.Ok : installed ? Dot.Busy : Dot.Off,
+            windowsVoice ? "Windows voice · ready" : sv.Tts.IsRunning ? "Voice loaded" : installed ? "Starts when you read" : "Downloads on first use",
             $"{s.TtsBaseSpeed:0.00}× · {s.SpeakHotkey}",
             () => TheApp.ShowPage("ReadAloud")));
 
         // ----- dials -----
         Dials.Children.Clear();
-        var days = HistoryStats.PerDay(entries, now);
+        // Figures come from the daily counts (UsageStore), which survive History being trimmed, cleared or off.
+        var usage = sv.Usage;
+        var days = usage.PerDay(now);
         var today = days[^1].Words;
         var best = days.Max(d => d.Words);
         Dials.Children.Add(Dial(best > 0 ? today / (double)best : 0, today.ToString("N0"), "Words today",
             best > 0 ? $"best day {best:N0}" : "no dictation yet"));
 
-        var finish = HistoryStats.AverageFinishSeconds(entries);
+        var finish = usage.AverageFinishSeconds(now);
         Dials.Children.Add(Dial(finish is { } f ? Math.Clamp(f / 10.0, 0, 1) : 0, finish is { } f2 ? $"{f2:0.0} s" : "—",
-            "Turnaround", "stop → text in place"));
+            "Turnaround", "stop → text in place, 7 days"));
 
-        var kept = HistoryStats.AiKeptShare(entries);
-        Dials.Children.Add(Dial(kept ?? 0, kept is { } k ? $"{k:P0}" : "—", "AI edits kept", "the rest went in as spoken"));
+        var kept = usage.AiKeptShare(now);
+        Dials.Children.Add(Dial(kept ?? 0, kept is { } k ? $"{k:P0}" : "—", "AI edits kept", "last 30 days"));
 
         Dials.Children.Add(Dial(s.HistoryLimit > 0 ? entries.Count / (double)s.HistoryLimit : entries.Count > 0 ? 1 : 0,
             entries.Count.ToString(), "History", s.HistoryLimit > 0 ? $"of {s.HistoryLimit} kept" : "all kept, no limit"));
@@ -131,11 +134,13 @@ public partial class DashboardPage : UserControl
         }
 
         // ----- charts -----
-        DaysCard.Child = DaysChart(days);
-        AppsCard.Child = AppsChart(HistoryStats.TopApps(entries));
+        DaysCard.Child = DaysChart(days, usage.Streak(now));
+        AppsCard.Child = AppsChart(usage.TopApps(now));
     }
 
     // ===== pieces =====
+
+    const double TileDesignWidth = 220;
 
     FrameworkElement Tile(string label, string title, Dot dot, string status, string detail, Action open)
     {
@@ -157,10 +162,18 @@ public partial class DashboardPage : UserControl
         sub.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Muted");
         panel.Children.Add(sub);
 
+        // Laid out at a fixed design width, then scaled to the tile: the text grows with the window instead of staying
+        // small in a big tile (and still trims long names at that width).
+        panel.Width = TileDesignWidth;
         var card = new Border
         {
             Style = (Style)FindResource("Card"), Margin = new Thickness(4), Padding = new Thickness(14, 10, 14, 10),
-            Child = panel, Cursor = Cursors.Hand, ClipToBounds = true,
+            Child = new Viewbox
+            {
+                Stretch = Stretch.Uniform, Child = panel,
+                HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center,
+            },
+            Cursor = Cursors.Hand, ClipToBounds = true,
         };
         card.MouseLeftButtonUp += (_, _) => open();
         return card;
@@ -240,11 +253,12 @@ public partial class DashboardPage : UserControl
     }
 
     /// <summary>Words per day as columns; today in the accent colour. Hover a day for its numbers.</summary>
-    FrameworkElement DaysChart(IReadOnlyList<DayTotal> days)
+    FrameworkElement DaysChart(IReadOnlyList<DayTotal> days, int streak)
     {
         var root = new DockPanel();
         var total = days.Sum(d => d.Words);
-        var header = Header("WORDS PER DAY · LAST 14 DAYS", $"{total:N0} words · {days.Sum(d => d.Dictations)} dictations");
+        var header = Header("WORDS PER DAY · LAST 14 DAYS", $"{total:N0} words · {days.Sum(d => d.Dictations)} dictations" +
+                                                          (streak > 1 ? $" · {streak}-day streak" : ""));
         DockPanel.SetDock(header, Dock.Top);
         root.Children.Add(header);
         if (total == 0) { root.Children.Add(Empty("Dictate a little and your words per day appear here.")); return root; }
@@ -297,7 +311,7 @@ public partial class DashboardPage : UserControl
     FrameworkElement AppsChart(IReadOnlyList<(string App, int Count)> apps)
     {
         var root = new DockPanel();
-        var header = Header("WHERE YOUR WORDS GO", "dictations per app");
+        var header = Header("WHERE YOUR WORDS GO", "dictations per app · 30 days");
         DockPanel.SetDock(header, Dock.Top);
         root.Children.Add(header);
         if (apps.Count == 0) { root.Children.Add(Empty("The apps you dictate into appear here.")); return root; }

@@ -187,7 +187,7 @@ public partial class App : Application
             var text = r.Inserted.Trim();
             var readIt = Services.Profiles.Active.ReadAloudAfterInsert && text.Length > 0;
             if (Services.Settings.Current.ShowOverlay && (!readIt || r.SafetyNet || r.Note != null)) overlay.ShowReceipt(r);
-            if (readIt) _reader?.Read(text);
+            if (readIt) _reader?.Read(text, VoiceFor(Services.Profiles.Active));
         };
         c.AudioLevel += l => overlay.SetLevel(l);
         c.LiveTranscript += t => overlay.SetLiveTranscript(t);
@@ -248,12 +248,16 @@ public partial class App : Application
         _overlay?.ShowMessage($"Select some text, then press {Services.Settings.Current.SpeakHotkey} to hear it read aloud.", NoticeLevel.Info);
     }
 
-    /// <summary>Read aloud from the app itself (the "Try it" button in settings).</summary>
-    public void ReadAloud(string text) => _reader?.Read(text);
+    /// <summary>Read aloud from the app itself (the Try it buttons). <paramref name="voice"/> null = the active profile's.</summary>
+    public void ReadAloud(string text, string? voice = null) => _reader?.Read(text, voice);
+
+    /// <summary>The voice a profile reads with: its own, or Read aloud's.</summary>
+    public static string VoiceFor(Dictation.Core.Settings.Profile? p) =>
+        string.IsNullOrWhiteSpace(p?.Voice) ? Services.Settings.Current.TtsVoice : p.Voice!;
 
     /// <summary>A profile page's Try it shows the dictation preview; the result is the text that would go in, or null.</summary>
-    public Task<string?> PreviewTrialAsync(string profileName, string raw, string edited) =>
-        _overlay?.PreviewTrialAsync(profileName, raw, edited) ?? Task.FromResult<string?>(edited);
+    public Task<string?> PreviewTrialAsync(string profileName, string raw, string edited, bool usesAi) =>
+        _overlay?.PreviewTrialAsync(profileName, raw, edited, usesAi) ?? Task.FromResult<string?>(edited);
 
     /// <summary>Called by the Speech page when the user presses "Apply and restart engine".</summary>
     public static async Task RestartSpeechAsync()

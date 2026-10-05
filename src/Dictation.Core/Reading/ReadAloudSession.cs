@@ -17,7 +17,7 @@ public sealed class ReadAloudSession : IWaveProvider, IDisposable
     public const double MinSpeed = 0.5, MaxSpeed = 2.0, SpeedStep = 0.1;
     const int LookAhead = 2;
 
-    readonly KokoroSpeech _tts;
+    readonly ISpeechSynthesizer _tts;
     readonly string _voice;
     readonly float[]?[] _audio;
     readonly string[] _speakable;
@@ -33,7 +33,7 @@ public sealed class ReadAloudSession : IWaveProvider, IDisposable
     bool _paused, _ended;
     double _secondsPerChar = ReadAloudText.DefaultSecondsPerChar; // at speed 1, learned from the real audio
 
-    public ReadAloudSession(string text, KokoroSpeech tts, string voice, double speed)
+    public ReadAloudSession(string text, ISpeechSynthesizer tts, string voice, double speed)
     {
         Text = text;
         _tts = tts;

@@ -21,8 +21,9 @@
             </Border>
 
             <TextBlock Text="Voice" Style="{StaticResource FieldLabel}" Margin="0,24,0,6"/>
-            <ComboBox x:Name="VoiceBox" Width="300" HorizontalAlignment="Left" DisplayMemberPath="Name" SelectedValuePath="Id"
+            <ComboBox x:Name="VoiceBox" Width="380" MaxDropDownHeight="420" HorizontalAlignment="Left" DisplayMemberPath="Name" SelectedValuePath="Id"
                       SelectedValue="{Binding TtsVoice}" AutomationProperties.Name="Voice"/>
+            <TextBlock x:Name="VoiceNote" Style="{StaticResource Caption}" Margin="0,6,0,0"/>
 
             <TextBlock Text="Base speed" Style="{StaticResource FieldLabel}" Margin="0,20,0,6"/>
             <StackPanel Orientation="Horizontal">
@@ -43,6 +44,21 @@
             </StackPanel>
             <TextBlock Style="{StaticResource Caption}" Margin="0,6,0,0"
                        Text="How much of the player's dark background shows; the text stays solid. The dictation pill has its own setting under Appearance."/>
+
+            <TextBlock Text="Player position" Style="{StaticResource FieldLabel}" Margin="0,20,0,6"/>
+            <CheckBox x:Name="SamePlaceBox" Style="{StaticResource Switch}" Content="Same place as the dictation overlay"
+                      Checked="SamePlace_Changed" Unchecked="SamePlace_Changed" HorizontalAlignment="Left"/>
+            <StackPanel x:Name="ReaderPositionPanel" Orientation="Horizontal" Margin="0,6,0,0">
+                <!-- A miniature screen; click where the player should sit -->
+                <Border Width="220" Height="124" CornerRadius="8" BorderThickness="1" BorderBrush="{DynamicResource Ob.Border}"
+                        Background="{DynamicResource Ob.Window}">
+                    <UniformGrid x:Name="ReaderPositionGrid" Rows="3" Columns="3" Margin="4" AutomationProperties.Name="Player position"/>
+                </Border>
+                <TextBlock x:Name="ReaderPositionName" Margin="14,0,0,0" VerticalAlignment="Center" FontSize="12.5"
+                           Foreground="{DynamicResource Ob.Muted}"/>
+            </StackPanel>
+            <TextBlock Style="{StaticResource Caption}" Margin="0,6,0,0"
+                       Text="Put the player somewhere other than the dictation pill if you like. You can also drag it while it reads."/>
 
             <TextBlock Text="How to use it" Style="{StaticResource FieldLabel}" Margin="0,20,0,6"/>
             <TextBlock x:Name="HowTo" Style="{StaticResource Caption}"/>

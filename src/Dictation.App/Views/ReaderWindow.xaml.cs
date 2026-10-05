@@ -8,6 +8,7 @@ using Dictation.Core.Infrastructure;
 using Dictation.Core.Insertion;
 using Dictation.Core.Reading;
 using Dictation.Core.Setup;
+using Dictation.Core.Speech;
 
 namespace Dictation.App.Views;
 
@@ -31,6 +32,7 @@ public partial class ReaderWindow : Window
     Func<Task>? _primary;
     (int Sentence, int Upto) _shown = (-1, -1);
     readonly WindowDrag _drag;
+    string _voice = "af_heart"; // for the reading being started
     // Expanded view: one Span per sentence of the session it was built for; the current one holds three runs.
     readonly List<Span> _fullSentences = new();
     ReadAloudSession? _fullFor;
@@ -67,7 +69,8 @@ public partial class ReaderWindow : Window
         if (_drag.Place()) return; // the user dragged it somewhere
         var wa = SystemParameters.WorkArea;
         const double edge = 8;
-        var pos = (int)App.Services.Settings.Current.OverlayPosition;
+        var settings = App.Services.Settings.Current;
+        var pos = (int)(settings.ReaderPosition ?? settings.OverlayPosition);
         var (column, row) = (pos % 3, pos / 3);
         Left = column switch { 0 => wa.Left + edge, 1 => wa.Left + (wa.Width - ActualWidth) / 2, _ => wa.Right - ActualWidth - edge };
         Top = row switch { 0 => wa.Top + edge, 1 => wa.Top + (wa.Height - ActualHeight) / 2, _ => wa.Bottom - ActualHeight - edge };
@@ -109,9 +112,11 @@ public partial class ReaderWindow : Window
     }
 
     /// <summary>Read <paramref name="text"/> aloud, installing the voice first if needed (after asking).</summary>
-    public void Read(string text)
+    /// <param name="voice">The voice to use; null = the active profile's (or Read aloud's own).</param>
+    public void Read(string text, string? voice = null)
     {
-        if (!RuntimeInstaller.ReadAloudInstalled)
+        _voice = voice ?? App.VoiceFor(App.Services.Profiles.Active);
+        if (!VoiceCatalog.IsWindowsVoice(_voice) && !RuntimeInstaller.ReadAloudInstalled)
         {
             ShowQuestion("Read aloud needs a one-time download",
                 $"Oberton's voice (Kokoro) is about {RuntimeInstaller.ReadAloudDownloadMb} MB. It runs entirely on this PC, " +
@@ -156,12 +161,13 @@ public partial class ReaderWindow : Window
         StopSession();
         text = MarkdownText.ForReading(text); // read Markdown as the plain text it stands for
         var s = App.Services.Settings.Current;
-        var session = new ReadAloudSession(text, App.Services.Tts, s.TtsVoice, s.TtsBaseSpeed);
+        var session = new ReadAloudSession(text, App.Services.Voices, _voice, s.TtsBaseSpeed);
         if (session.Sentences.Count == 0)
         {
             ShowError("There's nothing to read in that text.");
             return;
         }
+        App.Services.Usage.RecordReading(text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length);
         session.Finished += () => Dispatcher.BeginInvoke(OnFinished);
         session.Failed += message => Dispatcher.BeginInvoke(() => ShowError(message));
         _session = session;
@@ -187,7 +193,7 @@ public partial class ReaderWindow : Window
         var ended = s.IsEnded;
         PlayGlyph.Text = ended || s.IsPaused ? "" : ""; // play : pause
         PlayButton.ToolTip = ended ? "Read again" : s.IsPaused ? "Play" : "Pause";
-        SpeedText.Text = $"{s.Speed:0.0}×";
+        SpeedText.Text = $"{s.Speed:0.0#}×"; // 1.65 stays 1.65, not 1.7
         SlowerButton.IsEnabled = s.Speed > ReadAloudSession.MinSpeed + 0.001;
         FasterButton.IsEnabled = s.Speed < ReadAloudSession.MaxSpeed - 0.001;
         var left = s.Remaining;

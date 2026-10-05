@@ -60,7 +60,8 @@ public sealed class AppSettings
     public string CycleProfileHotkey { get; set; } = "Ctrl+Alt+P";
     /// <summary>Read the selected text aloud (or offer the clipboard when nothing is selected).</summary>
     public string SpeakHotkey { get; set; } = "Ctrl+Shift+Space";
-    /// <summary>Kokoro voice id, e.g. af_heart.</summary>
+    /// <summary>Read aloud's voice: a Kokoro voice id (af_heart) or a Windows voice ("win:Microsoft Zira Desktop").
+    /// A profile can pick its own (<see cref="Profile.Voice"/>).</summary>
     public string TtsVoice { get; set; } = "af_heart";
     /// <summary>Default reading speed, 0.5 to 2.0. The reader's +/− buttons change it for one reading only.</summary>
     public double TtsBaseSpeed { get; set; } = 1.0;
@@ -84,6 +85,8 @@ public sealed class AppSettings
     /// <summary>Opacity of the overlay's background (its text stays fully opaque). 0.3 to 1.</summary>
     public double OverlayOpacity { get; set; } = 0.88;
     public OverlayPosition OverlayPosition { get; set; } = OverlayPosition.BottomCenter;
+    /// <summary>Where the Read aloud player sits; null = the same place as the dictation overlay.</summary>
+    public OverlayPosition? ReaderPosition { get; set; }
     public InsertionMode Insertion { get; set; } = InsertionMode.Auto;
     /// <summary>Read a sentence or two around the cursor (locally, via UI Automation) to fix capitalization,
     /// trailing periods and spacing when inserting into the middle of existing text.</summary>
@@ -123,7 +126,7 @@ public sealed class Profile : Bindable
     string _name = "New Profile";
     string _description = "";
     string _prompt = "";
-    string? _model;
+    string? _model, _voice;
     bool _autoProcess = true, _showPreview, _preserveParagraphs = true, _removeFillers = true, _rewriteWhole, _readAloud;
     double _maxChangeRatio = 0.5;
 
@@ -133,6 +136,8 @@ public sealed class Profile : Bindable
     public string Prompt { get => _prompt; set => Set(ref _prompt, value); }
     /// <summary>Ollama model tag; null/empty = use the global default model.</summary>
     public string? Model { get => _model; set => Set(ref _model, value); }
+    /// <summary>Read aloud voice for this profile (see <see cref="AppSettings.TtsVoice"/>); null/empty = Read aloud's own.</summary>
+    public string? Voice { get => _voice; set => Set(ref _voice, value); }
     public bool AutoProcess { get => _autoProcess; set => Set(ref _autoProcess, value); }
     public bool ShowPreview { get => _showPreview; set => Set(ref _showPreview, value); }
     public bool PreserveParagraphs { get => _preserveParagraphs; set => Set(ref _preserveParagraphs, value); }
