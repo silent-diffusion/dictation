@@ -16,20 +16,51 @@ public partial class ReadAloudPage : UserControl
     {
         InitializeComponent();
         var s = App.Services.Settings.Current;
-        VoiceBox.ItemsSource = VoiceCatalog.All();
         DataContext = s;
-        var windows = WindowsSpeech.InstalledVoices().Count;
-        VoiceNote.Text = $"{VoiceCatalog.KokoroVoices.Count} Kokoro voices (natural; one download, English plus Spanish, French, " +
-                         $"Italian, Portuguese and Hindi) and {windows} voice{(windows == 1 ? "" : "s")} installed with Windows " +
-                         "(instant, no download). A profile can use its own voice: see its page under Speech to text.";
+        _filling = true;
+        ModelBox.ItemsSource = VoiceCatalog.Models;
+        ModelBox.SelectedItem = VoiceCatalog.Model(VoiceCatalog.ModelOf(s.TtsVoice));
+        _filling = false;
+        FillVoices();
         BuildPositionPicker();
-        Intro.Text = "Select text in any app and press " + s.SpeakHotkey + " to hear it. The voice (Kokoro) runs on this PC; " +
+        Intro.Text = "Select text in any app and press " + s.SpeakHotkey + " to hear it. The voices run on this PC; " +
                      "nothing you read is sent anywhere.";
         HowTo.Text = $"Select text, then press {s.SpeakHotkey}. With nothing selected, Oberton offers to read your clipboard. " +
                      "Press the shortcut again (or ✕) to stop. Change the shortcut under Hotkeys.";
         ShowStatus();
         AutoSave.Hook(this, () => App.Services.Settings.Save());
         Unloaded += (_, _) => _install?.Cancel();
+    }
+
+    /// <summary>A voice in the list; ones that still need downloading say so.</summary>
+    sealed record VoiceItem(string Id, string Label);
+    bool _filling;
+
+    void FillVoices()
+    {
+        var s = App.Services.Settings.Current;
+        var model = (ModelBox.SelectedItem as TtsModel)?.Id ?? VoiceCatalog.Kokoro;
+        ModelNote.Text = VoiceCatalog.Model(model).Description;
+        var items = VoiceCatalog.VoicesOf(model).Select(v => new VoiceItem(v.Id,
+            v.Name + (VoiceCatalog.IsInstalled(v.Id) ? "" : VoiceCatalog.FindPiper(v.Id) is { } p ? $" · download {p.Mb} MB" : " · download"))).ToList();
+        _filling = true;
+        VoiceBox.ItemsSource = items;
+        VoiceBox.SelectedItem = items.FirstOrDefault(i => i.Id == s.TtsVoice);
+        _filling = false;
+        if (VoiceBox.SelectedItem == null && items.Count > 0) VoiceBox.SelectedItem = items[0]; // a different model: its first voice
+        if (items.Count == 0) ModelNote.Text += " No Windows voices are installed; add some under Windows Settings › Time & language › Speech.";
+    }
+
+    void ModelBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_filling) FillVoices();
+    }
+
+    void VoiceBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_filling || VoiceBox.SelectedItem is not VoiceItem v) return;
+        App.Services.Settings.Current.TtsVoice = v.Id;
+        ShowStatus();
     }
 
     void BuildPositionPicker()
@@ -81,13 +112,18 @@ public partial class ReadAloudPage : UserControl
 
     void ShowStatus()
     {
-        var installed = RuntimeInstaller.ReadAloudInstalled;
-        StatusText.Text = installed ? "Voice installed" : "Voice not installed yet";
-        StatusDetail.Text = installed
-            ? "Ready to read."
+        var voice = App.Services.Settings.Current.TtsVoice;
+        var installed = VoiceCatalog.IsInstalled(voice);
+        var name = VoiceCatalog.ShortName(voice);
+        var piper = VoiceCatalog.FindPiper(voice);
+        StatusText.Text = installed ? $"{name} is ready" : piper != null ? $"{name} isn't downloaded yet" : 
+            VoiceCatalog.IsWindowsVoice(voice) ? $"{name} isn't installed" : "Kokoro isn't downloaded yet";
+        StatusDetail.Text = installed ? $"{VoiceCatalog.Model(VoiceCatalog.ModelOf(voice)).Name} · ready to read."
+            : piper != null ? $"A one-time download of about {piper.Mb} MB, also offered the first time you use it."
+            : VoiceCatalog.IsWindowsVoice(voice) ? "That Windows voice isn't on this PC any more. Pick another one."
             : $"A one-time download of about {RuntimeInstaller.ReadAloudDownloadMb} MB, also offered the first time you use Read aloud.";
         InstallButton.Content = "Download voice";
-        InstallButton.Visibility = installed ? Visibility.Collapsed : Visibility.Visible;
+        InstallButton.Visibility = installed || VoiceCatalog.IsWindowsVoice(voice) ? Visibility.Collapsed : Visibility.Visible;
         TryButton.IsEnabled = true;
     }
 
@@ -105,8 +141,12 @@ public partial class ReadAloudPage : UserControl
         });
         try
         {
-            await new RuntimeInstaller(App.Services.Settings, App.Services.OllamaHost).InstallReadAloudAsync(progress, _install.Token);
+            var installer = new RuntimeInstaller(App.Services.Settings, App.Services.OllamaHost);
+            if (VoiceCatalog.FindPiper(App.Services.Settings.Current.TtsVoice) is { } piper)
+                await installer.InstallPiperVoiceAsync(piper, progress, _install.Token);
+            else await installer.InstallReadAloudAsync(progress, _install.Token);
             ShowStatus();
+            FillVoices(); // drop the "download" marks
         }
         catch (OperationCanceledException) { ShowStatus(); }
         catch (UserFacingException ex) { ShowStatus(); StatusDetail.Text = ex.Message; }

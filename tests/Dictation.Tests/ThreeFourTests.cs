@@ -92,14 +92,32 @@ public class UsageStoreTests
 public class VoiceTests
 {
     [Fact]
-    public void Kokoro_voices_are_unique_and_include_the_old_default()
+    public void Kokoro_keeps_its_eight_voices()
     {
         var ids = VoiceCatalog.KokoroVoices.Select(v => v.Id).ToList();
-        Assert.Equal(ids.Count, ids.Distinct().Count());
+        Assert.Equal(8, ids.Count);
         Assert.Contains("af_heart", ids);
-        Assert.True(ids.Count >= 30);
-        // Only languages the voice server knows how to pronounce.
-        Assert.All(ids, id => Assert.Contains(id[..1], "abefhip"));
+        Assert.All(ids, id => Assert.Equal(VoiceCatalog.Kokoro, VoiceCatalog.ModelOf(id)));
+    }
+
+    [Fact]
+    public void There_are_three_models_and_every_voice_knows_its_model()
+    {
+        Assert.Equal(new[] { VoiceCatalog.Kokoro, VoiceCatalog.Piper, VoiceCatalog.Windows }, VoiceCatalog.Models.Select(m => m.Id));
+        Assert.All(VoiceCatalog.PiperVoices, v => Assert.Equal(VoiceCatalog.Piper, VoiceCatalog.ModelOf(v.Id)));
+        Assert.Equal(VoiceCatalog.Windows, VoiceCatalog.ModelOf("win:Microsoft Zira Desktop"));
+        Assert.Equal(VoiceCatalog.Kokoro, VoiceCatalog.ModelOf(null));
+    }
+
+    [Fact]
+    public void Piper_voices_download_from_the_piper_voices_repository()
+    {
+        var lessac = VoiceCatalog.PiperVoices.First(v => v.Name == "en_US-lessac-medium");
+        Assert.Equal("piper:en_US-lessac-medium", lessac.Id);
+        Assert.Equal("https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/medium/en_US-lessac-medium.onnx", lessac.Url);
+        Assert.Equal("https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_GB/jenny_dioco/medium/en_GB-jenny_dioco-medium.onnx",
+            VoiceCatalog.PiperVoices.First(v => v.Name == "en_GB-jenny_dioco-medium").Url);
+        Assert.Same(lessac, VoiceCatalog.FindPiper("piper:en_US-lessac-medium"));
     }
 
     [Theory]
@@ -125,6 +143,7 @@ public class VoiceTests
     {
         var p = new Profile();
         Assert.Null(p.Voice);
+        Assert.False(p.LiveTyping); // without AI, words are pasted as they are heard unless the profile says type
         Assert.Null(new AppSettings().ReaderPosition); // the player follows the dictation overlay by default
     }
 }

@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Dictation.Core.Infrastructure;
 using Dictation.Core.Settings;
+using Dictation.Core.Speech;
 using Dictation.Core.Text;
 
 namespace Dictation.Core.Setup;
@@ -167,50 +168,78 @@ public sealed class RuntimeInstaller
     public static string KokoroVoices => Path.Combine(KokoroDir, "voices-v1.0.bin");
     static string SitePackages => Path.Combine(Path.GetDirectoryName(AppPaths.PythonExe)!, "Lib", "site-packages");
 
-    /// <summary>Read aloud is ready: its Python package and both model files are present.</summary>
-    public static bool ReadAloudInstalled =>
-        File.Exists(KokoroModel) && File.Exists(KokoroVoices) && Directory.Exists(Path.Combine(SitePackages, "kokoro_onnx"));
+    /// <summary>The local voice server's Python packages (kokoro-onnx, which brings ONNX Runtime and espeak-ng) are
+    /// installed. Kokoro and Piper both need them.</summary>
+    public static bool VoiceEngineInstalled => Directory.Exists(Path.Combine(SitePackages, "kokoro_onnx"));
 
-    /// <summary>Approximate one-time download for Read aloud, in MB.</summary>
+    /// <summary>Kokoro is ready: the voice engine and both of its model files are present.</summary>
+    public static bool ReadAloudInstalled => File.Exists(KokoroModel) && File.Exists(KokoroVoices) && VoiceEngineInstalled;
+
+    /// <summary>Approximate one-time download for Kokoro, in MB.</summary>
     public const int ReadAloudDownloadMb = 370;
 
+    /// <summary>Piper voices: models\piper\&lt;name&gt;.onnx with &lt;name&gt;.onnx.json.</summary>
+    public static string PiperDir => Path.Combine(AppPaths.ModelsDir, "piper");
+    static string PiperFile(string name) => Path.Combine(PiperDir, name + ".onnx");
+
+    public static bool PiperVoiceInstalled(string name) =>
+        VoiceEngineInstalled && File.Exists(PiperFile(name)) && File.Exists(PiperFile(name) + ".json");
+
+    /// <summary>Install the voice server's Python packages if they aren't there yet (shared by Kokoro and Piper).</summary>
+    async Task EnsureVoiceEngineAsync(Action<double?> progress, CancellationToken ct)
+    {
+        if (!File.Exists(AppPaths.PythonExe))
+            throw new UserFacingException("Oberton's speech engine isn't set up yet, so Read aloud can't be installed. Restart Oberton to finish setup.");
+        if (!File.Exists(UvExe))
+        {
+            var zip = Path.Combine(AppPaths.RuntimeDir, "uv.zip");
+            await DownloadAsync(UvUrl, zip, progress, ct);
+            ZipFile.ExtractToDirectory(zip, Path.GetDirectoryName(UvExe)!, true);
+            File.Delete(zip);
+        }
+        if (VoiceEngineInstalled) return;
+        var pyDir = Path.GetDirectoryName(AppPaths.PythonExe)!;
+        await RunToolAsync(UvExe, new[]
+            {
+                "pip", "install", "--python", AppPaths.PythonExe, "--system", "--break-system-packages",
+                "-r", Path.Combine(AppPaths.InferenceDir, "requirements-tts.txt"),
+            },
+            UvEnvironment(), pyDir, 60, progress, "Installing the voice engine", ct);
+        try { var cache = Path.Combine(AppPaths.RuntimeDir, "uv-cache"); if (Directory.Exists(cache)) Directory.Delete(cache, true); }
+        catch (Exception e) { Log.Warn("Could not remove uv-cache: " + e.Message); }
+    }
+
     /// <summary>
-    /// Read aloud is installed on first use rather than during setup: the voice package into the private Python,
+    /// Kokoro is installed on first use rather than during setup: the voice package into the private Python,
     /// and the Kokoro model and voices into models\kokoro. Resumable like the main setup.
     /// </summary>
     public async Task InstallReadAloudAsync(IProgress<SetupProgress> progress, CancellationToken ct)
     {
         const int total = 3;
         void Step(int step, string title, double? f, string detail = "") => progress.Report(new SetupProgress(step, total, title, f, detail));
-        if (!File.Exists(AppPaths.PythonExe))
-            throw new UserFacingException("Oberton's speech engine isn't set up yet, so Read aloud can't be installed. Restart Oberton to finish setup.");
+        await EnsureVoiceEngineAsync(f => Step(1, "Installing the voice engine", f), ct);
         Directory.CreateDirectory(KokoroDir);
-
-        if (!File.Exists(UvExe))
-        {
-            var zip = Path.Combine(AppPaths.RuntimeDir, "uv.zip");
-            await DownloadAsync(UvUrl, zip, f => Step(1, "Downloading Python tools", f), ct);
-            ZipFile.ExtractToDirectory(zip, Path.GetDirectoryName(UvExe)!, true);
-            File.Delete(zip);
-        }
-        if (!Directory.Exists(Path.Combine(SitePackages, "kokoro_onnx")))
-        {
-            var pyDir = Path.GetDirectoryName(AppPaths.PythonExe)!;
-            await RunToolAsync(UvExe, new[]
-                {
-                    "pip", "install", "--python", AppPaths.PythonExe, "--system", "--break-system-packages",
-                    "-r", Path.Combine(AppPaths.InferenceDir, "requirements-tts.txt"),
-                },
-                UvEnvironment(), pyDir, 60, f => Step(1, "Installing the voice engine", f), "Installing the voice engine", ct);
-            try { var cache = Path.Combine(AppPaths.RuntimeDir, "uv-cache"); if (Directory.Exists(cache)) Directory.Delete(cache, true); }
-            catch (Exception e) { Log.Warn("Could not remove uv-cache: " + e.Message); }
-        }
         if (!File.Exists(KokoroModel))
             await DownloadAsync(KokoroModelUrl, KokoroModel, f => Step(2, "Downloading the voice model", f, "About 325 MB"), ct);
         if (!File.Exists(KokoroVoices))
             await DownloadAsync(KokoroVoicesUrl, KokoroVoices, f => Step(3, "Downloading the voices", f, "About 28 MB"), ct);
         Log.Info("Read aloud installed");
         Step(3, "Done", 1);
+    }
+
+    /// <summary>Download one Piper voice (and the voice engine, the first time) into models\piper.</summary>
+    public async Task InstallPiperVoiceAsync(PiperVoice voice, IProgress<SetupProgress> progress, CancellationToken ct)
+    {
+        const int total = 2;
+        void Step(int step, string title, double? f, string detail = "") => progress.Report(new SetupProgress(step, total, title, f, detail));
+        await EnsureVoiceEngineAsync(f => Step(1, "Installing the voice engine", f), ct);
+        Directory.CreateDirectory(PiperDir);
+        var file = PiperFile(voice.Name);
+        if (!File.Exists(file + ".json")) await DownloadAsync(voice.Url + ".json", file + ".json", _ => { }, ct);
+        if (!File.Exists(file))
+            await DownloadAsync(voice.Url, file, f => Step(2, $"Downloading the Piper voice {voice.Label}", f, $"About {voice.Mb} MB"), ct);
+        Log.Info("Piper voice installed: " + voice.Name);
+        Step(2, "Done", 1);
     }
 
     /// <summary>Approximate download size of a speech model, in MB.</summary>

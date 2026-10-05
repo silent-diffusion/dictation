@@ -15,7 +15,8 @@ namespace Dictation.Core.Session;
 /// With a profile that rewrites the whole dictation (an email, say), pieces are typed as spoken, since the
 /// instructions only make sense for the whole, and the rewrite replaces them at the end.
 /// A profile without AI goes further: the recognizer's running guess is typed as it is heard (about every second, the
-/// same words the overlay shows), and corrected in place with Backspace when the guess changes.
+/// same words the overlay shows), pasted (or typed, if the profile says so), and corrected in place with Backspace when
+/// the guess changes.
 /// Use from the UI thread only.
 /// </summary>
 public sealed class LiveInsertion
@@ -95,7 +96,8 @@ public sealed class LiveInsertion
         }
         if (keep < want.Length)
         {
-            await _inserter.TypeAsync(want[keep..], _target, ct);
+            if (_profile.LiveTyping) await _inserter.TypeAsync(want[keep..], _target, ct);
+            else await _inserter.PasteAsync(want[keep..], _target, ct);
             _partialTyped = want;
         }
     }

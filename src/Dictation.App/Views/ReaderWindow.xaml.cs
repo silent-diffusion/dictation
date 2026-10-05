@@ -116,8 +116,21 @@ public partial class ReaderWindow : Window
     public void Read(string text, string? voice = null)
     {
         _voice = voice ?? App.VoiceFor(App.Services.Profiles.Active);
-        if (!VoiceCatalog.IsWindowsVoice(_voice) && !RuntimeInstaller.ReadAloudInstalled)
+        if (!VoiceCatalog.IsInstalled(_voice))
         {
+            switch (VoiceCatalog.ModelOf(_voice))
+            {
+                case VoiceCatalog.Windows:
+                    ShowError($"The Windows voice \"{VoiceCatalog.ShortName(_voice)}\" isn't installed on this PC any more. Pick another voice under Read aloud.");
+                    return;
+                case VoiceCatalog.Piper:
+                    var piper = VoiceCatalog.FindPiper(_voice);
+                    if (piper == null) { ShowError("That voice isn't available. Pick another voice under Read aloud."); return; }
+                    ShowQuestion($"The voice {piper.Label} needs a one-time download",
+                        $"It's a Piper voice of about {piper.Mb} MB. It runs entirely on this PC, so after this nothing you read leaves it.",
+                        "Download", () => DownloadThenReadAsync(text));
+                    return;
+            }
             ShowQuestion("Read aloud needs a one-time download",
                 $"Oberton's voice (Kokoro) is about {RuntimeInstaller.ReadAloudDownloadMb} MB. It runs entirely on this PC, " +
                 "so after this nothing you read leaves it.",
@@ -140,7 +153,9 @@ public partial class ReaderWindow : Window
         });
         try
         {
-            await new RuntimeInstaller(App.Services.Settings, App.Services.OllamaHost).InstallReadAloudAsync(progress, _download.Token);
+            var installer = new RuntimeInstaller(App.Services.Settings, App.Services.OllamaHost);
+            if (VoiceCatalog.FindPiper(_voice) is { } piper) await installer.InstallPiperVoiceAsync(piper, progress, _download.Token);
+            else await installer.InstallReadAloudAsync(progress, _download.Token);
             StartSession(text);
         }
         catch (OperationCanceledException) { Hide(); }
@@ -339,8 +354,18 @@ public partial class ReaderWindow : Window
 
     void Back_Click(object sender, RoutedEventArgs e) { _autoClose.Stop(); _session?.Skip(-15); Refresh(); }
     void Forward_Click(object sender, RoutedEventArgs e) { _session?.Skip(15); Refresh(); }
-    void Slower_Click(object sender, RoutedEventArgs e) { _session?.SetSpeed(_session.Speed - ReadAloudSession.SpeedStep); Refresh(); }
-    void Faster_Click(object sender, RoutedEventArgs e) { _session?.SetSpeed(_session.Speed + ReadAloudSession.SpeedStep); Refresh(); }
+    void Slower_Click(object sender, RoutedEventArgs e) => ChangeSpeed(-ReadAloudSession.SpeedStep);
+    void Faster_Click(object sender, RoutedEventArgs e) => ChangeSpeed(ReadAloudSession.SpeedStep);
+
+    /// <summary>The − and + buttons: the new speed is also remembered as the speed every reading starts at.</summary>
+    void ChangeSpeed(double step)
+    {
+        if (_session == null) return;
+        _session.SetSpeed(_session.Speed + step);
+        App.Services.Settings.Current.TtsBaseSpeed = _session.Speed;
+        App.Services.Settings.Save();
+        Refresh();
+    }
     void Close_Click(object sender, RoutedEventArgs e) => Stop();
 
     async void Primary_Click(object sender, RoutedEventArgs e)

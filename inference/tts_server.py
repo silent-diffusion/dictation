@@ -1,10 +1,13 @@
 """Local text-to-speech server for Oberton's "Read aloud".
 
-Runs Kokoro (82M parameters, ONNX, CPU) and answers one request at a time over a loopback WebSocket:
+Runs the local voice models, each on ONNX Runtime (CPU), and answers one request at a time over a loopback WebSocket:
+
+  * Kokoro v1.0 (82M parameters): the most natural voices. Voice ids like "af_heart".
+  * Piper: small, fast voices, one model file per voice. Voice ids like "piper:en_US-lessac-medium".
 
     -> {"type": "speak", "id": 7, "text": "One sentence.", "voice": "af_heart", "speed": 1.0}
     <- {"type": "audio", "id": 7, "rate": 24000, "samples": 52800}
-    <- <binary: float32 little-endian mono samples>
+    <- <binary: float32 little-endian mono samples, always at 24 kHz>
     (or <- {"type": "error", "id": 7, "message": "..."})
 
 The app sends one sentence per request, a few sentences ahead of playback, so reading starts almost immediately and
@@ -17,31 +20,123 @@ import json
 import logging
 import os
 import sys
+import unicodedata
 
 import numpy as np
 
 log = logging.getLogger("tts")
 
+RATE = 24000  # every model's audio is delivered at this rate
+PIPER = "piper:"
+
 
 def lang_for(voice):
-    """Kokoro voice names start with a language letter: a = American English, b = British English, e = Spanish,
-    f = French, h = Hindi, i = Italian, p = Brazilian Portuguese."""
-    return {"b": "en-gb", "e": "es", "f": "fr-fr", "h": "hi", "i": "it", "p": "pt-br"}.get(voice[:1], "en-us")
+    """Kokoro voice names start with a language letter: a = American English, b = British English."""
+    return "en-gb" if voice.startswith("b") else "en-us"
+
+
+def resample(audio, rate):
+    if rate == RATE or audio.size == 0:
+        return audio
+    n = int(round(audio.size * RATE / rate))
+    return np.interp(np.linspace(0, audio.size - 1, n), np.arange(audio.size), audio)
+
+
+_espeak_ready = False
+
+
+def phonemize(text, language):
+    """espeak-ng IPA, the same phonemizer (bundled through espeakng-loader) that kokoro-onnx installs."""
+    global _espeak_ready
+    if not _espeak_ready:
+        try:
+            from kokoro_onnx.tokenizer import Tokenizer
+
+            Tokenizer()  # points phonemizer at the bundled espeak-ng library and data
+        except Exception:  # noqa: BLE001
+            import espeakng_loader
+            from phonemizer.backend.espeak.wrapper import EspeakWrapper
+
+            EspeakWrapper.set_library(espeakng_loader.get_library_path())
+            if hasattr(EspeakWrapper, "set_data_path"):
+                EspeakWrapper.set_data_path(espeakng_loader.get_data_path())
+        _espeak_ready = True
+    import phonemizer
+
+    return phonemizer.phonemize(text, language, preserve_punctuation=True, with_stress=True)
+
+
+class PiperVoice:
+    """One Piper voice: <name>.onnx with its <name>.onnx.json config."""
+
+    def __init__(self, path):
+        import onnxruntime as ort
+
+        with open(path + ".json", encoding="utf-8") as f:
+            cfg = json.load(f)
+        self.rate = cfg["audio"]["sample_rate"]
+        self.ids = cfg["phoneme_id_map"]
+        self.language = cfg.get("espeak", {}).get("voice", "en-us")
+        inference = cfg.get("inference", {})
+        self.noise = inference.get("noise_scale", 0.667)
+        self.length = inference.get("length_scale", 1.0)
+        self.noise_w = inference.get("noise_w", 0.8)
+        self.session = ort.InferenceSession(path, providers=["CPUExecutionProvider"])
+        self.inputs = {i.name for i in self.session.get_inputs()}
+
+    def to_ids(self, phonemes):
+        # As Piper does it: start, then each phoneme followed by padding, then end.
+        ids = list(self.ids["^"])
+        for p in unicodedata.normalize("NFD", phonemes):
+            if p in self.ids:
+                ids += self.ids[p] + self.ids["_"]
+        return ids + self.ids["$"]
+
+    def speak(self, text, speed):
+        ids = self.to_ids(phonemize(text, self.language))
+        feeds = {
+            "input": np.array([ids], dtype=np.int64),
+            "input_lengths": np.array([len(ids)], dtype=np.int64),
+            "scales": np.array([self.noise, self.length / speed, self.noise_w], dtype=np.float32),
+        }
+        if "sid" in self.inputs:
+            feeds["sid"] = np.array([0], dtype=np.int64)
+        audio = self.session.run(None, feeds)[0].squeeze().astype(np.float32)
+        return resample(audio, self.rate)
 
 
 class Engine:
-    def __init__(self, model_path, voices_path):
-        from kokoro_onnx import Kokoro
+    def __init__(self, model_path, voices_path, piper_dir):
+        self.kokoro = None
+        self.voices = set()
+        if model_path and voices_path and os.path.exists(model_path) and os.path.exists(voices_path):
+            from kokoro_onnx import Kokoro
 
-        self.kokoro = Kokoro(model_path, voices_path)
-        self.voices = set(self.kokoro.get_voices())
+            self.kokoro = Kokoro(model_path, voices_path)
+            self.voices = set(self.kokoro.get_voices())
+        self.piper_dir = piper_dir
+        self.piper = {}  # loaded Piper voices, by name
+
+    def piper_voice(self, name):
+        if name not in self.piper:
+            path = os.path.join(self.piper_dir or "", os.path.basename(name) + ".onnx")
+            if not os.path.exists(path):
+                raise RuntimeError(f"the Piper voice {name} isn't downloaded")
+            self.piper[name] = PiperVoice(path)
+        return self.piper[name]
 
     def speak(self, text, voice, speed):
-        if voice not in self.voices:
-            voice = "af_heart"
-        speed = min(max(float(speed), 0.5), 2.0)  # the range Kokoro sounds natural in
-        audio, rate = self.kokoro.create(text, voice=voice, speed=speed, lang=lang_for(voice))
-        return np.asarray(audio, dtype="<f4"), rate
+        speed = min(max(float(speed), 0.5), 2.0)  # the range the voices sound natural in
+        if voice.startswith(PIPER):
+            audio = self.piper_voice(voice[len(PIPER):]).speak(text, speed)
+        else:
+            if self.kokoro is None:
+                raise RuntimeError("the Kokoro voices aren't downloaded")
+            if voice not in self.voices:
+                voice = "af_heart"
+            audio, rate = self.kokoro.create(text, voice=voice, speed=speed, lang=lang_for(voice))
+            audio = resample(np.asarray(audio, dtype=np.float32), rate)
+        return np.asarray(audio, dtype="<f4"), RATE
 
 
 async def serve(port, engine):
@@ -78,18 +173,21 @@ async def serve(port, engine):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--model", required=True, help="kokoro .onnx model file")
-    p.add_argument("--voices", required=True, help="kokoro voices .bin file")
+    p.add_argument("--model", help="kokoro .onnx model file (optional: Piper voices work without it)")
+    p.add_argument("--voices", help="kokoro voices .bin file")
+    p.add_argument("--piper-dir", help="folder with Piper voices (<name>.onnx and <name>.onnx.json)")
     p.add_argument("--port", type=int, default=8766)
     args = p.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", stream=sys.stderr)
     try:
-        engine = Engine(args.model, args.voices)
-        engine.speak("Ready.", "af_heart", 1.0)  # warm-up, and a check that the model really works
+        engine = Engine(args.model, args.voices, args.piper_dir)
+        if engine.kokoro is not None:
+            engine.speak("Ready.", "af_heart", 1.0)  # warm-up, and a check that the model really works
     except Exception as e:  # noqa: BLE001
         print(f"ERROR model_load_failed: {e}", flush=True)
         sys.exit(2)
-    log.info("Kokoro loaded from %s (%d voices)", os.path.basename(args.model), len(engine.voices))
+    log.info("Voice server ready (Kokoro: %s, Piper folder: %s)",
+             "loaded" if engine.kokoro is not None else "not downloaded", args.piper_dir or "none")
     asyncio.run(serve(args.port, engine))
 
 

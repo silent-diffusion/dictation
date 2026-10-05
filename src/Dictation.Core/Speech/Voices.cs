@@ -6,8 +6,26 @@ using Dictation.Core.Setup;
 
 namespace Dictation.Core.Speech;
 
-/// <summary>A voice that Read aloud can use. <paramref name="Engine"/> is "Kokoro" or "Windows".</summary>
-public sealed record VoiceOption(string Id, string Name, string Engine = VoiceCatalog.Kokoro);
+/// <summary>A voice that Read aloud can use. <paramref name="Model"/> is the id of its <see cref="TtsModel"/>.</summary>
+public sealed record VoiceOption(string Id, string Name, string Model = VoiceCatalog.Kokoro);
+
+/// <summary>A text-to-speech model (engine) with its own voices.</summary>
+public sealed record TtsModel(string Id, string Name, string Description);
+
+/// <summary>A downloadable Piper voice: one ONNX file (plus its JSON config) from rhasspy/piper-voices.</summary>
+public sealed record PiperVoice(string Name, string Label, string Kind, int Mb)
+{
+    public string Id => VoiceCatalog.PiperPrefix + Name;
+    /// <summary>"en_US-lessac-medium" → en/en_US/lessac/medium/en_US-lessac-medium.onnx on Hugging Face.</summary>
+    public string Url
+    {
+        get
+        {
+            var parts = Name.Split('-'); // locale, speaker, quality
+            return $"https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/{parts[0][..2]}/{parts[0]}/{parts[1]}/{parts[2]}/{Name}.onnx";
+        }
+    }
+}
 
 /// <summary>Turns one short piece of text into mono float samples at <see cref="KokoroSpeech.SampleRate"/>.</summary>
 public interface ISpeechSynthesizer
@@ -15,52 +33,79 @@ public interface ISpeechSynthesizer
     Task<float[]> SynthesizeAsync(string text, string voice, double speed, CancellationToken ct = default);
 }
 
-/// <summary>Every voice Read aloud can use: Kokoro's (one download, runs on this PC) and the voices installed with Windows.</summary>
+/// <summary>
+/// The text-to-speech models Read aloud can use, and their voices: Kokoro (natural, one download), Piper (light and
+/// fast, one small download per voice) and the voices installed with Windows (no download).
+/// </summary>
 public static class VoiceCatalog
 {
-    public const string Kokoro = "Kokoro", Windows = "Windows";
+    public const string Kokoro = "kokoro", Piper = "piper", Windows = "windows";
+    public const string PiperPrefix = "piper:";
 
-    /// <summary>Kokoro v1.0's voices in the languages its bundled phonemizer handles. The first letter is the
-    /// language (a American, b British, e Spanish, f French, h Hindi, i Italian, p Brazilian Portuguese), the second
-    /// the voice (f female, m male).</summary>
-    public static readonly IReadOnlyList<VoiceOption> KokoroVoices = new[]
+    public static readonly IReadOnlyList<TtsModel> Models = new[]
     {
-        K("af_heart", "Heart", "American, female"), K("af_bella", "Bella", "American, female"),
-        K("af_nicole", "Nicole", "American, female, soft"), K("af_sarah", "Sarah", "American, female"),
-        K("af_sky", "Sky", "American, female"), K("af_nova", "Nova", "American, female"),
-        K("af_alloy", "Alloy", "American, female"), K("af_aoede", "Aoede", "American, female"),
-        K("af_jessica", "Jessica", "American, female"), K("af_kore", "Kore", "American, female"),
-        K("af_river", "River", "American, female"),
-        K("am_michael", "Michael", "American, male"), K("am_fenrir", "Fenrir", "American, male"),
-        K("am_adam", "Adam", "American, male"), K("am_echo", "Echo", "American, male"),
-        K("am_eric", "Eric", "American, male"), K("am_liam", "Liam", "American, male"),
-        K("am_onyx", "Onyx", "American, male"), K("am_puck", "Puck", "American, male"),
-        K("bf_emma", "Emma", "British, female"), K("bf_alice", "Alice", "British, female"),
-        K("bf_isabella", "Isabella", "British, female"), K("bf_lily", "Lily", "British, female"),
-        K("bm_george", "George", "British, male"), K("bm_fable", "Fable", "British, male"),
-        K("bm_daniel", "Daniel", "British, male"), K("bm_lewis", "Lewis", "British, male"),
-        K("ef_dora", "Dora", "Spanish, female"), K("em_alex", "Alex", "Spanish, male"),
-        K("ff_siwis", "Siwis", "French, female"),
-        K("if_sara", "Sara", "Italian, female"), K("im_nicola", "Nicola", "Italian, male"),
-        K("pf_dora", "Dora", "Portuguese (Brazil), female"), K("pm_alex", "Alex", "Portuguese (Brazil), male"),
-        K("hf_alpha", "Alpha", "Hindi, female"), K("hm_omega", "Omega", "Hindi, male"),
+        new TtsModel(Kokoro, "Kokoro v1.0", "The most natural voices. One download of about 370 MB; runs on this PC."),
+        new TtsModel(Piper, "Piper", "Light and fast, even on slower PCs. Each voice is a separate download of 60 to 120 MB; runs on this PC."),
+        new TtsModel(Windows, "Windows voices", "The voices that come with Windows. Nothing to download; more robotic."),
     };
 
-    static VoiceOption K(string id, string name, string kind) => new(id, $"{name} ({kind})");
+    /// <summary>A short list of Kokoro v1.0's best English voices.</summary>
+    public static readonly IReadOnlyList<VoiceOption> KokoroVoices = new[]
+    {
+        new VoiceOption("af_heart", "Heart (American, female)"),
+        new VoiceOption("af_bella", "Bella (American, female)"),
+        new VoiceOption("af_nicole", "Nicole (American, female, soft)"),
+        new VoiceOption("am_michael", "Michael (American, male)"),
+        new VoiceOption("am_fenrir", "Fenrir (American, male)"),
+        new VoiceOption("bf_emma", "Emma (British, female)"),
+        new VoiceOption("bm_george", "George (British, male)"),
+        new VoiceOption("bm_fable", "Fable (British, male)"),
+    };
+
+    public static readonly IReadOnlyList<PiperVoice> PiperVoices = new[]
+    {
+        new PiperVoice("en_US-lessac-medium", "Lessac", "American, female", 63),
+        new PiperVoice("en_US-amy-medium", "Amy", "American, female", 63),
+        new PiperVoice("en_US-ryan-high", "Ryan", "American, male, high quality", 121),
+        new PiperVoice("en_US-joe-medium", "Joe", "American, male", 63),
+        new PiperVoice("en_GB-jenny_dioco-medium", "Jenny", "British, female", 63),
+        new PiperVoice("en_GB-alan-medium", "Alan", "British, male", 63),
+    };
 
     public static bool IsWindowsVoice(string? id) => id?.StartsWith(WindowsSpeech.Prefix, StringComparison.Ordinal) == true;
+    public static bool IsPiperVoice(string? id) => id?.StartsWith(PiperPrefix, StringComparison.Ordinal) == true;
 
-    /// <summary>The voices that can be used right now: Kokoro's once downloaded, and Windows' always.</summary>
+    /// <summary>The model a voice belongs to.</summary>
+    public static string ModelOf(string? voiceId) => IsWindowsVoice(voiceId) ? Windows : IsPiperVoice(voiceId) ? Piper : Kokoro;
+
+    public static TtsModel Model(string id) => Models.FirstOrDefault(m => m.Id == id) ?? Models[0];
+
+    /// <summary>Every voice of a model, downloaded or not.</summary>
+    public static IReadOnlyList<VoiceOption> VoicesOf(string model) => model switch
+    {
+        Piper => PiperVoices.Select(v => new VoiceOption(v.Id, $"{v.Label} ({v.Kind})", Piper)).ToList(),
+        Windows => WindowsSpeech.InstalledVoices(),
+        _ => KokoroVoices,
+    };
+
+    /// <summary>The voice can be used right now (its model or file is downloaded).</summary>
+    public static bool IsInstalled(string? voiceId) => ModelOf(voiceId) switch
+    {
+        Windows => WindowsSpeech.InstalledVoices().Any(v => v.Id == voiceId),
+        Piper => RuntimeInstaller.PiperVoiceInstalled(voiceId![PiperPrefix.Length..]),
+        _ => RuntimeInstaller.ReadAloudInstalled,
+    };
+
+    /// <summary>The voices that can be used right now.</summary>
     public static IReadOnlyList<VoiceOption> Available() =>
-        (RuntimeInstaller.ReadAloudInstalled ? KokoroVoices : Array.Empty<VoiceOption>()).Concat(WindowsSpeech.InstalledVoices()).ToList();
+        Models.SelectMany(m => VoicesOf(m.Id)).Where(v => IsInstalled(v.Id)).ToList();
 
-    /// <summary>Every voice, downloaded or not (for the Read aloud page, which can download Kokoro).</summary>
-    public static IReadOnlyList<VoiceOption> All() => KokoroVoices.Concat(WindowsSpeech.InstalledVoices()).ToList();
+    public static PiperVoice? FindPiper(string? voiceId) => PiperVoices.FirstOrDefault(v => v.Id == voiceId);
 
-    /// <summary>A short display name: "Heart", "Zira".</summary>
+    /// <summary>A short display name: "Heart", "Lessac", "Zira".</summary>
     public static string ShortName(string id)
     {
-        var v = KokoroVoices.FirstOrDefault(v => v.Id == id) ?? WindowsSpeech.InstalledVoices().FirstOrDefault(v => v.Id == id);
+        var v = VoicesOf(ModelOf(id)).FirstOrDefault(v => v.Id == id);
         return v == null ? id : v.Name.Split(" (")[0];
     }
 }
@@ -76,7 +121,7 @@ public sealed class SpeechVoices : ISpeechSynthesizer
     public Task<float[]> SynthesizeAsync(string text, string voice, double speed, CancellationToken ct = default) =>
         VoiceCatalog.IsWindowsVoice(voice)
             ? _windows.SynthesizeAsync(text, voice, speed, ct)
-            : _kokoro.SynthesizeAsync(text, voice, speed, ct);
+            : _kokoro.SynthesizeAsync(text, voice, speed, ct); // Kokoro and Piper both run in the local voice server
 }
 
 /// <summary>
@@ -95,7 +140,7 @@ public sealed class WindowsSpeech : ISpeechSynthesizer
         {
             using var synth = new SpeechSynthesizer();
             _installed = synth.GetInstalledVoices().Where(v => v.Enabled).Select(v => v.VoiceInfo)
-                .Select(i => new VoiceOption(Prefix + i.Name, $"{Nice(i.Name)} (Windows · {Language(i.Culture)}, {i.Gender.ToString().ToLowerInvariant()})",
+                .Select(i => new VoiceOption(Prefix + i.Name, $"{Nice(i.Name)} ({Language(i.Culture)}, {i.Gender.ToString().ToLowerInvariant()})",
                     VoiceCatalog.Windows))
                 .OrderBy(v => v.Name).ToList();
         }

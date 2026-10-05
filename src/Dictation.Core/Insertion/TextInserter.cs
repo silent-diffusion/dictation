@@ -233,6 +233,20 @@ public sealed class TextInserter
         await _typing.InsertAsync(text, target, ct);
     }
 
+    /// <summary>Paste a short piece straight into the target (clipboard, restored after), for text that streams in as
+    /// it is heard. Never steals focus: if the target isn't in front any more, it throws.</summary>
+    public async Task PasteAsync(string text, InsertionTarget target, CancellationToken ct = default)
+    {
+        await WaitForModifiersReleasedAsync(ct);
+        if (!target.IsAlive || Native.GetForegroundWindow() != target.Hwnd)
+            throw new UserFacingException("The app you were dictating into isn't in front any more.");
+        try { await _paste.InsertAsync(text, target, ct); }
+        catch (Exception e) when (e is not (OperationCanceledException or UserFacingException))
+        {
+            throw new UserFacingException("Pasting into that app failed: " + e.Message, e);
+        }
+    }
+
     /// <summary>Erase the last <paramref name="text"/> typed (one Backspace per character) in the target.</summary>
     public async Task EraseAsync(string text, InsertionTarget target, CancellationToken ct = default)
     {

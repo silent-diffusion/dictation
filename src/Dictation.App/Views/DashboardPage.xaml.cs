@@ -94,11 +94,11 @@ public partial class DashboardPage : UserControl
 
         var voiceId = App.VoiceFor(p);
         var windowsVoice = VoiceCatalog.IsWindowsVoice(voiceId);
-        var installed = windowsVoice || RuntimeInstaller.ReadAloudInstalled;
+        var installed = VoiceCatalog.IsInstalled(voiceId);
         Tiles.Children.Add(Tile("READ ALOUD", installed ? VoiceCatalog.ShortName(voiceId) : "Not installed",
             windowsVoice || sv.Tts.IsRunning ? Dot.Ok : installed ? Dot.Busy : Dot.Off,
             windowsVoice ? "Windows voice · ready" : sv.Tts.IsRunning ? "Voice loaded" : installed ? "Starts when you read" : "Downloads on first use",
-            $"{s.TtsBaseSpeed:0.00}× · {s.SpeakHotkey}",
+            $"{VoiceCatalog.Model(VoiceCatalog.ModelOf(voiceId)).Name} · {s.TtsBaseSpeed:0.0#}× · {s.SpeakHotkey}",
             () => TheApp.ShowPage("ReadAloud")));
 
         // ----- dials -----
