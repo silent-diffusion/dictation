@@ -47,7 +47,7 @@
             </Border.RenderTransform>
             <DockPanel Margin="14,18,14,14" LastChildFill="True">
                 <!-- The logo, to the right of the menu and back buttons (which stay put when the sidebar slides away) -->
-                <DockPanel x:Name="Header" DockPanel.Dock="Top" Margin="54,3,0,21">
+                <DockPanel x:Name="Header" DockPanel.Dock="Top" Margin="42,3,0,21">
                     <StackPanel Orientation="Horizontal">
                         <Border Width="30" Height="30" CornerRadius="8" Background="{DynamicResource Ob.Mark}">
                             <Ellipse Width="9" Height="9" Fill="{DynamicResource Ob.Record}"/>
@@ -137,8 +137,13 @@
                     </Rectangle>
                 </Grid>
             </Button>
+            <!-- Back: after the logo while the sidebar is open, next to the menu button while it's folded (it slides along) -->
             <Button x:Name="BackButton" Style="{StaticResource IconButton}" Content="&#xE72B;" Margin="6,0,0,0" Click="Back_Click"
-                    ToolTip="Back (Alt+Left)" AutomationProperties.Name="Back" Visibility="Collapsed"/>
+                    ToolTip="Back (Alt+Left)" AutomationProperties.Name="Back" Visibility="Collapsed">
+                <Button.RenderTransform>
+                    <TranslateTransform x:Name="BackSlide"/>
+                </Button.RenderTransform>
+            </Button>
         </StackPanel>
     </Grid>
 </Window>

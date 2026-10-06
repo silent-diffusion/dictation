@@ -63,8 +63,10 @@ clicked (History, the profiles, Models, Model unloading). The figures come from 
 `data\usage.json` (dictations, words, seconds spoken, turnaround, AI edits kept, readings and dictations per app name; never
 any text, audio or window titles), so they survive History being trimmed, cleared or off), **Speech to text** (profiles), **Read aloud**, **History** and **Settings**. The menu button
 in the top-left corner (✕ while the sidebar is open, ☰ while it's hidden; or **Ctrl+B**) slides the sidebar away to give
-the page the whole window. Next to it, **Back** (also `Alt+←` or the mouse's back button) returns to the page you were on
-before, Settings sections included; it shows on every page but the dashboard.
+the page the whole window. **Back** (after the logo, or next to ☰ while the sidebar is hidden; also `Alt+←` or the mouse's
+back button) returns to the page you were on before, Settings sections included; it shows on every page but the dashboard.
+With the sidebar hidden, pages with a side menu of their own (Settings, Speech to text) go right up to the window's edge,
+their menu starting below the corner buttons.
 
 * **Hotkey** (default `Ctrl+Space`, change under *Hotkeys*): start/stop. `Ctrl+Alt+P` cycles profiles.
 * **Overlay**: a pill, always on top, never steals focus. Small while you talk (timer, level meter, active profile, `✕` cancels);
