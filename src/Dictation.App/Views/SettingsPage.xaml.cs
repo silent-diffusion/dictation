@@ -8,6 +8,11 @@ public partial class SettingsPage : UserControl
 {
     bool _switching;
 
+    /// <summary>The section shown (its tag).</summary>
+    public string Section { get; private set; } = "General";
+    /// <summary>Another section was opened (for Back).</summary>
+    public event Action<string>? SectionShown;
+
     public SettingsPage(string section = "General")
     {
         InitializeComponent();
@@ -40,6 +45,8 @@ public partial class SettingsPage : UserControl
         _switching = true;
         foreach (var g in GroupList) if (ListOf(g) != list) ListOf(g).SelectedItem = null;
         _switching = false;
+        Section = tag;
+        SectionShown?.Invoke(tag);
         Host.Content = tag switch
         {
             "Hotkeys" => new HotkeysPage(),

@@ -61,8 +61,10 @@ words today, turnaround, AI edits kept, history and the speech model's unload co
 the apps you dictate into; the top tiles' text grows with the window. Every tile, dial and chart opens its page when
 clicked (History, the profiles, Models, Model unloading). The figures come from daily counts in
 `data\usage.json` (dictations, words, seconds spoken, turnaround, AI edits kept, readings and dictations per app name; never
-any text, audio or window titles), so they survive History being trimmed, cleared or off), **Speech to text** (profiles), **Read aloud**, **History** and **Settings**. Hide the sidebar
-with its chevron (or **Ctrl+B**) to give the page the whole window; the ☰ button brings it back.
+any text, audio or window titles), so they survive History being trimmed, cleared or off), **Speech to text** (profiles), **Read aloud**, **History** and **Settings**. The menu button
+in the top-left corner (✕ while the sidebar is open, ☰ while it's hidden; or **Ctrl+B**) slides the sidebar away to give
+the page the whole window. Next to it, **Back** (also `Alt+←` or the mouse's back button) returns to the page you were on
+before, Settings sections included; it shows on every page but the dashboard.
 
 * **Hotkey** (default `Ctrl+Space`, change under *Hotkeys*): start/stop. `Ctrl+Alt+P` cycles profiles.
 * **Overlay**: a pill, always on top, never steals focus. Small while you talk (timer, level meter, active profile, `✕` cancels);
