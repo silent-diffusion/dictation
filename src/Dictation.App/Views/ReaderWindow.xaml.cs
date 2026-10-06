@@ -37,6 +37,7 @@ public partial class ReaderWindow : Window
     readonly List<Span> _fullSentences = new();
     ReadAloudSession? _fullFor;
     int _fullCurrent = -1;
+    MarkdownDoc? _doc; // the reading's text with its formatting (headings, lists, bold, links…)
 
     public ReaderWindow()
     {
@@ -174,7 +175,9 @@ public partial class ReaderWindow : Window
     void StartSession(string text)
     {
         StopSession();
-        text = MarkdownText.ForReading(text); // read Markdown as the plain text it stands for
+        // Markdown is read as the plain text it stands for; the whole-text view shows it formatted.
+        _doc = MarkdownDoc.Parse(text);
+        text = _doc.Plain;
         var s = App.Services.Settings.Current;
         var session = new ReadAloudSession(text, App.Services.Voices, _voice, s.TtsBaseSpeed);
         if (session.Sentences.Count == 0)
@@ -253,50 +256,131 @@ public partial class ReaderWindow : Window
         if (to < sentence.Length) Lines.Inlines.Add(new Run(" …") { Foreground = Upcoming });
     }
 
-    /// <summary>Expanded view: sentences before the current one in white, after it dimmed, the current one
-    /// highlighted like the compact view and kept in view.</summary>
+    /// <summary>Expanded view: the whole text, formatted (headings, bullets, numbered items, quotes, code, bold, italic,
+    /// links). Sentences before the current one in white, after it dimmed, the current one highlighted like the compact
+    /// view and kept in view.</summary>
     void ShowFull(ReadAloudSession s, int index, string sentence, int wordStart, int wordEnd)
     {
         if (_fullFor != s) BuildFull(s);
         var moved = index != _fullCurrent;
         if (moved)
         {
-            if (_fullCurrent >= 0 && _fullCurrent < _fullSentences.Count) // the previous sentence: back to one plain run
+            if (_fullCurrent >= 0 && _fullCurrent < _fullSentences.Count) // the previous sentence: back to its own colour
             {
                 var prev = s.Sentences[_fullCurrent];
                 _fullSentences[_fullCurrent].Inlines.Clear();
-                _fullSentences[_fullCurrent].Inlines.Add(new Run(s.Text.Substring(prev.Start, prev.Length).ReplaceLineEndings(" ")));
+                AddFormatted(_fullSentences[_fullCurrent].Inlines, prev.Start, prev.Start + prev.Length, _ => null);
             }
             for (var i = 0; i < _fullSentences.Count; i++)
                 _fullSentences[i].Foreground = i < index ? Spoken : Upcoming;
             _fullCurrent = index;
         }
+        var span = s.Sentences[index];
         var current = _fullSentences[index];
         current.Inlines.Clear();
-        Add(current.Inlines, sentence, 0, wordStart, Spoken);
-        Add(current.Inlines, sentence, wordStart, wordEnd, Current);
-        Add(current.Inlines, sentence, wordEnd, sentence.Length, Upcoming);
+        AddFormatted(current.Inlines, span.Start, span.Start + span.Length, pos =>
+            pos - span.Start < wordStart ? Spoken : pos - span.Start < wordEnd ? Current : Upcoming);
         if (current.Inlines.Count == 0) current.Inlines.Add(new Run(sentence)); // keep the span, so it can be scrolled to
         if (moved) current.BringIntoView();
     }
 
-    /// <summary>The whole text with the gaps between sentences (spaces, line breaks) kept as they are.</summary>
+    /// <summary>The whole text, line by line with its formatting; each sentence is a span the highlight can colour.</summary>
     void BuildFull(ReadAloudSession s)
     {
         FullText.Inlines.Clear();
         _fullSentences.Clear();
-        var prev = 0;
-        foreach (var span in s.Sentences)
+        var doc = _doc ?? MarkdownDoc.Parse(s.Text);
+        var sentences = s.Sentences;
+        var next = 0; // the first sentence not placed yet
+        for (var li = 0; li < doc.Lines.Count; li++)
         {
-            if (span.Start > prev) FullText.Inlines.Add(new Run(s.Text[prev..span.Start].ReplaceLineEndings("\n")));
-            var sp = new Span(new Run(s.Text.Substring(span.Start, span.Length).ReplaceLineEndings(" "))) { Foreground = Upcoming };
+            var line = doc.Lines[li];
+            if (li > 0)
+            {
+                FullText.Inlines.Add(new LineBreak());
+                if (line.Kind == MdLineKind.Heading && doc.Lines[li - 1].Length > 0) FullText.Inlines.Add(new LineBreak()); // room above a heading
+            }
+            var prefix = line.Kind switch
+            {
+                MdLineKind.Bullet => new string(' ', 4 * line.Level) + "  •  ",
+                MdLineKind.Numbered => new string(' ', 4 * line.Level) + "  ",
+                MdLineKind.Quote => "▍ ",
+                _ => "",
+            };
+            if (prefix.Length > 0) FullText.Inlines.Add(new Run(prefix) { Foreground = Upcoming });
+
+            var pos = line.Start;
+            var end = line.Start + line.Length;
+            while (next < sentences.Count && sentences[next].Start < end)
+            {
+                var sentence = sentences[next];
+                if (sentence.Start > pos) AddFormatted(FullText.Inlines, pos, sentence.Start, _ => null); // the gap before it
+                var sp = new Span { Foreground = Upcoming };
+                AddFormatted(sp.Inlines, sentence.Start, sentence.Start + sentence.Length, _ => null);
+                _fullSentences.Add(sp);
+                FullText.Inlines.Add(sp);
+                pos = sentence.Start + sentence.Length;
+                next++;
+            }
+            if (end > pos) AddFormatted(FullText.Inlines, pos, end, _ => null);
+        }
+        while (_fullSentences.Count < sentences.Count) // never expected (sentences stay within lines), but keep indexes valid
+        {
+            var sp = new Span { Foreground = Upcoming };
             _fullSentences.Add(sp);
             FullText.Inlines.Add(sp);
-            prev = span.Start + span.Length;
         }
         _fullFor = s;
         _fullCurrent = -1;
         FullScroll.ScrollToTop();
+    }
+
+    /// <summary>Runs for [from, to) of the plain text, split wherever the formatting or the colour changes.</summary>
+    void AddFormatted(InlineCollection target, int from, int to, Func<int, Brush?> colourAt)
+    {
+        var doc = _doc;
+        var text = _session?.Text ?? doc?.Plain ?? "";
+        to = Math.Min(to, text.Length);
+        var i = from;
+        while (i < to)
+        {
+            var line = doc?.LineAt(i);
+            var style = doc?.StyleAt(i) ?? MdStyle.None;
+            var colour = colourAt(i);
+            var j = i + 1;
+            while (j < to && text[j] != '\n' && (doc?.StyleAt(j) ?? MdStyle.None) == style && colourAt(j) == colour) j++;
+            var run = new Run(text[i..j].Replace('\n', ' '));
+            if (colour != null) run.Foreground = colour;
+            Format(run, style, line);
+            target.Add(run);
+            i = j;
+        }
+    }
+
+    static readonly FontFamily Mono = new("Cascadia Mono, Consolas");
+    static readonly Brush CodeBack = Freeze(new SolidColorBrush(Color.FromArgb(0x1F, 0xFF, 0xFF, 0xFF)));
+
+    static void Format(Run run, MdStyle style, MdLine? line)
+    {
+        switch (line?.Kind)
+        {
+            case MdLineKind.Heading:
+                run.FontWeight = FontWeights.SemiBold;
+                run.FontSize = line!.Level switch { 1 => 21, 2 => 18.5, 3 => 16.5, _ => 15.5 };
+                break;
+            case MdLineKind.Code:
+                run.FontFamily = Mono;
+                run.FontSize = 13.5;
+                break;
+            case MdLineKind.Quote:
+                run.FontStyle = FontStyles.Italic;
+                break;
+        }
+        if (style.HasFlag(MdStyle.Bold)) run.FontWeight = FontWeights.Bold;
+        if (style.HasFlag(MdStyle.Italic)) run.FontStyle = FontStyles.Italic;
+        if (style.HasFlag(MdStyle.Code)) { run.FontFamily = Mono; run.Background = CodeBack; }
+        if (style.HasFlag(MdStyle.Link)) run.TextDecorations = TextDecorations.Underline;
+        if (style.HasFlag(MdStyle.Strike)) run.TextDecorations = TextDecorations.Strikethrough;
     }
 
     static Dictation.Core.Settings.AppSettings Settings => App.Services.Settings.Current;

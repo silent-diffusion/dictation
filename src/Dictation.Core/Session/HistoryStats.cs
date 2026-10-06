@@ -1,7 +1,7 @@
 namespace Dictation.Core.Session;
 
-/// <summary>A day's dictation, for the dashboard's chart.</summary>
-public sealed record DayTotal(DateTime Day, int Words, int Dictations);
+/// <summary>A day's dictation (words dictated, dictations) and reading (words read aloud), for the dashboard's chart.</summary>
+public sealed record DayTotal(DateTime Day, int Words, int Dictations, int WordsRead = 0);
 
 /// <summary>Figures for the dashboard, worked out from History.</summary>
 public static class HistoryStats

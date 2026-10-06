@@ -39,6 +39,18 @@ public static class MarkdownText
         s = Regex.Replace(s, @"^([ \t]*>)+[ \t]?", "", M);
         s = Regex.Replace(s, @"^([ \t]*)[-*+•◦▪‣][ \t]+(\[[ xX]\][ \t]+)?", "$1", M);
 
+        s = InlineToPlain(s);
+
+        // Tidy: no trailing spaces, at most one blank line in a row
+        s = Regex.Replace(s, @"[ \t]+$", "", M);
+        s = Regex.Replace(s, @"\n{3,}", "\n\n");
+        return s.Trim();
+    }
+
+    /// <summary>The inline part of <see cref="ToPlain"/>: links, code, emphasis, stray symbols, HTML bits and escapes.
+    /// Works on a whole text or on one piece of a line, and keeps surrounding spaces.</summary>
+    public static string InlineToPlain(string s)
+    {
         // Images and links keep their text; bare autolinks keep the address.
         s = Regex.Replace(s, @"!\[([^\]\n]*)\]\([^)\n]*\)", "$1");
         s = Regex.Replace(s, @"\[([^\]\n]+)\]\([^)\n]*\)", "$1");
@@ -65,10 +77,6 @@ public static class MarkdownText
         s = Regex.Replace(s, @"<br\s*/?>", "\n", RegexOptions.IgnoreCase);
         s = Regex.Replace(s, @"</?(sup|sub|kbd|em|strong|b|i|u|span|details|summary)\b[^>]*>", "", RegexOptions.IgnoreCase);
         s = Regex.Replace(s, @"\\([\\`*_{}\[\]()#+\-.!|>~])", "$1");
-
-        // Tidy: no trailing spaces, at most one blank line in a row
-        s = Regex.Replace(s, @"[ \t]+$", "", M);
-        s = Regex.Replace(s, @"\n{3,}", "\n\n");
-        return s.Trim();
+        return s;
     }
 }
