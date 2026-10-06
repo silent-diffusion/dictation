@@ -245,9 +245,19 @@ public sealed class ReadAloudSession : IWaveProvider, IDisposable
 
     internal int Generation { get { lock (_lock) return _generation; } }
 
+    /// <summary>A quarter-second runway of near-silence before speech starts, or resumes after a wait.</summary>
+    internal const int LeadInSamples = KokoroSpeech.SampleRate / 4;
+    /// <summary>The level of the "silence" sent instead of zeros: about −80 dB, inaudible.</summary>
+    const float DitherLevel = 1e-4f;
+    int _leadIn = LeadInSamples; // samples of runway still to play before the current audio
+    uint _noise = 0x9E3779B9;    // a tiny, cheap noise generator for the runway and the waits
+
     /// <summary>
-    /// NAudio pulls audio here, in bytes of 32-bit float samples. Always fills the buffer (silence while paused or
-    /// waiting) so the device keeps running.
+    /// NAudio pulls audio here, in bytes of 32-bit float samples. Always fills the buffer so the device keeps running.
+    /// Pauses and waits are filled with inaudible noise rather than exact zeros: many sound drivers and Bluetooth
+    /// headsets power down on true digital silence and fade back in when sound returns, which swallowed the first word
+    /// of a reading, or of a sentence that had to be waited for (common at high speed). For the same reason speech that
+    /// starts after a wait gets a short runway first, so any fade-in happens before the words.
     /// </summary>
     public int Read(byte[] buffer, int offset, int count)
     {
@@ -261,7 +271,15 @@ public sealed class ReadAloudSession : IWaveProvider, IDisposable
             while (written < wanted && !_paused && !_ended)
             {
                 var audio = _audio[_index];
-                if (audio == null) break; // still being synthesized
+                if (audio == null) { _leadIn = LeadInSamples; break; } // still being synthesized: a runway once it arrives
+                if (_leadIn > 0)
+                {
+                    var r = Math.Min(_leadIn, wanted - written);
+                    Fill(buffer, offset + written * 4, r);
+                    _leadIn -= r;
+                    written += r;
+                    continue;
+                }
                 if (_resumeAt >= 0) { _pos = (int)(_resumeAt * audio.Length); _resumeAt = -1; }
                 var n = Math.Min(wanted - written, audio.Length - _pos);
                 if (n > 0)
@@ -278,11 +296,23 @@ public sealed class ReadAloudSession : IWaveProvider, IDisposable
                     if (_index >= _audio.Length) { _ended = true; _index = _audio.Length - 1; _pos = audio.Length; finished = true; }
                 }
             }
+            if (_paused) _leadIn = LeadInSamples; // resuming from a pause gets the runway too
+            if (written < wanted) Fill(buffer, offset + written * 4, wanted - written);
         }
-        if (written < wanted) Array.Clear(buffer, offset + written * 4, (wanted - written) * 4);
         if (advanced) _wake.Release();
         if (finished) ThreadPool.QueueUserWorkItem(_ => Finished?.Invoke());
         return count;
+    }
+
+    /// <summary>Write <paramref name="samples"/> of inaudible noise (never exact zeros).</summary>
+    void Fill(byte[] buffer, int byteOffset, int samples)
+    {
+        for (var i = 0; i < samples; i++)
+        {
+            _noise ^= _noise << 13; _noise ^= _noise >> 17; _noise ^= _noise << 5; // xorshift
+            var v = ((_noise & 0xFFFF) / 32768f - 1f) * DitherLevel;
+            BitConverter.TryWriteBytes(buffer.AsSpan(byteOffset + i * 4, 4), v);
+        }
     }
 
     public void Dispose()

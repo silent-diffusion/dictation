@@ -8,7 +8,7 @@
 #define MyAppName "Oberton"
 #define MyAppExe "LocalDictation.exe"
 #ifndef MyAppVersion
-  #define MyAppVersion "3.7.0"
+  #define MyAppVersion "3.8.0"
 #endif
 #ifndef SourceDir
   #define SourceDir "..\publish"

@@ -130,6 +130,7 @@ public partial class HistoryPage : UserControl
                 : "No AI edit for this dictation.";
         }
         FinalBlock.Text = c.Final;
+        CopyAiButton.IsEnabled = !string.IsNullOrEmpty(c.AiOutput); // nothing to copy when no AI edit was used
         NoteText.Text = c.Note ?? (c.SafetyNet ? "The safety net kept some of your original words." : "");
     }
 
@@ -201,6 +202,7 @@ public partial class HistoryPage : UserControl
 
     void CopyFinal_Click(object sender, RoutedEventArgs e) { if (Current != null) Clipboard.SetText(Current.Final); }
     void CopyRaw_Click(object sender, RoutedEventArgs e) { if (Current != null) Clipboard.SetText(Current.Transcript); }
+    void CopyAi_Click(object sender, RoutedEventArgs e) { if (Current?.AiOutput is { Length: > 0 } ai) Clipboard.SetText(ai); }
 
     async void InsertRaw_Click(object sender, RoutedEventArgs e)
     {

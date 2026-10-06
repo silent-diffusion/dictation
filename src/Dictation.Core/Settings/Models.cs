@@ -7,6 +7,10 @@ public enum InsertionMode { Auto, Typing, Clipboard }
 /// <summary>System follows the Windows app theme; Light and Dark override it.</summary>
 public enum AppTheme { System, Light, Dark }
 
+/// <summary>The color scheme laid over Light or Dark: tinted backgrounds and outlines and an accent color, each with a
+/// light and a dark version. Ember is the original look.</summary>
+public enum ColorScheme { Ember, Ocean, Forest, Violet, Rose }
+
 /// <summary>Where the overlay sits on the screen. Declared row by row (top, middle, bottom), left to right.</summary>
 public enum OverlayPosition { TopLeft, TopCenter, TopRight, MiddleLeft, Center, MiddleRight, BottomLeft, BottomCenter, BottomRight }
 
@@ -72,6 +76,8 @@ public sealed class AppSettings
     public bool ReaderExpanded { get; set; }
     /// <summary>The main window's sidebar is folded away, so the page fills the window.</summary>
     public bool SidebarCollapsed { get; set; }
+    /// <summary>Settings groups folded away on the Settings page (by name, e.g. "ModelsGroup").</summary>
+    public List<string> CollapsedSettingsGroups { get; set; } = new();
     /// <summary>Ids of built-in profiles already offered, so one added in an update appears once and stays deleted
     /// if the user deletes it.</summary>
     public List<string> BuiltInProfilesAdded { get; set; } = new();
@@ -83,6 +89,7 @@ public sealed class AppSettings
     public bool MinimizeToTray { get; set; } = true;
     public bool ShowOverlay { get; set; } = true;
     public AppTheme Theme { get; set; } = AppTheme.System;
+    public ColorScheme ColorScheme { get; set; } = ColorScheme.Ember;
     /// <summary>Opacity of the overlay's background (its text stays fully opaque). 0.3 to 1.</summary>
     public double OverlayOpacity { get; set; } = 0.88;
     public OverlayPosition OverlayPosition { get; set; } = OverlayPosition.BottomCenter;

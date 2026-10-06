@@ -138,6 +138,8 @@
                     <WrapPanel Margin="0,14,0,0">
                         <Button Content="Copy inserted text" Style="{StaticResource QuietButton}" Margin="0,0,8,8" Click="CopyFinal_Click"/>
                         <Button Content="Copy transcription" Style="{StaticResource QuietButton}" Margin="0,0,8,8" Click="CopyRaw_Click"/>
+                        <Button x:Name="CopyAiButton" Content="Copy AI edit" Style="{StaticResource QuietButton}" Margin="0,0,8,8"
+                                Click="CopyAi_Click" ToolTip="The AI's own output, before it was fitted into the surrounding text"/>
                         <Button Content="Insert transcription into the last app" Style="{StaticResource QuietButton}" Margin="0,0,8,8"
                                 Click="InsertRaw_Click"/>
                     </WrapPanel>
