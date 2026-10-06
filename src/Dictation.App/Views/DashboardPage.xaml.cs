@@ -43,7 +43,8 @@ public partial class DashboardPage : UserControl
     /// <summary>Where each dial leads when clicked: the page that explains or changes what it shows.</summary>
     static string DialPage(string label) => label switch
     {
-        "Words today" or "History" => "History",
+        "Dictated today" or "History" => "History",
+        "Read aloud today" => "ReadAloud",
         "AI edits kept" => "SpeechToText", // the profiles, whose instructions and safety net decide what is kept
         "Turnaround" => "Models",
         "Speech model" => "Unloading",
@@ -126,8 +127,12 @@ public partial class DashboardPage : UserControl
         var days = usage.PerDay(now);
         var today = days[^1].Words;
         var best = days.Max(d => d.Words);
-        Dials.Children.Add(Dial(best > 0 ? today / (double)best : 0, today.ToString("N0"), "Words today",
-            best > 0 ? $"best day {best:N0}" : "no dictation yet"));
+        Dials.Children.Add(Dial(best > 0 ? today / (double)best : 0, today.ToString("N0"), "Dictated today",
+            best > 0 ? $"words · best day {best:N0}" : "no dictation yet"));
+        var readToday = days[^1].WordsRead;
+        var bestRead = days.Max(d => d.WordsRead);
+        Dials.Children.Add(Dial(bestRead > 0 ? readToday / (double)bestRead : 0, readToday.ToString("N0"), "Read aloud today",
+            bestRead > 0 ? $"words · best day {bestRead:N0}" : "nothing read yet"));
 
         var finish = usage.AverageFinishSeconds(now);
         Dials.Children.Add(Dial(finish is { } f ? Math.Clamp(f / 10.0, 0, 1) : 0, finish is { } f2 ? $"{f2:0.0} s" : "—",
@@ -277,14 +282,31 @@ public partial class DashboardPage : UserControl
     FrameworkElement DaysChart(IReadOnlyList<DayTotal> days, int streak)
     {
         var root = new DockPanel();
-        var total = days.Sum(d => d.Words);
-        var header = Header("WORDS PER DAY · LAST 14 DAYS", $"{total:N0} words · {days.Sum(d => d.Dictations)} dictations" +
+        var dictated = days.Sum(d => d.Words);
+        var read = days.Sum(d => d.WordsRead);
+        var header = Header("WORDS PER DAY · LAST 14 DAYS", $"{dictated:N0} dictated · {read:N0} read aloud" +
                                                           (streak > 1 ? $" · {streak}-day streak" : ""));
         DockPanel.SetDock(header, Dock.Top);
         root.Children.Add(header);
-        if (total == 0) { root.Children.Add(Empty("Dictate a little and your words per day appear here.")); return root; }
 
-        var max = days.Max(d => d.Words);
+        // The key: which bar is which
+        var key = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, -2, 0, 8) };
+        void Key(string resource, double opacity, string label)
+        {
+            var swatch = new Border { Width = 10, Height = 10, CornerRadius = new CornerRadius(2), Opacity = opacity, Margin = new Thickness(0, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center };
+            swatch.SetResourceReference(Border.BackgroundProperty, resource);
+            key.Children.Add(swatch);
+            var t = new TextBlock { Text = label, FontSize = 11.5, Margin = new Thickness(0, 0, 16, 0), VerticalAlignment = VerticalAlignment.Center };
+            t.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Muted");
+            key.Children.Add(t);
+        }
+        Key("Ob.Record", 1, "Words dictated");
+        Key("Ob.Strong", ReadOpacity, "Words read aloud");
+        DockPanel.SetDock(key, Dock.Top);
+        root.Children.Add(key);
+        if (dictated + read == 0) { root.Children.Add(Empty("Dictate or read something aloud and your words per day appear here.")); return root; }
+
+        var max = days.Max(d => Math.Max(d.Words, d.WordsRead));
         var grid = new Grid();
         grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1) });
@@ -294,23 +316,22 @@ public partial class DashboardPage : UserControl
             var d = days[i];
             var isToday = i == days.Count - 1;
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            var f = max > 0 ? d.Words / (double)max : 0;
 
-            var column = new Grid { Background = Brushes.Transparent }; // the whole column is the hover target
-            column.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1 - f, GridUnitType.Star) });
-            column.RowDefinitions.Add(new RowDefinition { Height = new GridLength(f, GridUnitType.Star) });
-            var bar = new Border { CornerRadius = new CornerRadius(4, 4, 0, 0), Margin = new Thickness(2, 0, 2, 0), MinHeight = d.Words > 0 ? 2 : 0 };
-            bar.SetResourceReference(Border.BackgroundProperty, isToday ? "Ob.Record" : "Ob.Strong");
-            Grid.SetRow(bar, 1);
-            column.Children.Add(bar);
-            column.ToolTip = $"{d.Day:dddd d MMMM}: {d.Words:N0} words in {d.Dictations} dictation{(d.Dictations == 1 ? "" : "s")}";
-            Grid.SetColumn(column, i);
-            grid.Children.Add(column);
+            // Two bars side by side: dictated, then read aloud. The whole day is the hover target.
+            var pair = new Grid { Background = Brushes.Transparent, Margin = new Thickness(2, 0, 2, 0) };
+            pair.ColumnDefinitions.Add(new ColumnDefinition());
+            pair.ColumnDefinitions.Add(new ColumnDefinition());
+            pair.Children.Add(Bar(d.Words, max, "Ob.Record", 1, 0));
+            pair.Children.Add(Bar(d.WordsRead, max, "Ob.Strong", ReadOpacity, 1));
+            pair.ToolTip = $"{d.Day:dddd d MMMM}\n{d.Words:N0} words dictated in {d.Dictations} dictation{(d.Dictations == 1 ? "" : "s")}" +
+                           $"\n{d.WordsRead:N0} words read aloud";
+            Grid.SetColumn(pair, i);
+            grid.Children.Add(pair);
 
             var tick = new TextBlock
             {
                 Text = isToday ? "today" : Short(d.Day.ToString("ddd")), FontSize = 10, HorizontalAlignment = HorizontalAlignment.Center,
-                Margin = new Thickness(0, 4, 0, 0),
+                Margin = new Thickness(0, 4, 0, 0), FontWeight = isToday ? FontWeights.SemiBold : FontWeights.Normal,
             };
             tick.SetResourceReference(TextBlock.ForegroundProperty, isToday ? "Ob.Text" : "Ob.Muted");
             Grid.SetColumn(tick, i);
@@ -324,6 +345,24 @@ public partial class DashboardPage : UserControl
         grid.Children.Add(baseline);
         root.Children.Add(grid);
         return root;
+    }
+
+    /// <summary>The read-aloud bars: the strong colour, toned down so the two series tell apart in every scheme.</summary>
+    const double ReadOpacity = 0.45;
+
+    /// <summary>One bar of a day, as a share of the busiest day.</summary>
+    static FrameworkElement Bar(int words, int max, string resource, double opacity, int column)
+    {
+        var f = max > 0 ? words / (double)max : 0;
+        var cell = new Grid { Margin = new Thickness(1, 0, 1, 0) };
+        cell.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1 - f, GridUnitType.Star) });
+        cell.RowDefinitions.Add(new RowDefinition { Height = new GridLength(f, GridUnitType.Star) });
+        var bar = new Border { CornerRadius = new CornerRadius(3, 3, 0, 0), MinHeight = words > 0 ? 2 : 0, Opacity = opacity };
+        bar.SetResourceReference(Border.BackgroundProperty, resource);
+        Grid.SetRow(bar, 1);
+        cell.Children.Add(bar);
+        Grid.SetColumn(cell, column);
+        return cell;
     }
 
     static string Short(string day) => day.Length <= 2 ? day : day[..2];

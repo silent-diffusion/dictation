@@ -129,7 +129,7 @@ public sealed class UsageStore
         Enumerable.Range(0, days).Select(i => today.Date.AddDays(i - days + 1)).Select(day =>
         {
             var d = _data.Days.FirstOrDefault(x => x.Day == day);
-            return new DayTotal(day, d?.Words ?? 0, d?.Dictations ?? 0);
+            return new DayTotal(day, d?.Words ?? 0, d?.Dictations ?? 0, d?.WordsRead ?? 0);
         }).ToList();
 
     /// <summary>The apps dictated into most over the last <paramref name="days"/> days.</summary>

@@ -57,7 +57,7 @@ The folder keeps its pre-rename name so updates from Local Dictation 1.x keep yo
 ## Using it
 
 The sidebar has five sections: **Active dashboard** (one screen, no scrolling: what's active and loaded, dials for
-words today, turnaround, AI edits kept, history and the speech model's unload countdown, and charts of words per day and
+words dictated and words read aloud today, turnaround, AI edits kept, history and the speech model's unload countdown, and charts of words per day (dictated and read aloud, side by side) and
 the apps you dictate into; the top tiles' text grows with the window. Every tile, dial and chart opens its page when
 clicked (History, the profiles, Models, Model unloading). The figures come from daily counts in
 `data\usage.json` (dictations, words, seconds spoken, turnaround, AI edits kept, readings and dictations per app name; never
@@ -103,7 +103,8 @@ their menu starting below the corner buttons.
   with Windows; nothing to download, more robotic). Kokoro and Piper both run in Oberton's local voice server on this PC.
   A profile can pick its own model and voice, for reading its dictations back and for the hotkey while it is active.
   Text is read as plain text: Markdown (headings, lists, **bold**, links, tables, code fences) and stray symbols are dropped.
-  The ⌄ button shows the whole text, scrolling along as it is read. The player's opacity is a setting under *Read aloud*.
+  The ⌄ button shows the whole text, scrolling along as it is read, with its Markdown shown formatted (headings, bullet
+  and numbered lists, quotes, code, bold, italic and links) while the voice reads it as plain text. The player's opacity is a setting under *Read aloud*.
 * **Settings**: grouped into Dictation, Models & AI, Look & feel and App; each group folds away (remembered).
   **Appearance** follows the Windows light/dark setting, or pick Light or Dark, plus a color scheme (Ember, Ocean,
   Forest, Violet, Rose), each with a light and a dark version.

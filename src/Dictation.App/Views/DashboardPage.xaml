@@ -24,7 +24,7 @@
         <UniformGrid x:Name="Tiles" Grid.Row="1" Columns="4" Rows="1"/>
 
         <!-- Dials -->
-        <UniformGrid x:Name="Dials" Grid.Row="2" Columns="5" Rows="1" Margin="0,4,0,0"/>
+        <UniformGrid x:Name="Dials" Grid.Row="2" Columns="6" Rows="1" Margin="0,4,0,0"/>
 
         <!-- Charts -->
         <Grid Grid.Row="3" Margin="0,4,0,0">
