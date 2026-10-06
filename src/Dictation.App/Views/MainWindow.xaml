@@ -33,19 +33,21 @@
             <Setter Property="VerticalAlignment" Value="Center"/>
         </Style>
     </Window.Resources>
+    <!-- One layer, not columns: the sidebar slides off to the left (a transform) while the page's left margin shrinks to
+         match, so hiding it is a slide rather than a jump. -->
     <Grid TextElement.Foreground="{DynamicResource Ob.Text}">
-        <Grid.ColumnDefinitions>
-            <ColumnDefinition x:Name="SidebarColumn" Width="268"/>
-            <ColumnDefinition Width="*"/>
-        </Grid.ColumnDefinitions>
+        <!-- Content -->
+        <ContentPresenter x:Name="Host" Margin="268,0,0,0"/>
 
         <!-- Sidebar -->
-        <Border x:Name="Sidebar" Grid.Column="0" Background="{DynamicResource Ob.Sidebar}" BorderBrush="{DynamicResource Ob.Divider}"
-                BorderThickness="0,0,1,0">
+        <Border x:Name="Sidebar" Width="268" HorizontalAlignment="Left" Panel.ZIndex="1" Background="{DynamicResource Ob.Sidebar}"
+                BorderBrush="{DynamicResource Ob.Divider}" BorderThickness="0,0,1,0">
+            <Border.RenderTransform>
+                <TranslateTransform x:Name="SidebarSlide"/>
+            </Border.RenderTransform>
             <DockPanel Margin="14,18,14,14" LastChildFill="True">
-                <DockPanel DockPanel.Dock="Top" Margin="6,0,0,24">
-                    <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Content="&#xE76B;" Click="Collapse_Click"
-                            ToolTip="Hide the sidebar (Ctrl+B)" AutomationProperties.Name="Hide the sidebar"/>
+                <!-- The logo, to the right of the menu and back buttons (which stay put when the sidebar slides away) -->
+                <DockPanel x:Name="Header" DockPanel.Dock="Top" Margin="54,3,0,21">
                     <StackPanel Orientation="Horizontal">
                         <Border Width="30" Height="30" CornerRadius="8" Background="{DynamicResource Ob.Mark}">
                             <Ellipse Width="9" Height="9" Fill="{DynamicResource Ob.Record}"/>
@@ -109,12 +111,34 @@
             </DockPanel>
         </Border>
 
-        <!-- Content -->
-        <ContentPresenter x:Name="Host" Grid.Column="1"/>
-
-        <!-- Shown while the sidebar is hidden: brings it back -->
-        <Button x:Name="ExpandButton" Grid.Column="1" Style="{StaticResource IconButton}" Content="&#xE700;"
-                HorizontalAlignment="Left" VerticalAlignment="Top" Margin="8,8,0,0" Visibility="Collapsed"
-                Click="Expand_Click" ToolTip="Show the sidebar (Ctrl+B)" AutomationProperties.Name="Show the sidebar"/>
+        <!-- Always at the top left: the menu button (☰ that folds into ✕ while the sidebar is open) and Back -->
+        <StackPanel Orientation="Horizontal" Panel.ZIndex="2" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="12,16,0,0">
+            <Button x:Name="MenuButton" Style="{StaticResource IconButton}" Click="Menu_Click" Padding="0">
+                <Grid Width="18" Height="14">
+                    <Rectangle x:Name="Bar1" Height="2" RadiusX="1" RadiusY="1" VerticalAlignment="Top" RenderTransformOrigin="0.5,0.5"
+                               Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}">
+                        <Rectangle.RenderTransform>
+                            <TransformGroup>
+                                <RotateTransform x:Name="Bar1Turn"/>
+                                <TranslateTransform x:Name="Bar1Move"/>
+                            </TransformGroup>
+                        </Rectangle.RenderTransform>
+                    </Rectangle>
+                    <Rectangle x:Name="Bar2" Height="2" RadiusX="1" RadiusY="1" VerticalAlignment="Center"
+                               Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+                    <Rectangle x:Name="Bar3" Height="2" RadiusX="1" RadiusY="1" VerticalAlignment="Bottom" RenderTransformOrigin="0.5,0.5"
+                               Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}">
+                        <Rectangle.RenderTransform>
+                            <TransformGroup>
+                                <RotateTransform x:Name="Bar3Turn"/>
+                                <TranslateTransform x:Name="Bar3Move"/>
+                            </TransformGroup>
+                        </Rectangle.RenderTransform>
+                    </Rectangle>
+                </Grid>
+            </Button>
+            <Button x:Name="BackButton" Style="{StaticResource IconButton}" Content="&#xE72B;" Margin="6,0,0,0" Click="Back_Click"
+                    ToolTip="Back (Alt+Left)" AutomationProperties.Name="Back" Visibility="Collapsed"/>
+        </StackPanel>
     </Grid>
 </Window>

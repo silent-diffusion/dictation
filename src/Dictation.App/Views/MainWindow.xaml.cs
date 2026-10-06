@@ -24,32 +24,131 @@ public partial class MainWindow : Window
         Icon = System.Windows.Interop.Imaging.CreateBitmapSourceFromHIcon(
             Services.TrayIcon.CreateIcon().Handle, Int32Rect.Empty, System.Windows.Media.Imaging.BitmapSizeOptions.FromEmptyOptions());
         NavList.SelectedItem = DashboardItem;
-        SetSidebar(!s.Settings.Current.SidebarCollapsed, save: false);
+        SetSidebar(!s.Settings.Current.SidebarCollapsed, animate: false, save: false);
         PreviewKeyDown += (_, e) =>
         {
-            if (e.Key == System.Windows.Input.Key.B && System.Windows.Input.Keyboard.Modifiers == System.Windows.Input.ModifierKeys.Control)
+            var mods = System.Windows.Input.Keyboard.Modifiers;
+            if (e.Key == System.Windows.Input.Key.B && mods == System.Windows.Input.ModifierKeys.Control)
             {
-                SetSidebar(Sidebar.Visibility != Visibility.Visible);
+                SetSidebar(!_open);
+                e.Handled = true;
+            }
+            else if (e.SystemKey == System.Windows.Input.Key.Left && mods == System.Windows.Input.ModifierKeys.Alt)
+            {
+                GoBack();
                 e.Handled = true;
             }
         };
+        MouseDown += (_, e) => { if (e.ChangedButton == System.Windows.Input.MouseButton.XButton1) GoBack(); }; // the mouse's back button
     }
 
-    void Collapse_Click(object sender, RoutedEventArgs e) => SetSidebar(false);
-    void Expand_Click(object sender, RoutedEventArgs e) => SetSidebar(true);
+    // ===== sidebar: slides away to the left; the menu button morphs ☰ ⇄ ✕ =====
+
+    const double SidebarWidth = 268;
+    bool _open = true;
+    double _shut; // 0 = sidebar fully shown, 1 = fully away
+    EventHandler? _slide;
+
+    void Menu_Click(object sender, RoutedEventArgs e) => SetSidebar(!_open);
 
     /// <summary>Show or fold away the sidebar; folded, the page gets the whole window.</summary>
-    void SetSidebar(bool visible, bool save = true)
+    void SetSidebar(bool open, bool animate = true, bool save = true)
     {
-        Sidebar.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
-        SidebarColumn.Width = visible ? new GridLength(268) : new GridLength(0);
-        ExpandButton.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
-        // Keep the page's top-left content clear of the floating button.
-        Host.Margin = visible ? new Thickness(0) : new Thickness(32, 0, 0, 0);
+        _open = open;
+        MenuButton.ToolTip = (open ? "Hide the menu" : "Show the menu") + " (Ctrl+B)";
+        System.Windows.Automation.AutomationProperties.SetName(MenuButton, open ? "Hide the menu" : "Show the menu");
+        MorphMenuIcon(open, animate);
+        SlideSidebar(open ? 0 : 1, animate);
         if (!save) return;
         var settings = App.Services.Settings;
-        settings.Current.SidebarCollapsed = !visible;
+        settings.Current.SidebarCollapsed = !open;
         settings.Save();
+    }
+
+    /// <summary>Move the sidebar and the page together, frame by frame (ease-out, about a quarter second).</summary>
+    void SlideSidebar(double to, bool animate)
+    {
+        if (_slide != null) { System.Windows.Media.CompositionTarget.Rendering -= _slide; _slide = null; }
+        Sidebar.Visibility = Visibility.Visible;
+        if (!animate) { Place(to); return; }
+        var from = _shut;
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        _slide = (_, _) =>
+        {
+            var p = Math.Min(1, clock.Elapsed.TotalMilliseconds / 260);
+            Place(from + (to - from) * (1 - Math.Pow(1 - p, 3)));
+            if (p < 1) return;
+            System.Windows.Media.CompositionTarget.Rendering -= _slide;
+            _slide = null;
+        };
+        System.Windows.Media.CompositionTarget.Rendering += _slide;
+    }
+
+    void Place(double shut)
+    {
+        _shut = shut;
+        SidebarSlide.X = -SidebarWidth * shut;
+        // Folded, the page keeps clear of the menu and back buttons in the corner.
+        Host.Margin = new Thickness(SidebarWidth * (1 - shut) + ContentInset() * shut, 0, 0, 0);
+        Sidebar.Visibility = shut >= 1 ? Visibility.Collapsed : Visibility.Visible; // off screen: out of the tab order too
+    }
+
+    double ContentInset() => BackButton.Visibility == Visibility.Visible ? 96 : 54;
+
+    /// <summary>Three bars ⇄ a cross: the top and bottom bars meet in the middle and turn ±45°, the middle one fades.</summary>
+    void MorphMenuIcon(bool cross, bool animate)
+    {
+        var d = new Duration(TimeSpan.FromMilliseconds(animate ? 240 : 0));
+        var ease = new System.Windows.Media.Animation.CubicEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseInOut };
+        void To(System.Windows.Media.Animation.IAnimatable target, DependencyProperty prop, double value) =>
+            target.BeginAnimation(prop, new System.Windows.Media.Animation.DoubleAnimation(value, d) { EasingFunction = ease });
+        To(Bar1Turn, System.Windows.Media.RotateTransform.AngleProperty, cross ? 45 : 0);
+        To(Bar1Move, System.Windows.Media.TranslateTransform.YProperty, cross ? 6 : 0);
+        To(Bar3Turn, System.Windows.Media.RotateTransform.AngleProperty, cross ? -45 : 0);
+        To(Bar3Move, System.Windows.Media.TranslateTransform.YProperty, cross ? -6 : 0);
+        To(Bar2, OpacityProperty, cross ? 0 : 1);
+    }
+
+    // ===== Back: the pages (and Settings sections) visited, most recent last =====
+
+    readonly List<string> _visited = new();
+    string _here = "Dashboard";
+    bool _goingBack;
+    string? _openSection; // the Settings section to open when the Settings page is created
+
+    /// <summary>Note that <paramref name="place"/> ("History", "Settings/Appearance"…) is now shown.</summary>
+    void Visit(string place)
+    {
+        if (place == _here) return;
+        if (!_goingBack)
+        {
+            _visited.Add(_here);
+            if (_visited.Count > 50) _visited.RemoveAt(0);
+        }
+        _here = place;
+        // Back is everywhere except the dashboard (it is where the app starts).
+        BackButton.Visibility = place == "Dashboard" ? Visibility.Collapsed : Visibility.Visible;
+        Header.Margin = new Thickness(BackButton.Visibility == Visibility.Visible ? 96 : 54, 3, 0, 21);
+        Place(_shut); // the folded page's inset depends on whether Back shows
+    }
+
+    void Back_Click(object sender, RoutedEventArgs e) => GoBack();
+
+    /// <summary>To the page shown before this one (the dashboard if there is none).</summary>
+    void GoBack()
+    {
+        if (_here == "Dashboard") return;
+        var target = "Dashboard";
+        while (_visited.Count > 0)
+        {
+            target = _visited[^1];
+            _visited.RemoveAt(_visited.Count - 1);
+            if (target != _here) break;
+            target = "Dashboard";
+        }
+        _goingBack = true;
+        try { ShowPage(target.StartsWith("Settings/") ? target["Settings/".Length..] : target); }
+        finally { _goingBack = false; }
     }
 
     void UpdateDots()
@@ -67,14 +166,23 @@ public partial class MainWindow : Window
     void NavList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (NavList.SelectedItem is not ListBoxItem { Tag: string tag }) return;
+        if (tag == "Settings")
+        {
+            var settings = new SettingsPage(_openSection ?? "General");
+            _openSection = null;
+            settings.SectionShown += section => Visit("Settings/" + section);
+            Host.Content = settings;
+            Visit("Settings/" + settings.Section);
+            return;
+        }
         Host.Content = tag switch
         {
             "SpeechToText" => new SpeechToTextPage(),
             "ReadAloud" => new ReadAloudPage(),
             "History" => new HistoryPage(),
-            "Settings" => new SettingsPage(),
             _ => (object)new DashboardPage(),
         };
+        Visit(tag);
     }
 
     /// <summary>Open a section ("Dashboard", "SpeechToText", "ReadAloud", "History") or a settings section by its tag
@@ -83,8 +191,9 @@ public partial class MainWindow : Window
     {
         var item = NavList.Items.OfType<ListBoxItem>().FirstOrDefault(i => i.Tag as string == tag);
         if (item != null) { NavList.SelectedItem = item; return; }
+        if (Host.Content is SettingsPage settings) { settings.Show(tag); return; }
+        _openSection = tag; // a new Settings page opens straight on this section
         NavList.SelectedItem = SettingsItem;
-        if (Host.Content is SettingsPage settings) settings.Show(tag);
     }
 
     /// <summary>Speech to text, with a profile open.</summary>
