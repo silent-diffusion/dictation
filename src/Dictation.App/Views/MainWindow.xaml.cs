@@ -84,12 +84,20 @@ public partial class MainWindow : Window
         System.Windows.Media.CompositionTarget.Rendering += _slide;
     }
 
+    /// <summary>Back's offset while the sidebar is open: from its spot beside the menu button to the sidebar's right
+    /// edge, after the logo (menu · Oberton · Back).</summary>
+    const double BackOpenShift = SidebarWidth - 14 - 36 - (12 + 36 + 6);
+
     void Place(double shut)
     {
         _shut = shut;
         SidebarSlide.X = -SidebarWidth * shut;
-        // Folded, the page keeps clear of the menu and back buttons in the corner.
-        Host.Margin = new Thickness(SidebarWidth * (1 - shut) + ContentInset() * shut, 0, 0, 0);
+        BackSlide.X = BackOpenShift * (1 - shut);
+        // Folded, the page keeps clear of the menu and back buttons in the corner; a page with its own side menu goes
+        // right up to the edge instead and starts that menu below the buttons.
+        var sideMenu = Host.Content as ISideMenuPage;
+        sideMenu?.ClearCorner(shut >= 0.5);
+        Host.Margin = new Thickness(SidebarWidth * (1 - shut) + (sideMenu != null ? 0 : ContentInset()) * shut, 0, 0, 0);
         Sidebar.Visibility = shut >= 1 ? Visibility.Collapsed : Visibility.Visible; // off screen: out of the tab order too
     }
 
@@ -128,8 +136,7 @@ public partial class MainWindow : Window
         _here = place;
         // Back is everywhere except the dashboard (it is where the app starts).
         BackButton.Visibility = place == "Dashboard" ? Visibility.Collapsed : Visibility.Visible;
-        Header.Margin = new Thickness(BackButton.Visibility == Visibility.Visible ? 96 : 54, 3, 0, 21);
-        Place(_shut); // the folded page's inset depends on whether Back shows
+        Place(_shut); // the folded page's layout depends on the page and on whether Back shows
     }
 
     void Back_Click(object sender, RoutedEventArgs e) => GoBack();
@@ -173,6 +180,7 @@ public partial class MainWindow : Window
             settings.SectionShown += section => Visit("Settings/" + section);
             Host.Content = settings;
             Visit("Settings/" + settings.Section);
+            Place(_shut);
             return;
         }
         Host.Content = tag switch
@@ -183,6 +191,7 @@ public partial class MainWindow : Window
             _ => (object)new DashboardPage(),
         };
         Visit(tag);
+        Place(_shut); // fit the new page to the sidebar's state
     }
 
     /// <summary>Open a section ("Dashboard", "SpeechToText", "ReadAloud", "History") or a settings section by its tag

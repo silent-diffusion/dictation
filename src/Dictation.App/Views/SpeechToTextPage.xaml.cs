@@ -5,7 +5,7 @@ using Dictation.Core.Settings;
 namespace Dictation.App.Views;
 
 /// <summary>Dictation: the profiles (how your words are cleaned up), each with its own page.</summary>
-public partial class SpeechToTextPage : UserControl
+public partial class SpeechToTextPage : UserControl, ISideMenuPage
 {
     public SpeechToTextPage()
     {
@@ -33,4 +33,6 @@ public partial class SpeechToTextPage : UserControl
     }
 
     void NewProfile_Click(object sender, RoutedEventArgs e) => ProfileList.SelectedItem = App.Services.Profiles.Create();
+
+    public void ClearCorner(bool clear) => SideMenu.Margin = new System.Windows.Thickness(14, clear ? 70 : 30, 14, 16);
 }

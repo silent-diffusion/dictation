@@ -13,7 +13,7 @@
         <!-- Profiles -->
         <Border BorderBrush="{DynamicResource Ob.Divider}" BorderThickness="0,0,1,0">
             <ScrollViewer VerticalScrollBarVisibility="Auto">
-                <StackPanel Margin="14,30,14,16">
+                <StackPanel x:Name="SideMenu" Margin="14,30,14,16">
                     <TextBlock Text="Speech to text" FontSize="20" FontWeight="SemiBold" Margin="10,0,0,4"/>
                     <TextBlock x:Name="HotkeyHint" Style="{StaticResource Caption}" Margin="10,0,8,14" FontSize="12"/>
                     <DockPanel>
