@@ -58,7 +58,8 @@ The folder keeps its pre-rename name so updates from Local Dictation 1.x keep yo
 
 The sidebar has five sections: **Active dashboard** (one screen, no scrolling: what's active and loaded, dials for
 words today, turnaround, AI edits kept, history and the speech model's unload countdown, and charts of words per day and
-the apps you dictate into; the top tiles' text grows with the window. The figures come from daily counts in
+the apps you dictate into; the top tiles' text grows with the window. Every tile, dial and chart opens its page when
+clicked (History, the profiles, Models, Model unloading). The figures come from daily counts in
 `data\usage.json` (dictations, words, seconds spoken, turnaround, AI edits kept, readings and dictations per app name; never
 any text, audio or window titles), so they survive History being trimmed, cleared or off), **Speech to text** (profiles), **Read aloud**, **History** and **Settings**. Hide the sidebar
 with its chevron (or **Ctrl+B**) to give the page the whole window; the ☰ button brings it back.
@@ -99,8 +100,9 @@ with its chevron (or **Ctrl+B**) to give the page the whole window; the ☰ butt
   A profile can pick its own model and voice, for reading its dictations back and for the hotkey while it is active.
   Text is read as plain text: Markdown (headings, lists, **bold**, links, tables, code fences) and stray symbols are dropped.
   The ⌄ button shows the whole text, scrolling along as it is read. The player's opacity is a setting under *Read aloud*.
-* **Settings**: grouped into Dictation, Models & AI, Look & feel and App. **Appearance** follows the
-  Windows light/dark setting, or pick Light or Dark.
+* **Settings**: grouped into Dictation, Models & AI, Look & feel and App; each group folds away (remembered).
+  **Appearance** follows the Windows light/dark setting, or pick Light or Dark, plus a color scheme (Ember, Ocean,
+  Forest, Violet, Rose), each with a light and a dark version.
 * **Profiles** (*Speech to text*): *Light Cleanup*, *Grammar & Clarity*, *Natural Phrasing*, *Custom*, *Raw* (no AI: the recognizer's words,
   with the seams between live pieces fixed), plus your own. Edit the prompt, pick a model (only models downloaded to this PC are listed, plus cloud models once
   they are set up), pick its models in one *Models* card: a speech-to-text (Whisper) model, the AI model and a Read aloud model and voice (downloaded ones only; a profile with
@@ -113,7 +115,7 @@ with its chevron (or **Ctrl+B**) to give the page the whole window; the ☰ butt
   It follows the profile's switches: with *preview before inserting* the real preview appears, with *read aloud after
   inserting* the result is read to you.
 * **History**: the last 50 dictations (adjustable under *Settings › History*, up to *All of them*), kept in Oberton's data folder so they survive
-  updates. Each has its recording (play it, also at 2×), the Transcription, AI Edit and Inserted boxes,
+  updates. Each has its recording (play it, also at 2×), the Transcription, AI Edit and Inserted boxes (each can be copied),
   and the app and window it went into. List them newest first, or grouped by app (each app's group folds away).
 * **Models** (*Settings › Models*): every speech, AI and voice model as a list, showing whether it is downloaded, active and
   loaded, with **Download** and **Use this** buttons. Cloud models are marked CLOUD.

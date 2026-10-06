@@ -78,6 +78,11 @@
                 </RadioButton>
             </UniformGrid>
 
+            <TextBlock Text="Colors" Style="{StaticResource FieldLabel}" Margin="0,28,0,6"/>
+            <UniformGrid x:Name="SchemeGrid" Columns="5" AutomationProperties.Name="Color scheme"/>
+            <TextBlock Style="{StaticResource Caption}" Margin="0,6,0,0"
+                       Text="Each scheme has a light and a dark version, so it follows the theme above. Text keeps the same contrast in all of them."/>
+
             <TextBlock Text="Dictation overlay" Style="{StaticResource FieldLabel}" Margin="0,28,0,6"/>
             <Border Style="{StaticResource Card}">
                 <Grid>

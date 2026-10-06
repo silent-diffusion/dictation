@@ -31,8 +31,24 @@ public partial class DashboardPage : UserControl
         _timer.Tick += async (_, _) => await RefreshAsync();
         Loaded += async (_, _) => { _timer.Start(); await RefreshAsync(); };
         Unloaded += (_, _) => _timer.Stop();
+        // The charts open History, where every dictation behind them is listed.
+        foreach (var card in new[] { DaysCard, AppsCard })
+        {
+            card.Cursor = Cursors.Hand;
+            card.MouseLeftButtonUp += (_, _) => TheApp.ShowPage("History");
+        }
         Build();
     }
+
+    /// <summary>Where each dial leads when clicked: the page that explains or changes what it shows.</summary>
+    static string DialPage(string label) => label switch
+    {
+        "Words today" or "History" => "History",
+        "AI edits kept" => "SpeechToText", // the profiles, whose instructions and safety net decide what is kept
+        "Turnaround" => "Models",
+        "Speech model" => "Unloading",
+        _ => "Dashboard",
+    };
 
     async Task RefreshAsync()
     {
@@ -214,11 +230,14 @@ public partial class DashboardPage : UserControl
         note.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Muted");
         canvas.Children.Add(note);
 
-        return new Border
+        var card = new Border
         {
             Style = (Style)FindResource("Card"), Margin = new Thickness(4), Padding = new Thickness(6),
             Child = new Viewbox { Stretch = Stretch.Uniform, Child = canvas }, ToolTip = $"{label}: {value} ({sub})",
+            Cursor = Cursors.Hand,
         };
+        card.MouseLeftButtonUp += (_, _) => TheApp.ShowPage(DialPage(label));
+        return card;
     }
 
     /// <summary>An arc of the gauge: from the lower left, clockwise, <paramref name="fraction"/> of 270°.</summary>

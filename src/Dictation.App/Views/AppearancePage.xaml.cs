@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 using Dictation.App.Services;
 using Dictation.Core.Settings;
 
@@ -19,7 +20,43 @@ public partial class AppearancePage : UserControl
         PositionName.Text = Describe(s.OverlayPosition);
         UpdateSystemHint();
         BuildReaderPositionPicker();
+        BuildSchemePicker();
         AutoSave.Hook(this, () => App.Services.Settings.Save());
+    }
+
+    // ----- color schemes -----
+
+    void BuildSchemePicker()
+    {
+        var s = App.Services.Settings.Current;
+        foreach (var scheme in Enum.GetValues<ColorScheme>())
+        {
+            var (light, dark) = ColorSchemes.Accent(scheme);
+            var swatches = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(4, 4, 0, 0) };
+            foreach (var hex in new[] { light, dark })
+                swatches.Children.Add(new System.Windows.Shapes.Ellipse
+                {
+                    Width = 18, Height = 18, Margin = new Thickness(0, 0, 6, 0),
+                    Fill = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex)),
+                });
+            var content = new StackPanel();
+            content.Children.Add(swatches);
+            content.Children.Add(new TextBlock { Text = scheme.ToString(), Margin = new Thickness(4, 8, 0, 2), FontSize = 14 });
+            var card = new RadioButton
+            {
+                GroupName = "Scheme", Style = (Style)FindResource("ChoiceCard"), Content = content,
+                Margin = new Thickness(scheme == ColorScheme.Ember ? 0 : 4, 0, scheme == ColorScheme.Rose ? 0 : 4, 0),
+                IsChecked = s.ColorScheme == scheme,
+            };
+            System.Windows.Automation.AutomationProperties.SetName(card, scheme.ToString());
+            card.Checked += (_, _) =>
+            {
+                if (!IsLoaded) return;
+                App.Services.Settings.Current.ColorScheme = scheme;
+                App.Services.Settings.Save(); // applies right away (App.OnSettingsChanged)
+            };
+            SchemeGrid.Children.Add(card);
+        }
     }
 
     // ----- the Read aloud player: the same choices as the dictation overlay, or "same place" -----
