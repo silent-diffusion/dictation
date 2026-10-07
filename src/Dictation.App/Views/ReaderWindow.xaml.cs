@@ -281,7 +281,26 @@ public partial class ReaderWindow : Window
         AddFormatted(current.Inlines, span.Start, span.Start + span.Length, pos =>
             pos - span.Start < wordStart ? Spoken : pos - span.Start < wordEnd ? Current : Upcoming);
         if (current.Inlines.Count == 0) current.Inlines.Add(new Run(sentence)); // keep the span, so it can be scrolled to
-        if (moved) current.BringIntoView();
+        Follow(current.Inlines.OfType<Run>().FirstOrDefault(r => r.Foreground == Current) ?? (TextElement)current);
+    }
+
+    /// <summary>
+    /// Keep the word being read in view, about a third of the way down. (Inlines of a TextBlock can't be brought into
+    /// view themselves, so this works out where the word is drawn and scrolls the viewer there.) Only scrolls when the
+    /// word is near or past an edge, so the text doesn't jitter line by line.
+    /// </summary>
+    void Follow(TextElement anchor)
+    {
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
+        {
+            if (!FullScroll.IsVisible) return;
+            var rect = anchor.ContentStart.GetCharacterRect(LogicalDirection.Forward);
+            if (rect.IsEmpty) return;
+            var y = FullText.TranslatePoint(rect.TopLeft, FullScroll).Y; // within the visible area
+            var view = FullScroll.ViewportHeight;
+            if (y >= 8 && y + rect.Height <= view - 28) return;
+            FullScroll.ScrollToVerticalOffset(Math.Max(0, FullScroll.VerticalOffset + y - view / 3));
+        });
     }
 
     /// <summary>The whole text, line by line with its formatting; each sentence is a span the highlight can colour.</summary>

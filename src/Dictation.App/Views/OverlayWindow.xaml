@@ -104,11 +104,15 @@
                     <TextBlock x:Name="ChipText" Foreground="#B8FFFFFF" FontSize="12"/>
                 </Border>
 
-                <Button x:Name="CancelButton" Grid.Column="4" Style="{StaticResource PillButton}" Width="36" Height="36"
-                        Padding="0" Click="Cancel_Click" ToolTip="Cancel" AutomationProperties.Name="Cancel dictation"
+                <!-- "✕ Cancel" while a dictation is in progress; a plain ✕ when it closes a receipt -->
+                <Button x:Name="CancelButton" Grid.Column="4" Style="{StaticResource PillButton}" MinWidth="36" Height="36"
+                        Padding="12,0" Click="Cancel_Click" ToolTip="Cancel this dictation" AutomationProperties.Name="Cancel dictation"
                         Visibility="Collapsed">
-                    <Path Data="M 1,1 L 11,11 M 11,1 L 1,11" Stroke="White" StrokeThickness="1.6"
-                          StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                    <StackPanel Orientation="Horizontal">
+                        <Path Data="M 1,1 L 11,11 M 11,1 L 1,11" Stroke="White" StrokeThickness="1.6" VerticalAlignment="Center"
+                              StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                        <TextBlock x:Name="CancelLabel" Text="Cancel" Margin="7,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
                 </Button>
             </Grid>
 
