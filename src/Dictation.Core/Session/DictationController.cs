@@ -292,6 +292,7 @@ public sealed class DictationController
 
         await _engine; // if the model was still loading, it now catches up on the whole recording
         var raw = OutputSanitizer.CollapseDots(await _asr.StopAsync(ct));
+        ct.ThrowIfCancellationRequested();
         if (_live != null) await _live.DrainAsync(); // let pieces already on their way finish typing
         if (_live?.HasTyped != true && SpeechGuard.ShouldDiscard(raw, _recordClock.Elapsed, _peakLevel))
         {
@@ -323,7 +324,7 @@ public sealed class DictationController
                 if (result.SafetyNet) { _pendingSafetyNet = true; _pendingNote = result.Warning; }
                 else if (result.Warning != null) Notice?.Invoke(result.Warning, NoticeLevel.Warning);
             }
-            catch (UserFacingException e)
+            catch (UserFacingException e) when (!ct.IsCancellationRequested)
             {
                 // Never lose the user's words because the AI failed.
                 Log.Warn("LLM step failed: " + e.Message);
@@ -331,6 +332,7 @@ public sealed class DictationController
             }
         }
 
+        ct.ThrowIfCancellationRequested(); // cancelled from the overlay while the AI was working: insert nothing
         _pendingRaw = raw;
         _pendingProcessed = processed;
         if (profile.ShowPreview && !IsLive) // the profile may have been switched mid-dictation

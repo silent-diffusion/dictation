@@ -69,7 +69,8 @@ With the sidebar hidden, pages with a side menu of their own (Settings, Speech t
 their menu starting below the corner buttons.
 
 * **Hotkey** (default `Ctrl+Space`, change under *Hotkeys*): start/stop. `Ctrl+Alt+P` cycles profiles.
-* **Overlay**: a pill, always on top, never steals focus. Small while you talk (timer, level meter, active profile, `✕` cancels);
+* **Overlay**: a pill, always on top, never steals focus. Small while you talk (timer, level meter, active profile, and
+  **✕ Cancel**, which stays until the text is in: while starting, recording, transcribing and tidying up);
   while you speak, the words recognized so far run above it; it grows to show your transcript while the AI tidies it, then shows a small dimmed "Inserted" receipt. Hover it to see it clearly;
   click it to see the three boxes used everywhere in the app (the receipt, profile pages, History): **Transcription**,
   **AI Edit** (removed words struck through, new ones highlighted) and **Inserted** (the clean text that went in).

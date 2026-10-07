@@ -150,7 +150,9 @@ public partial class OverlayWindow : Window
         _compareOpen = false;
         FocusInserted(false);
         Card.Cursor = null;
-        CancelButton.ToolTip = "Cancel";
+        CancelButton.ToolTip = "Cancel this dictation";
+        CancelLabel.Visibility = Visibility.Visible;
+        CancelButton.Padding = new Thickness(12, 0, 12, 0);
         BodyText.Foreground = Brushes.White;
         BodyText.Inlines.Clear();
         TitleText.Inlines.Clear();
@@ -206,6 +208,7 @@ public partial class OverlayWindow : Window
                 ShowSpinner();
                 TitleText.Text = "Starting";
                 ShowChip(profileName);
+                CancelButton.Visibility = Visibility.Visible;
                 break;
 
             case DictationState.Recording:
@@ -231,6 +234,7 @@ public partial class OverlayWindow : Window
                 TitleText.Text = _engineLoading ? "Loading the speech model" : "Transcribing";
                 SubtitleText.Text = $"{Math.Max(1, (int)Math.Round(_recordClock.Elapsed.TotalSeconds))} s of audio";
                 ShowChip(profileName);
+                CancelButton.Visibility = Visibility.Visible;
                 ShowLiveText();
                 break;
 
@@ -240,6 +244,7 @@ public partial class OverlayWindow : Window
                 ShowChip(model);
                 BodyText.Foreground = Muted;
                 ShowBody(raw);
+                CancelButton.Visibility = Visibility.Visible; // nothing is inserted if cancelled now
                 width = WideWidth;
                 expanded = true;
                 break;
@@ -331,6 +336,8 @@ public partial class OverlayWindow : Window
             : "No AI edit for this dictation.");
         CancelButton.Visibility = Visibility.Visible; // closes the receipt
         CancelButton.ToolTip = "Close";
+        CancelLabel.Visibility = Visibility.Collapsed; // just ✕ here
+        CancelButton.Padding = new Thickness(0);
         Card.Cursor = null;
         Display(CompareWideWidth, expanded: true);
     }
