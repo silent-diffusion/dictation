@@ -342,22 +342,68 @@ public partial class OverlayWindow : Window
         Display(CompareWideWidth, expanded: true);
     }
 
+    string _copyRaw = "", _copyEdit = "", _copyInserted = "";
+
     void FillCompare(string raw, string? aiEdit, string inserted, string noEdit)
     {
-        CompareRaw.Text = raw;
-        CompareInserted.Text = inserted.Trim();
+        _copyRaw = raw;
+        _copyInserted = inserted.Trim();
+        _copyEdit = aiEdit?.Trim() ?? "";
+        CompareRaw.Text = _copyRaw;
+        CompareInserted.Text = _copyInserted;
+        var paragraph = new Paragraph { Margin = new Thickness(0), LineHeight = 21 };
         if (aiEdit != null)
         {
-            CompareEdited.Foreground = Brushes.White;
-            DiffText.Render(CompareEdited, WordDiff.Compute(raw, aiEdit.Trim()), DiffRemoved, DiffAdded);
+            paragraph.Foreground = Brushes.White;
+            DiffText.Render(paragraph.Inlines, WordDiff.Compute(raw, aiEdit.Trim()), DiffRemoved, DiffAdded);
         }
         else
         {
-            CompareEdited.Inlines.Clear();
-            CompareEdited.Foreground = Muted;
-            CompareEdited.Text = noEdit;
+            paragraph.Foreground = Muted;
+            paragraph.Inlines.Add(new Run(noEdit));
         }
+        CompareEdited.Document = new FlowDocument(paragraph) { PagePadding = new Thickness(0) };
+        foreach (var b in new[] { "Raw", "Edit", "Inserted" }) SetCopyLabel(b, "Copy");
         Compare.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>A box's Copy: the part selected in it, or the whole box. AI Edit copies the AI's own text (without the
+    /// struck-through words) unless part of it is selected.</summary>
+    void Copy_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: string box }) return;
+        var text = box switch
+        {
+            "Raw" => CompareRaw.SelectionLength > 0 ? CompareRaw.SelectedText : _copyRaw,
+            "Edit" => !CompareEdited.Selection.IsEmpty ? CompareEdited.Selection.Text : _copyEdit,
+            _ => CompareInserted.SelectionLength > 0 ? CompareInserted.SelectedText : _copyInserted,
+        };
+        if (string.IsNullOrWhiteSpace(text)) return;
+        try { Clipboard.SetText(text.Trim()); } catch { return; }
+        SetCopyLabel(box, "Copied ✓");
+        var reset = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.4) };
+        reset.Tick += (_, _) => { reset.Stop(); SetCopyLabel(box, "Copy"); };
+        reset.Start();
+        e.Handled = true;
+    }
+
+    void SetCopyLabel(string box, string label)
+    {
+        foreach (var b in FindCopyButtons()) if ((string)b.Tag == box) b.Content = label;
+    }
+
+    IEnumerable<Button> FindCopyButtons()
+    {
+        static IEnumerable<DependencyObject> All(DependencyObject root)
+        {
+            for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+            {
+                var c = VisualTreeHelper.GetChild(root, i);
+                yield return c;
+                foreach (var d in All(c)) yield return d;
+            }
+        }
+        return All(Compare).OfType<Button>().Where(b => b.Tag is "Raw" or "Edit" or "Inserted");
     }
 
     /// <summary>Before inserting: the three boxes, with the one that will go in brought forward.</summary>
@@ -379,7 +425,6 @@ public partial class OverlayWindow : Window
         InsertFrame.Effect = on ? new DropShadowEffect { BlurRadius = 18, ShadowDepth = 2, Opacity = 0.45 } : null;
         InsertLabel.Foreground = on ? Brushes.White : new SolidColorBrush(Color.FromArgb(0x99, 0xFF, 0xFF, 0xFF));
         CompareInserted.FontSize = on ? 15.5 : 14;
-        CompareInserted.LineHeight = on ? 23 : 21;
         if (on)
         {
             var pop = new DoubleAnimation(0.96, 1.02, TimeSpan.FromMilliseconds(220)) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } };

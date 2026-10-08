@@ -157,6 +157,20 @@ public sealed class ReadAloudSession : IWaveProvider, IDisposable
         _wake.Release();
     }
 
+    /// <summary>Jump to a spot in the text (a word clicked in the player): <paramref name="sentence"/>, a fraction of the
+    /// way into it. Works forwards and backwards, and from the end (reading resumes).</summary>
+    public void JumpTo(int sentence, double fraction)
+    {
+        lock (_lock)
+        {
+            if (sentence < 0 || sentence >= _audio.Length) return;
+            _ended = false;
+            SeekLocked(sentence, Math.Clamp(fraction, 0, 0.999));
+            _leadIn = LeadInSamples; // a small runway, so the first word isn't clipped
+        }
+        _wake.Release();
+    }
+
     /// <summary>Change the reading speed; the current sentence is re-read from the same point at the new pace.</summary>
     public void SetSpeed(double speed)
     {

@@ -157,7 +157,8 @@
                 <!-- Expanded: the whole text, read so far in white, the current word accented; scrolls along -->
                 <ScrollViewer x:Name="FullScroll" Visibility="Collapsed" MaxHeight="380" Focusable="False"
                               VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="2,0,0,0">
-                    <TextBlock x:Name="FullText" Foreground="#73FFFFFF" FontSize="15" LineHeight="23" TextWrapping="Wrap"
+                    <TextBlock x:Name="FullText" Foreground="#73FFFFFF" FontSize="15" LineHeight="23" TextWrapping="Wrap" Cursor="Hand"
+                               MouseLeftButtonUp="FullText_MouseLeftButtonUp" ToolTip="Click a word to read from there"
                                Margin="0,0,12,4"/>
                 </ScrollViewer>
             </StackPanel>

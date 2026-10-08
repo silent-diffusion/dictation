@@ -45,6 +45,59 @@
             <Setter Property="BorderBrush" Value="#38FFFFFF"/>
             <Setter Property="BorderThickness" Value="1"/>
         </Style>
+        <!-- Text you can select with the mouse (the overlay never takes keyboard focus, so copying goes through the
+             Copy buttons, which copy the selection if there is one). -->
+        <Style x:Key="SelectableText" TargetType="TextBox">
+            <Setter Property="IsReadOnly" Value="True"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="CaretBrush" Value="Transparent"/>
+            <Setter Property="SelectionBrush" Value="#F4A68C"/>
+            <Setter Property="SelectionOpacity" Value="0.45"/>
+            <Setter Property="IsInactiveSelectionHighlightEnabled" Value="True"/>
+            <Setter Property="IsTabStop" Value="False"/>
+            <Setter Property="Cursor" Value="IBeam"/>
+        </Style>
+        <Style x:Key="SelectableRich" TargetType="RichTextBox">
+            <Setter Property="IsReadOnly" Value="True"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="CaretBrush" Value="Transparent"/>
+            <Setter Property="SelectionBrush" Value="#F4A68C"/>
+            <Setter Property="SelectionOpacity" Value="0.45"/>
+            <Setter Property="IsInactiveSelectionHighlightEnabled" Value="True"/>
+            <Setter Property="IsTabStop" Value="False"/>
+            <Setter Property="Cursor" Value="IBeam"/>
+        </Style>
+        <!-- A small "Copy" next to each box's name -->
+        <Style x:Key="CopyLink" TargetType="Button">
+            <Setter Property="Content" Value="Copy"/>
+            <Setter Property="Foreground" Value="#B3FFFFFF"/>
+            <Setter Property="FontSize" Value="11.5"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" Background="Transparent" CornerRadius="8" Padding="8,1" BorderBrush="#38FFFFFF" BorderThickness="1">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#1AFFFFFF"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
         <Style x:Key="GhostPill" TargetType="Button" BasedOn="{StaticResource PillButton}">
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="Foreground" Value="#C8FFFFFF"/>
@@ -132,17 +185,21 @@
                     <ColumnDefinition x:Name="InsertColumn" Width="*"/>
                 </Grid.ColumnDefinitions>
                 <StackPanel x:Name="RawPanel" VerticalAlignment="Top">
-                    <TextBlock Text="Transcription" Foreground="#99FFFFFF" FontFamily="Cascadia Mono, Consolas" FontSize="11" Margin="0,0,0,6"/>
-                    <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto" Focusable="False">
-                        <TextBlock x:Name="CompareRaw" Foreground="#D9FFFFFF" FontSize="14" LineHeight="21" TextWrapping="Wrap"/>
-                    </ScrollViewer>
+                    <DockPanel Margin="0,0,0,4">
+                        <Button DockPanel.Dock="Right" Style="{StaticResource CopyLink}" Tag="Raw" Click="Copy_Click"
+                                ToolTip="Copy this box (or just the part you selected)" AutomationProperties.Name="Copy Transcription"/>
+                        <TextBlock Text="Transcription" Foreground="#99FFFFFF" FontFamily="Cascadia Mono, Consolas" FontSize="11" VerticalAlignment="Center"/>
+                    </DockPanel>
+                    <TextBox x:Name="CompareRaw" Style="{StaticResource SelectableText}" Foreground="#D9FFFFFF" MaxHeight="220" VerticalScrollBarVisibility="Auto"/>
                 </StackPanel>
                 <Border Grid.Column="1" Width="1" Background="#26FFFFFF" HorizontalAlignment="Center"/>
                 <StackPanel x:Name="EditPanel" Grid.Column="2" VerticalAlignment="Top">
-                    <TextBlock Text="AI Edit" Foreground="#99FFFFFF" FontFamily="Cascadia Mono, Consolas" FontSize="11" Margin="0,0,0,6"/>
-                    <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto" Focusable="False">
-                        <TextBlock x:Name="CompareEdited" Foreground="White" FontSize="14" LineHeight="21" TextWrapping="Wrap"/>
-                    </ScrollViewer>
+                    <DockPanel Margin="0,0,0,4">
+                        <Button DockPanel.Dock="Right" Style="{StaticResource CopyLink}" Tag="Edit" Click="Copy_Click"
+                                ToolTip="Copy this box (or just the part you selected)" AutomationProperties.Name="Copy AI Edit"/>
+                        <TextBlock Text="AI Edit" Foreground="#99FFFFFF" FontFamily="Cascadia Mono, Consolas" FontSize="11" VerticalAlignment="Center"/>
+                    </DockPanel>
+                    <RichTextBox x:Name="CompareEdited" Style="{StaticResource SelectableRich}" MaxHeight="220" VerticalScrollBarVisibility="Auto"/>
                 </StackPanel>
                 <Border x:Name="InsertDivider" Grid.Column="3" Width="1" Background="#26FFFFFF" HorizontalAlignment="Center"/>
                 <Border x:Name="InsertFrame" Grid.Column="4" CornerRadius="12" BorderThickness="1" BorderBrush="Transparent"
@@ -151,10 +208,12 @@
                         <ScaleTransform x:Name="InsertScale" ScaleX="1" ScaleY="1"/>
                     </Border.RenderTransform>
                     <StackPanel>
-                        <TextBlock x:Name="InsertLabel" Text="Inserted" Foreground="#99FFFFFF" FontFamily="Cascadia Mono, Consolas" FontSize="11" Margin="0,0,0,6"/>
-                        <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto" Focusable="False">
-                            <TextBlock x:Name="CompareInserted" Foreground="White" FontSize="14" LineHeight="21" TextWrapping="Wrap"/>
-                        </ScrollViewer>
+                        <DockPanel Margin="0,0,0,4">
+                        <Button DockPanel.Dock="Right" Style="{StaticResource CopyLink}" Tag="Inserted" Click="Copy_Click"
+                                ToolTip="Copy this box (or just the part you selected)" AutomationProperties.Name="Copy Inserted"/>
+                        <TextBlock x:Name="InsertLabel" Text="Inserted" Foreground="#99FFFFFF" FontFamily="Cascadia Mono, Consolas" FontSize="11" VerticalAlignment="Center"/>
+                    </DockPanel>
+                        <TextBox x:Name="CompareInserted" Style="{StaticResource SelectableText}" MaxHeight="220" VerticalScrollBarVisibility="Auto"/>
                     </StackPanel>
                 </Border>
             </Grid>

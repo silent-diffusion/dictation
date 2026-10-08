@@ -74,6 +74,8 @@ their menu starting below the corner buttons.
   while you speak, the words recognized so far run above it; it grows to show your transcript while the AI tidies it, then shows a small dimmed "Inserted" receipt. Hover it to see it clearly;
   click it to see the three boxes used everywhere in the app (the receipt, profile pages, History): **Transcription**,
   **AI Edit** (removed words struck through, new ones highlighted) and **Inserted** (the clean text that went in).
+  The text in those boxes can be selected with the mouse, and each box has a **Copy** button (it copies what you selected,
+  or the whole box; for AI Edit, the AI's own text without the struck-through words).
   If the safety net rejects the AI's edit, the receipt says so. Position (nine spots) and opacity are under *Settings › Appearance*.
   With *preview before inserting*, the preview shows the same three boxes, with **Inserted** (what *Insert* puts in) brought
   forward, larger and more solid, and the other two dimmed.
@@ -105,7 +107,8 @@ their menu starting below the corner buttons.
   A profile can pick its own model and voice, for reading its dictations back and for the hotkey while it is active.
   Text is read as plain text: Markdown (headings, lists, **bold**, links, tables, code fences) and stray symbols are dropped.
   The ⌄ button shows the whole text, scrolling along as it is read, with its Markdown shown formatted (headings, bullet
-  and numbered lists, quotes, code, bold, italic and links) while the voice reads it as plain text. The player's opacity is a setting under *Read aloud*.
+  and numbered lists, quotes, code, bold, italic and links) while the voice reads it as plain text. Click any word in that
+  view to have the voice jump there, forwards or backwards. The player's opacity is a setting under *Read aloud*.
 * **Settings**: grouped into Dictation, Models & AI, Look & feel and App; each group folds away (remembered).
   **Appearance** follows the Windows light/dark setting, or pick Light or Dark, plus a color scheme (Ember, Ocean,
   Forest, Violet, Rose), each with a light and a dark version.
