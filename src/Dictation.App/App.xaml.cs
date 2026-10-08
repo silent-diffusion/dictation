@@ -188,6 +188,30 @@ public partial class App : Application
         return msg;
     }
 
+    System.Windows.Threading.DispatcherTimer? _unloadSoon;
+
+    /// <summary>
+    /// "Unload immediately" (Settings › Model unloading): a few seconds after a dictation or a reading ends, free every
+    /// model that isn't in use. The short wait lets a reading that follows a dictation (read aloud after inserting)
+    /// start first, and keeps a quick second dictation from reloading everything.
+    /// </summary>
+    public void UnloadSoonIfImmediate()
+    {
+        if (Services.Settings.Current.UnloadAfterMinutes != Dictation.Core.Settings.AppSettings.UnloadImmediately) return;
+        if (_unloadSoon == null)
+        {
+            _unloadSoon = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+            _unloadSoon.Tick += async (_, _) =>
+            {
+                _unloadSoon.Stop();
+                if (Services.Controller.State != DictationState.Idle || _reader is { IsBusy: true }) return;
+                Log.Info("Unload immediately: " + await UnloadNowAsync(speech: true, ai: true, voice: true));
+            };
+        }
+        _unloadSoon.Stop();
+        _unloadSoon.Start();
+    }
+
     /// <summary>Set when a startup check found a newer release.</summary>
     public static UpdateInfo? AvailableUpdate { get; set; }
 
@@ -213,6 +237,7 @@ public partial class App : Application
         overlay.InsertRawRequested += () => c.InsertRawInstead();
         c.StateChanged += state =>
         {
+            if (state == DictationState.Idle) UnloadSoonIfImmediate();
             if (state == DictationState.Confirming)
             {
                 var err = Hotkeys.Register(HkEscape, "Escape", () => c.Cancel());

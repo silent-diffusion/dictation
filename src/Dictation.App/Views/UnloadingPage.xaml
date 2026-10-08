@@ -11,7 +11,7 @@
             <ComboBox x:Name="AfterBox" Width="240" HorizontalAlignment="Left" DisplayMemberPath="Label" SelectedValuePath="Value"
                       SelectedValue="{Binding UnloadAfterMinutes}" AutomationProperties.Name="Unload after"/>
             <TextBlock Style="{StaticResource Caption}" Margin="0,8,0,0"
-                       Text="Applies to the speech recognition model, the local AI model and the Read aloud voice."/>
+                       Text="Applies to the speech recognition model, the local AI model and the Read aloud voice. &quot;Immediately after use&quot; frees them a few seconds after each dictation or reading ends (they stay loaded while in use)."/>
 
             <Border Style="{StaticResource Card}" Margin="0,16,0,0" Padding="18,14">
                 <StackPanel>
