@@ -114,11 +114,16 @@ public sealed class AppSettings
     public bool SaveHistoryAudio { get; set; } = true;
     public HistoryGrouping HistoryGrouping { get; set; } = HistoryGrouping.Chronological;
     /// <summary>Unload a model after this many minutes without use, to free memory (GPU memory especially).
-    /// 0 = keep loaded. It loads again by itself the next time it is needed.</summary>
+    /// 0 = keep loaded; <see cref="UnloadImmediately"/> = as soon as each dictation or reading is done. It loads again by
+    /// itself the next time it is needed.</summary>
     public int UnloadAfterMinutes { get; set; } = 30;
-    /// <summary>The same as an Ollama keep_alive value (a negative duration keeps the model loaded; it needs a unit).</summary>
+    /// <summary><see cref="UnloadAfterMinutes"/> value: unload right after each use.</summary>
+    public const int UnloadImmediately = -1;
+    /// <summary>The same as an Ollama keep_alive value (a negative duration keeps the model loaded; it needs a unit).
+    /// Unloading immediately is done by the app when a dictation ends (so the model stays put between the pieces of
+    /// one dictation); a minute is only the fallback.</summary>
     [System.Text.Json.Serialization.JsonIgnore]
-    public string OllamaKeepAlive => UnloadAfterMinutes <= 0 ? "-1m" : UnloadAfterMinutes + "m";
+    public string OllamaKeepAlive => UnloadAfterMinutes < 0 ? "1m" : UnloadAfterMinutes == 0 ? "-1m" : UnloadAfterMinutes + "m";
     public CloudSettings Cloud { get; set; } = new();
     /// <summary>Ask GitHub for a newer release when the app starts. Off by default: the app makes no network calls unless asked.</summary>
     public bool CheckUpdatesOnStartup { get; set; }

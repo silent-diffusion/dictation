@@ -79,7 +79,7 @@ public partial class DashboardPage : UserControl
         var aiModel = string.IsNullOrWhiteSpace(p.Model) ? s.Llm.DefaultModel : p.Model!;
         var cloud = CloudModels.IsCloud(aiModel);
         var aiLoaded = _loadedAi.Any(n => n.StartsWith(aiModel, StringComparison.OrdinalIgnoreCase));
-        var unload = s.UnloadAfterMinutes <= 0 ? "never" : s.UnloadAfterMinutes >= 60 ? $"{s.UnloadAfterMinutes / 60.0:0.#} h" : $"{s.UnloadAfterMinutes} min";
+        var unload = s.UnloadAfterMinutes < 0 ? "right after each use" : s.UnloadAfterMinutes == 0 ? "never" : s.UnloadAfterMinutes >= 60 ? $"{s.UnloadAfterMinutes / 60.0:0.#} h" : $"{s.UnloadAfterMinutes} min";
 
         Clock.Text = $"{now:dddd d MMMM}, {now:t}";
         Summary.Text = sv.Controller.State != DictationState.Idle
@@ -87,7 +87,7 @@ public partial class DashboardPage : UserControl
             : $"Press {s.Hotkey} to dictate with {p.Name}. Select text and press {s.SpeakHotkey} to hear it.";
         Footer.Text = $"{AppInfo.Name} {AppInfo.VersionText}  ·  {sv.Usage.TotalWords:N0} words dictated in all  ·  " +
                       (s.Cloud.KeepOffline ? "Everything stays on this PC" : "Cloud AI allowed") +
-                      $"  ·  {s.CycleProfileHotkey} switches profile  ·  models unload after {unload} unused";
+                      $"  ·  {s.CycleProfileHotkey} switches profile  ·  models unload {(s.UnloadAfterMinutes < 0 ? unload : "after " + unload + " unused")}";
 
         // ----- tiles -----
         Tiles.Children.Clear();
@@ -154,7 +154,8 @@ public partial class DashboardPage : UserControl
         if (dictating) Dials.Children.Add(Dial(1, "busy", "Speech model", "dictating now"));
         else if (!sv.Speech.IsReady) Dials.Children.Add(Dial(0, "off", "Speech model", "loads when you dictate"));
         else if (s.UnloadAfterMinutes <= 0)
-            Dials.Children.Add(Dial(1, "on", "Speech model", "stays loaded", UnloadSpeechNow, "Click to unload the speech model now"));
+            Dials.Children.Add(Dial(1, "on", "Speech model", s.UnloadAfterMinutes < 0 ? "unloads right after use" : "stays loaded",
+                UnloadSpeechNow, "Click to unload the speech model now"));
         else
         {
             var limit = TimeSpan.FromMinutes(s.UnloadAfterMinutes);

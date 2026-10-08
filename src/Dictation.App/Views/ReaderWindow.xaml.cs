@@ -469,6 +469,7 @@ public partial class ReaderWindow : Window
         StopSession();
         _autoClose.Stop();
         Hide();
+        ((App)Application.Current).UnloadSoonIfImmediate(); // "unload immediately": the voice is done for now
     }
 
     void Play_Click(object sender, RoutedEventArgs e)

@@ -129,7 +129,8 @@ their menu starting below the corner buttons.
   and the app and window it went into. List them newest first, or grouped by app (each app's group folds away).
 * **Models** (*Settings › Models*): every speech, AI and voice model as a list, showing whether it is downloaded, active and
   loaded, with **Download** and **Use this** buttons. Cloud models are marked CLOUD.
-* **Model unloading** (*Settings*): unload models unused for 5 minutes to 4 hours (default 30 minutes), or never, or
+* **Model unloading** (*Settings*): unload models immediately after each use (a few seconds after a dictation or reading
+  ends; they stay loaded while in use), after 5 minutes to 4 hours unused (default 30 minutes), or never; or
   right now (*Unload everything*, or the speech model, AI model or Read aloud voice alone). Dictating
   never waits for a model: recording starts at once and the speech model catches up when it has loaded.
 * **Cloud AI** (*Settings*): API keys (encrypted for your Windows account) and the *Keep everything offline* switch.
