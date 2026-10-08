@@ -40,6 +40,13 @@ public partial class DashboardPage : UserControl
         Build();
     }
 
+    /// <summary>The speech dial's number: free the speech model's memory right away.</summary>
+    async void UnloadSpeechNow()
+    {
+        await App.UnloadNowAsync(speech: true, ai: false, voice: false);
+        Build(); // the dial now reads "off"
+    }
+
     /// <summary>Where each dial leads when clicked: the page that explains or changes what it shows.</summary>
     static string DialPage(string label) => label switch
     {
@@ -146,14 +153,15 @@ public partial class DashboardPage : UserControl
 
         if (dictating) Dials.Children.Add(Dial(1, "busy", "Speech model", "dictating now"));
         else if (!sv.Speech.IsReady) Dials.Children.Add(Dial(0, "off", "Speech model", "loads when you dictate"));
-        else if (s.UnloadAfterMinutes <= 0) Dials.Children.Add(Dial(1, "on", "Speech model", "stays loaded"));
+        else if (s.UnloadAfterMinutes <= 0)
+            Dials.Children.Add(Dial(1, "on", "Speech model", "stays loaded", UnloadSpeechNow, "Click to unload the speech model now"));
         else
         {
             var limit = TimeSpan.FromMinutes(s.UnloadAfterMinutes);
             var left = limit - (now - sv.Controller.LastActivity);
             if (left < TimeSpan.Zero) left = TimeSpan.Zero;
             Dials.Children.Add(Dial(left / limit, left.TotalMinutes >= 1 ? $"{Math.Ceiling(left.TotalMinutes):0} min" : "<1 min",
-                "Speech model", "until it unloads"));
+                "Speech model", "until it unloads", UnloadSpeechNow, "Click to unload the speech model now"));
         }
 
         // ----- charts -----
@@ -203,7 +211,8 @@ public partial class DashboardPage : UserControl
     }
 
     /// <summary>A 270° gauge, drawn at a fixed design size and scaled to its cell.</summary>
-    FrameworkElement Dial(double fraction, string value, string label, string sub)
+    /// <param name="valueClick">What clicking the big number does (instead of opening the dial's page), if anything.</param>
+    FrameworkElement Dial(double fraction, string value, string label, string sub, Action? valueClick = null, string? valueTip = null)
     {
         const double size = 150, cx = 75, cy = 70, r = 54, thickness = 9;
         var canvas = new Grid { Width = size, Height = size };
@@ -221,7 +230,15 @@ public partial class DashboardPage : UserControl
         }
 
         var center = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 44, 0, 0) };
-        center.Children.Add(new TextBlock { Text = value, FontSize = 24, FontWeight = FontWeights.SemiBold, HorizontalAlignment = HorizontalAlignment.Center });
+        var big = new TextBlock { Text = value, FontSize = 24, FontWeight = FontWeights.SemiBold, HorizontalAlignment = HorizontalAlignment.Center };
+        if (valueClick != null)
+        {
+            // The number is its own button; the rest of the dial still opens the page.
+            big.Background = Brushes.Transparent;
+            big.ToolTip = valueTip;
+            big.MouseLeftButtonUp += (_, e) => { e.Handled = true; valueClick(); };
+        }
+        center.Children.Add(big);
         var name = new TextBlock { Text = label, FontSize = 11.5, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 1, 0, 0) };
         name.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Muted");
         center.Children.Add(name);

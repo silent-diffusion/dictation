@@ -23,6 +23,9 @@ public interface ITextProcessor
     Task WarmUpAsync(string? model, CancellationToken ct = default);
     /// <summary>Local models currently loaded in memory (empty if the runtime isn't running). Never starts the runtime.</summary>
     Task<IReadOnlyList<string>> LoadedModelsAsync(CancellationToken ct = default);
+    /// <summary>Free the memory of every local model that is loaded now (they load again when next needed).
+    /// Returns how many were unloaded. Never starts the runtime.</summary>
+    Task<int> UnloadAllAsync(CancellationToken ct = default);
     string Status { get; }
     event Action<string, bool>? StatusChanged;
 }
@@ -423,6 +426,23 @@ public sealed class OllamaTextProcessor : ITextProcessor
                    ?? new List<string>();
         }
         catch { return Array.Empty<string>(); }
+    }
+
+    public async Task<int> UnloadAllAsync(CancellationToken ct = default)
+    {
+        var unloaded = 0;
+        foreach (var model in await LoadedModelsAsync(ct))
+        {
+            try
+            {
+                // keep_alive 0 tells Ollama to drop the model right away.
+                using var resp = await _http.PostAsJsonAsync(Url("/api/generate"), new { model, keep_alive = 0 }, ct);
+                if (resp.IsSuccessStatusCode) unloaded++;
+            }
+            catch (Exception e) when (e is not OperationCanceledException) { Log.Warn($"Unloading {model} failed: {e.Message}"); }
+        }
+        if (unloaded > 0) Log.Info($"Unloaded {unloaded} AI model(s) on request");
+        return unloaded;
     }
 
     /// <summary>Ask Ollama how much of the loaded model landed in GPU memory.</summary>

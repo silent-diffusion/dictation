@@ -1,3 +1,4 @@
+using System.Windows;
 using System.Windows.Controls;
 
 namespace Dictation.App.Views;
@@ -16,7 +17,25 @@ public partial class UnloadingPage : UserControl
         if (choices.All(c => c.Value != s.UnloadAfterMinutes)) choices.Insert(0, new($"{s.UnloadAfterMinutes} minutes", s.UnloadAfterMinutes));
         AfterBox.ItemsSource = choices;
         DataContext = s;
-        StatusText.Text = $"Now: {App.Services.Status.Speech}\n{App.Services.Status.Ai}";
+        ShowStatus();
         AutoSave.Hook(this, () => App.Services.Settings.Save());
+    }
+
+    void ShowStatus() =>
+        StatusText.Text = $"Now: {App.Services.Status.Speech}\n{App.Services.Status.Ai}\n" +
+                          $"Read aloud voice: {(App.Services.Tts.IsRunning ? "loaded" : "not loaded")}";
+
+    async void Unload_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: string what } button) return;
+        button.IsEnabled = false;
+        UnloadResult.Text = "Unloading…";
+        try
+        {
+            UnloadResult.Text = await App.UnloadNowAsync(
+                speech: what is "all" or "speech", ai: what is "all" or "ai", voice: what is "all" or "voice");
+        }
+        finally { button.IsEnabled = true; }
+        ShowStatus();
     }
 }

@@ -21,6 +21,21 @@
                 </StackPanel>
             </Border>
 
+            <TextBlock Text="Unload now" Style="{StaticResource FieldLabel}" Margin="0,22,0,6"/>
+            <Border Style="{StaticResource Card}" Padding="18,14">
+                <StackPanel>
+                    <TextBlock Style="{StaticResource Caption}" Margin="0,0,0,10"
+                               Text="Free the memory right away instead of waiting. Each model loads again by itself the next time it's needed."/>
+                    <WrapPanel>
+                        <Button Content="Unload everything" Style="{StaticResource PrimaryButton}" Margin="0,0,8,8" Tag="all" Click="Unload_Click"/>
+                        <Button Content="Speech model" Style="{StaticResource QuietButton}" Margin="0,0,8,8" Tag="speech" Click="Unload_Click"/>
+                        <Button Content="AI model" Style="{StaticResource QuietButton}" Margin="0,0,8,8" Tag="ai" Click="Unload_Click"/>
+                        <Button Content="Read aloud voice" Style="{StaticResource QuietButton}" Margin="0,0,8,8" Tag="voice" Click="Unload_Click"/>
+                    </WrapPanel>
+                    <TextBlock x:Name="UnloadResult" Style="{StaticResource Caption}" Margin="0,4,0,0"/>
+                </StackPanel>
+            </Border>
+
             <TextBlock x:Name="StatusText" Style="{StaticResource Caption}" Margin="0,16,0,0"/>
         </StackPanel>
     </ScrollViewer>
