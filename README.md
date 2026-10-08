@@ -59,7 +59,8 @@ The folder keeps its pre-rename name so updates from Local Dictation 1.x keep yo
 The sidebar has five sections: **Active dashboard** (one screen, no scrolling: what's active and loaded, dials for
 words dictated and words read aloud today, turnaround, AI edits kept, history and the speech model's unload countdown, and charts of words per day (dictated and read aloud, side by side) and
 the apps you dictate into; the top tiles' text grows with the window. Every tile, dial and chart opens its page when
-clicked (History, the profiles, Models, Model unloading). The figures come from daily counts in
+clicked (History, the profiles, Models, Model unloading); the big number on the speech-model dial unloads that model
+right away. The figures come from daily counts in
 `data\usage.json` (dictations, words, seconds spoken, turnaround, AI edits kept, readings and dictations per app name; never
 any text, audio or window titles), so they survive History being trimmed, cleared or off), **Speech to text** (profiles), **Read aloud**, **History** and **Settings**. The menu button
 in the top-left corner (✕ while the sidebar is open, ☰ while it's hidden; or **Ctrl+B**) slides the sidebar away to give
@@ -128,7 +129,8 @@ their menu starting below the corner buttons.
   and the app and window it went into. List them newest first, or grouped by app (each app's group folds away).
 * **Models** (*Settings › Models*): every speech, AI and voice model as a list, showing whether it is downloaded, active and
   loaded, with **Download** and **Use this** buttons. Cloud models are marked CLOUD.
-* **Model unloading** (*Settings*): unload models unused for 5 minutes to 4 hours (default 30 minutes), or never. Dictating
+* **Model unloading** (*Settings*): unload models unused for 5 minutes to 4 hours (default 30 minutes), or never, or
+  right now (*Unload everything*, or the speech model, AI model or Read aloud voice alone). Dictating
   never waits for a model: recording starts at once and the speech model catches up when it has loaded.
 * **Cloud AI** (*Settings*): API keys (encrypted for your Windows account) and the *Keep everything offline* switch.
 * If the AI fails, is unreachable, or returns something implausible (empty, summarised, rambling), your **raw words are inserted instead** - dictation is never lost.

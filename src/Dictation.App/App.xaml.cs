@@ -157,6 +157,37 @@ public partial class App : Application
         catch (Exception e) { Log.Warn("Loading the profile's speech model failed: " + e.Message); }
     }
 
+    /// <summary>
+    /// Unload models right now, on request (Settings › Model unloading, or the dashboard's speech dial), instead of
+    /// waiting for the idle timer. Never while a dictation or a reading is using them. Returns what happened, for display.
+    /// </summary>
+    public static async Task<string> UnloadNowAsync(bool speech, bool ai, bool voice)
+    {
+        var s = Services;
+        var done = new List<string>();
+        var skipped = new List<string>();
+        if (speech)
+        {
+            if (s.Controller.State != DictationState.Idle) skipped.Add("the speech model (dictating)");
+            else if (s.Speech.IsReady) { await s.Speech.UnloadAsync(); done.Add("speech model"); }
+        }
+        if (ai)
+        {
+            if (s.Controller.State != DictationState.Idle) skipped.Add("the AI model (dictating)");
+            else if (await s.Llm.UnloadAllAsync() > 0) done.Add("AI model");
+        }
+        if (voice)
+        {
+            var reading = Current is App app && app._reader is { IsBusy: true };
+            if (reading) skipped.Add("the Read aloud voice (reading)");
+            else if (s.Tts.IsRunning) { await s.Tts.UnloadAsync(); done.Add("Read aloud voice"); }
+        }
+        var msg = done.Count > 0 ? "Unloaded: " + string.Join(", ", done) + ". They load again when needed."
+            : skipped.Count == 0 ? "Nothing was loaded." : "";
+        if (skipped.Count > 0) msg = (msg + " Kept " + string.Join(" and ", skipped) + ".").Trim();
+        return msg;
+    }
+
     /// <summary>Set when a startup check found a newer release.</summary>
     public static UpdateInfo? AvailableUpdate { get; set; }
 
