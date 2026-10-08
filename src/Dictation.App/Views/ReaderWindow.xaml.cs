@@ -284,6 +284,31 @@ public partial class ReaderWindow : Window
         Follow(current.Inlines.OfType<Run>().FirstOrDefault(r => r.Foreground == Current) ?? (TextElement)current);
     }
 
+    /// <summary>A word clicked in the whole-text view: read from there (forwards or backwards).</summary>
+    void FullText_MouseLeftButtonUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        var s = _session;
+        if (s == null || _fullFor != s) return;
+        var at = FullText.GetPositionFromPoint(e.GetPosition(FullText), snapToText: false);
+        if (at == null) return;
+        for (var i = 0; i < _fullSentences.Count && i < s.Sentences.Count; i++)
+        {
+            var span = _fullSentences[i];
+            if (at.CompareTo(span.ContentStart) < 0 || at.CompareTo(span.ContentEnd) > 0) continue;
+            // Characters from the sentence's start to the click, then back to the start of that word.
+            var sentence = s.Text.Substring(s.Sentences[i].Start, s.Sentences[i].Length);
+            var offset = Math.Clamp(new TextRange(span.ContentStart, at).Text.Length, 0, sentence.Length);
+            while (offset > 0 && !char.IsWhiteSpace(sentence[offset - 1])) offset--;
+            s.JumpTo(i, sentence.Length == 0 ? 0 : offset / (double)sentence.Length);
+            if (s.IsPaused) s.TogglePause(); // a click means "read this"
+            _autoClose.Stop();
+            _shown = (-1, -1);
+            Refresh();
+            e.Handled = true;
+            return;
+        }
+    }
+
     /// <summary>
     /// Keep the word being read in view, about a third of the way down. (Inlines of a TextBlock can't be brought into
     /// view themselves, so this works out where the word is drawn and scrolls the viewer there.) Only scrolls when the

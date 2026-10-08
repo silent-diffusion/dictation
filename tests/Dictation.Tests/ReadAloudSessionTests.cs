@@ -138,3 +138,31 @@ public class ReadAloudSessionTests
         Assert.True(s.IsBuffering);
     }
 }
+
+public class ReadAloudJumpTests
+{
+    static float[] Ramp(int n) => Enumerable.Range(1, n).Select(i => i / (float)n).ToArray();
+
+    [Fact]
+    public void Jumping_to_a_word_plays_from_there_forwards_and_backwards()
+    {
+        var s = new ReadAloudSession("One sentence here. And another one.", null!, "af_heart", 1.0);
+        var first = Ramp(400);
+        var second = Ramp(400).Select(x => -x).ToArray();
+        s.Provide(0, first, s.Generation, 1.0);
+        s.Provide(1, second, s.Generation, 1.0);
+
+        s.JumpTo(1, 0.5); // forwards: halfway into the second sentence
+        Assert.Equal((1, 0.5), s.Position);
+        var buffer = new byte[(ReadAloudSession.LeadInSamples + 200) * 4];
+        s.Read(buffer, 0, buffer.Length);
+        var played = new float[buffer.Length / 4];
+        Buffer.BlockCopy(buffer, 0, played, 0, buffer.Length);
+        Assert.Equal(second[200..], played[ReadAloudSession.LeadInSamples..]); // after the runway, from the jump point
+        Assert.True(s.IsEnded);
+
+        s.JumpTo(0, 0); // backwards, even from the end
+        Assert.False(s.IsEnded);
+        Assert.Equal((0, 0.0), s.Position);
+    }
+}

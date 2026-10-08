@@ -10,11 +10,16 @@ namespace Dictation.App.Views;
 public static class DiffText
 {
     /// <param name="maxWords">Only the last this-many words are shown; earlier ones collapse into "…".</param>
-    public static void Render(TextBlock target, IReadOnlyList<DiffToken> diff, Brush removed, Brush added, int maxWords = int.MaxValue)
+    public static void Render(TextBlock target, IReadOnlyList<DiffToken> diff, Brush removed, Brush added, int maxWords = int.MaxValue) =>
+        Render(target.Inlines, diff, removed, added, maxWords);
+
+    /// <summary>The same into any inline collection, e.g. a paragraph of a read-only RichTextBox (selectable text).</summary>
+    public static void Render(InlineCollection inlines, IReadOnlyList<DiffToken> diff, Brush removed, Brush added, int maxWords = int.MaxValue)
     {
-        target.Inlines.Clear();
+        var target = inlines;
+        target.Clear();
         var start = Math.Max(0, diff.Count - maxWords);
-        if (start > 0) target.Inlines.Add(new Run("… "));
+        if (start > 0) target.Add(new Run("… "));
         for (var i = start; i < diff.Count; i++)
         {
             var t = diff[i];
@@ -25,8 +30,8 @@ public static class DiffText
                 run.TextDecorations = TextDecorations.Strikethrough;
             }
             else if (t.Kind == DiffKind.Added) run.Foreground = added;
-            target.Inlines.Add(run);
-            if (i < diff.Count - 1) target.Inlines.Add(new Run(" ")); // separate, so the strike doesn't run into the gap
+            target.Add(run);
+            if (i < diff.Count - 1) target.Add(new Run(" ")); // separate, so the strike doesn't run into the gap
         }
     }
 }
