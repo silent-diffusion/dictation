@@ -14,7 +14,7 @@ namespace Dictation.Core.Reading;
 /// </summary>
 public sealed class ReadAloudSession : IWaveProvider, IDisposable
 {
-    public const double MinSpeed = 0.5, MaxSpeed = 2.0, SpeedStep = 0.1;
+    public const double MinSpeed = 0.25, MaxSpeed = 4.0, SpeedStep = 0.1;
     const int LookAhead = 2;
 
     readonly ISpeechSynthesizer _tts;

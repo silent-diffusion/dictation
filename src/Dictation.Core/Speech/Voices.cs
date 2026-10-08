@@ -174,7 +174,9 @@ public sealed class WindowsSpeech : ISpeechSynthesizer
             var name = voice.StartsWith(Prefix, StringComparison.Ordinal) ? voice[Prefix.Length..] : voice;
             try { synth.SelectVoice(name); }
             catch (ArgumentException) { Log.Warn($"Windows voice \"{name}\" isn't installed; using the default one"); }
-            synth.Rate = RateFor(speed);
+            // Like the other voices, SAPI paces itself up to 2× either way and a pitch-safe stretch does the rest.
+            var native = Math.Clamp(speed, 0.5, 2.0);
+            synth.Rate = RateFor(native);
             using var ms = new MemoryStream();
             synth.SetOutputToAudioStream(ms, new SpeechAudioFormatInfo(KokoroSpeech.SampleRate, AudioBitsPerSample.Sixteen, AudioChannel.Mono));
             synth.Speak(text);
@@ -182,7 +184,7 @@ public sealed class WindowsSpeech : ISpeechSynthesizer
             var pcm = ms.ToArray();
             var samples = new float[pcm.Length / 2];
             for (var i = 0; i < samples.Length; i++) samples[i] = BitConverter.ToInt16(pcm, i * 2) / 32768f;
-            return samples;
+            return TimeStretch.Apply(samples, speed / native);
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {

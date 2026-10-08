@@ -66,8 +66,9 @@ any text, audio or window titles), so they survive History being trimmed, cleare
 in the top-left corner (✕ while the sidebar is open, ☰ while it's hidden; or **Ctrl+B**) slides the sidebar away to give
 the page the whole window. **Back** (after the logo, or next to ☰ while the sidebar is hidden; also `Alt+←` or the mouse's
 back button) returns to the page you were on before, Settings sections included; it shows on every page but the dashboard.
-With the sidebar hidden, pages with a side menu of their own (Settings, Speech to text) go right up to the window's edge,
-their menu starting below the corner buttons.
+With the sidebar hidden, ☰ and Back sit in a fixed bar across the top of the window, so pages scroll underneath it
+instead of behind floating buttons, and pages with a side menu of their own (Settings, Speech to text) go right up to the
+window's edge.
 
 * **Hotkey** (default `Ctrl+Space`, change under *Hotkeys*): start/stop. `Ctrl+Alt+P` cycles profiles.
 * **Overlay**: a pill, always on top, never steals focus. Small while you talk (timer, level meter, active profile, and
@@ -100,8 +101,9 @@ their menu starting below the corner buttons.
 * **Long dictation** is cleaned up a few sentences at a time (small models stay faithful on short passages), and the safety net applies to each piece separately.
 * **Read aloud** (`Ctrl+Shift+Space`): reads the selected text in any app with a natural voice that runs on
   your PC. With nothing selected, it offers to read your clipboard. The player has play/pause, back and forward 15 seconds,
-  slower/faster, the time left, and the sentence being read with the current word highlighted. Pick the voice and the base
-  speed under *Read aloud*; changing the speed in the player is remembered for the next reading. Three text-to-speech models:
+  slower/faster (click the speed itself for a menu from 0.25× to 4×), the time left, and the sentence being read with the current word highlighted. Pick the voice and the base
+  speed under *Read aloud*; changing the speed in the player is remembered for the next reading. Every voice paces itself
+  naturally from 0.5× to 2×; beyond that the audio is time-stretched without changing its pitch. Three text-to-speech models:
   **Kokoro v1.0** (the most natural; 8 voices, about 370 MB, downloaded the first time you use it), **Piper** (light and fast,
   even on slower PCs; 6 English voices, each a separate 60 to 120 MB download) and **Windows voices** (the ones installed
   with Windows; nothing to download, more robotic). Kokoro and Piper both run in Oberton's local voice server on this PC.

@@ -111,6 +111,11 @@
             </DockPanel>
         </Border>
 
+        <!-- While the sidebar is hidden: a solid bar across the top holding the menu and Back buttons, so pages start below
+             it and nothing scrolls underneath them. -->
+        <Border x:Name="TopBar" Height="64" VerticalAlignment="Top" Panel.ZIndex="1" Visibility="Collapsed"
+                Background="{DynamicResource Ob.Sidebar}" BorderBrush="{DynamicResource Ob.Divider}" BorderThickness="0,0,0,1"/>
+
         <!-- Always at the top left: the menu button (☰ that folds into ✕ while the sidebar is open) and Back -->
         <StackPanel Orientation="Horizontal" Panel.ZIndex="2" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="12,16,0,0">
             <Button x:Name="MenuButton" Style="{StaticResource IconButton}" Click="Menu_Click" Padding="0">

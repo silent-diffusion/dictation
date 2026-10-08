@@ -117,8 +117,31 @@
                                 ToolTip="Slower" AutomationProperties.Name="Slower">
                             <TextBlock Text="&#xE738;" Style="{StaticResource Glyph}" FontSize="11"/>
                         </Button>
-                        <TextBlock x:Name="SpeedText" Text="1.0×" Foreground="White" FontFamily="Cascadia Mono, Consolas" FontSize="13"
-                                   Width="46" TextAlignment="Center" VerticalAlignment="Center"/>
+                        <Button x:Name="SpeedButton" Click="Speed_Click" Width="54" Height="30" Margin="2,0" Focusable="False" Cursor="Hand"
+                                ToolTip="Choose a speed" AutomationProperties.Name="Choose a speed">
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border x:Name="Bd" Background="Transparent" CornerRadius="15">
+                                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="Bd" Property="Background" Value="#1AFFFFFF"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Button.Template>
+                            <TextBlock x:Name="SpeedText" Text="1.0×" Foreground="White" FontFamily="Cascadia Mono, Consolas" FontSize="13"/>
+                        </Button>
+                        <Popup x:Name="SpeedMenu" PlacementTarget="{Binding ElementName=SpeedButton}" Placement="Top" VerticalOffset="-6"
+                               StaysOpen="False" AllowsTransparency="True" PopupAnimation="Fade">
+                            <Border Background="#F2202024" BorderBrush="#33FFFFFF" BorderThickness="1" CornerRadius="12" Padding="8">
+                                <StackPanel>
+                                    <TextBlock Text="Speed" Foreground="#99FFFFFF" FontSize="11" Margin="4,0,0,6"/>
+                                    <UniformGrid x:Name="SpeedChoices" Columns="4"/>
+                                </StackPanel>
+                            </Border>
+                        </Popup>
                         <Button x:Name="FasterButton" Style="{StaticResource RoundButton}" Width="30" Height="30" Click="Faster_Click"
                                 ToolTip="Faster" AutomationProperties.Name="Faster">
                             <TextBlock Text="&#xE710;" Style="{StaticResource Glyph}" FontSize="11"/>

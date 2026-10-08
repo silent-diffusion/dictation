@@ -93,15 +93,14 @@ public partial class MainWindow : Window
         _shut = shut;
         SidebarSlide.X = -SidebarWidth * shut;
         BackSlide.X = BackOpenShift * (1 - shut);
-        // Folded, the page keeps clear of the menu and back buttons in the corner; a page with its own side menu goes
-        // right up to the edge instead and starts that menu below the buttons.
-        var sideMenu = Host.Content as ISideMenuPage;
-        sideMenu?.ClearCorner(shut >= 0.5);
-        Host.Margin = new Thickness(SidebarWidth * (1 - shut) + (sideMenu != null ? 0 : ContentInset()) * shut, 0, 0, 0);
+        // Folded, the menu and Back buttons sit in a bar across the top and every page starts below it.
+        TopBar.Visibility = shut > 0 ? Visibility.Visible : Visibility.Collapsed;
+        TopBar.Opacity = shut;
+        Host.Margin = new Thickness(SidebarWidth * (1 - shut), TopBarHeight * shut, 0, 0);
         Sidebar.Visibility = shut >= 1 ? Visibility.Collapsed : Visibility.Visible; // off screen: out of the tab order too
     }
 
-    double ContentInset() => BackButton.Visibility == Visibility.Visible ? 96 : 54;
+    const double TopBarHeight = 64;
 
     /// <summary>Three bars ⇄ a cross: the top and bottom bars meet in the middle and turn ±45°, the middle one fades.</summary>
     void MorphMenuIcon(bool cross, bool animate)

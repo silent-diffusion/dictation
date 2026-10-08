@@ -42,6 +42,36 @@ def resample(audio, rate):
     return np.interp(np.linspace(0, audio.size - 1, n), np.arange(audio.size), audio)
 
 
+def stretch(audio, factor):
+    """Time-stretches by factor (2 = twice as fast) without changing the pitch: WSOLA, which overlap-adds
+    40 ms windows and nudges each one to where it lines up best with the last, so voices don't warble."""
+    n = 960
+    hop = n // 2
+    tol = hop // 2
+    if abs(factor - 1) < 0.01 or audio.size < n * 2:
+        return audio
+    out_len = int(audio.size / factor)
+    frames = out_len // hop + 1
+    x = np.concatenate([np.zeros(tol), audio, np.zeros(n * 2 + int(hop * factor) + tol * 2)])
+    win = 0.5 - 0.5 * np.cos(2 * np.pi * np.arange(n) / n)
+    y = np.zeros(frames * hop + n)
+    weight = np.zeros(frames * hop + n)
+    prev = tol
+    for k in range(frames):
+        nominal = int(k * hop * factor) + tol
+        if k == 0:
+            pos = nominal
+        else:
+            target = x[prev + hop:prev + hop + n]
+            lo = nominal - tol
+            corr = np.correlate(x[lo:nominal + tol + n], target, "valid")
+            pos = lo + int(np.argmax(corr))
+        y[k * hop:k * hop + n] += x[pos:pos + n] * win
+        weight[k * hop:k * hop + n] += win
+        prev = pos
+    return (y / np.maximum(weight, 1e-3))[:out_len]
+
+
 _espeak_ready = False
 
 
@@ -126,16 +156,19 @@ class Engine:
         return self.piper[name]
 
     def speak(self, text, voice, speed):
-        speed = min(max(float(speed), 0.5), 2.0)  # the range the voices sound natural in
+        speed = min(max(float(speed), 0.25), 4.0)
+        # The voices pace themselves naturally between 0.5x and 2x; past that the rest is a pitch-safe stretch.
+        native = min(max(speed, 0.5), 2.0)
         if voice.startswith(PIPER):
-            audio = self.piper_voice(voice[len(PIPER):]).speak(text, speed)
+            audio = self.piper_voice(voice[len(PIPER):]).speak(text, native)
         else:
             if self.kokoro is None:
                 raise RuntimeError("the Kokoro voices aren't downloaded")
             if voice not in self.voices:
                 voice = "af_heart"
-            audio, rate = self.kokoro.create(text, voice=voice, speed=speed, lang=lang_for(voice))
+            audio, rate = self.kokoro.create(text, voice=voice, speed=native, lang=lang_for(voice))
             audio = resample(np.asarray(audio, dtype=np.float32), rate)
+        audio = stretch(np.asarray(audio, dtype=np.float64), speed / native)
         return np.asarray(audio, dtype="<f4"), RATE
 
 

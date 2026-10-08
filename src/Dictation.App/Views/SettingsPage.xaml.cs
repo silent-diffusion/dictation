@@ -4,7 +4,7 @@ using System.Windows.Controls;
 namespace Dictation.App.Views;
 
 /// <summary>All app settings in one place, in collapsible groups of sections.</summary>
-public partial class SettingsPage : UserControl, ISideMenuPage
+public partial class SettingsPage : UserControl
 {
     bool _switching;
 
@@ -73,5 +73,4 @@ public partial class SettingsPage : UserControl, ISideMenuPage
         App.Services.Settings.Save();
     }
 
-    public void ClearCorner(bool clear) => Groups.Margin = new System.Windows.Thickness(14, clear ? 70 : 30, 14, 16);
 }

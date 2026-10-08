@@ -486,11 +486,49 @@ public partial class ReaderWindow : Window
     void Slower_Click(object sender, RoutedEventArgs e) => ChangeSpeed(-ReadAloudSession.SpeedStep);
     void Faster_Click(object sender, RoutedEventArgs e) => ChangeSpeed(ReadAloudSession.SpeedStep);
 
-    /// <summary>The − and + buttons: the new speed is also remembered as the speed every reading starts at.</summary>
-    void ChangeSpeed(double step)
+    /// <summary>The speeds the menu offers when the speed itself is clicked.</summary>
+    static readonly double[] SpeedPresets = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 3.5, 4];
+
+    void Speed_Click(object sender, RoutedEventArgs e)
     {
         if (_session == null) return;
-        _session.SetSpeed(_session.Speed + step);
+        SpeedChoices.Children.Clear();
+        foreach (var speed in SpeedPresets)
+        {
+            var current = Math.Abs(speed - _session.Speed) < 0.001;
+            var choice = new System.Windows.Controls.Button
+            {
+                Content = $"{speed:0.##}×",
+                Style = (Style)FindResource("PillButton"),
+                Height = 30,
+                Padding = new Thickness(0),
+                MinWidth = 56,
+                Margin = new Thickness(3),
+                FontFamily = new FontFamily("Cascadia Mono, Consolas"),
+                Background = current ? Brushes.White : new SolidColorBrush(Color.FromArgb(0x1A, 0xFF, 0xFF, 0xFF)),
+                Foreground = current ? new SolidColorBrush(Color.FromRgb(0x16, 0x16, 0x18)) : Brushes.White,
+            };
+            AutomationProperties.SetName(choice, $"{speed:0.##} times speed");
+            choice.Click += (_, _) =>
+            {
+                SpeedMenu.IsOpen = false;
+                SetSpeed(speed);
+            };
+            SpeedChoices.Children.Add(choice);
+        }
+        SpeedMenu.IsOpen = !SpeedMenu.IsOpen;
+    }
+
+    void ChangeSpeed(double step)
+    {
+        if (_session != null) SetSpeed(_session.Speed + step);
+    }
+
+    /// <summary>The − and + buttons and the speed menu: the new speed is also remembered as the speed every reading starts at.</summary>
+    void SetSpeed(double speed)
+    {
+        if (_session == null) return;
+        _session.SetSpeed(speed);
         App.Services.Settings.Current.TtsBaseSpeed = _session.Speed;
         App.Services.Settings.Save();
         Refresh();

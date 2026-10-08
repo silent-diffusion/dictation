@@ -145,7 +145,7 @@ public sealed class KokoroSpeech : ISpeechSynthesizer, IAsyncDisposable
     }
 
     /// <summary>Speak one short piece of text. Returns mono float samples at <see cref="SampleRate"/>.</summary>
-    /// <param name="speed">0.5 to 2.0; Kokoro changes the pace without changing the pitch.</param>
+    /// <param name="speed">0.25 to 4.0; the pace changes, never the pitch (past 0.5–2 the server time-stretches).</param>
     /// <remarks>
     /// <paramref name="ct"/> is only checked between socket calls, never passed to them: cancelling a pending
     /// WebSocket call aborts the connection. A cancelled request finishes (about a second) and its audio is dropped.
