@@ -47,6 +47,40 @@ public partial class DashboardPage : UserControl
         Build(); // the dial now reads "off"
     }
 
+    /// <summary>The History dial's number: copy the text of the last dictation (what was inserted, after any AI edit).</summary>
+    void CopyLastDictation()
+    {
+        var last = App.Services.History.Entries.OrderByDescending(x => x.Time).FirstOrDefault();
+        var text = last == null ? "" : last.Final.Length > 0 ? last.Final : last.AiOutput is { Length: > 0 } ai ? ai : last.Transcript;
+        if (text.Length == 0) { ShowToast("Nothing to copy yet: dictate something first."); return; }
+        try { Clipboard.SetText(text); }
+        catch (System.Runtime.InteropServices.ExternalException)
+        {
+            ShowToast("The clipboard is busy; try again in a moment.");
+            return;
+        }
+        var words = last!.Words;
+        ShowToast($"Copied the last dictation ({words:N0} word{(words == 1 ? "" : "s")}, {last.When}) to the clipboard.");
+    }
+
+    readonly DispatcherTimer _toastTimer = new() { Interval = TimeSpan.FromSeconds(2.5) };
+
+    void ShowToast(string message)
+    {
+        ToastText.Text = message;
+        Toast.BeginAnimation(OpacityProperty, new System.Windows.Media.Animation.DoubleAnimation(1, TimeSpan.FromMilliseconds(120)));
+        _toastTimer.Stop();
+        _toastTimer.Tick -= HideToast;
+        _toastTimer.Tick += HideToast;
+        _toastTimer.Start();
+    }
+
+    void HideToast(object? sender, EventArgs e)
+    {
+        _toastTimer.Stop();
+        Toast.BeginAnimation(OpacityProperty, new System.Windows.Media.Animation.DoubleAnimation(0, TimeSpan.FromMilliseconds(300)));
+    }
+
     /// <summary>Where each dial leads when clicked: the page that explains or changes what it shows.</summary>
     static string DialPage(string label) => label switch
     {
@@ -149,7 +183,8 @@ public partial class DashboardPage : UserControl
         Dials.Children.Add(Dial(kept ?? 0, kept is { } k ? $"{k:P0}" : "—", "AI edits kept", "last 30 days"));
 
         Dials.Children.Add(Dial(s.HistoryLimit > 0 ? entries.Count / (double)s.HistoryLimit : entries.Count > 0 ? 1 : 0,
-            entries.Count.ToString(), "History", s.HistoryLimit > 0 ? $"of {s.HistoryLimit} kept" : "all kept, no limit"));
+            entries.Count.ToString(), "History", s.HistoryLimit > 0 ? $"of {s.HistoryLimit} kept" : "all kept, no limit",
+            entries.Count > 0 ? CopyLastDictation : null, "Click to copy the last dictation's inserted text"));
 
         if (dictating) Dials.Children.Add(Dial(1, "busy", "Speech model", "dictating now"));
         else if (!sv.Speech.IsReady) Dials.Children.Add(Dial(0, "off", "Speech model", "loads when you dictate"));
@@ -238,6 +273,7 @@ public partial class DashboardPage : UserControl
             big.Background = Brushes.Transparent;
             big.ToolTip = valueTip;
             big.MouseLeftButtonUp += (_, e) => { e.Handled = true; valueClick(); };
+            big.Cursor = Cursors.Hand;
         }
         center.Children.Add(big);
         var name = new TextBlock { Text = label, FontSize = 11.5, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 1, 0, 0) };
