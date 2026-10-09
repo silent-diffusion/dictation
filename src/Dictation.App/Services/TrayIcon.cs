@@ -19,15 +19,15 @@ public sealed class TrayIcon : IDisposable
         {
             g.SmoothingMode = SmoothingMode.AntiAlias;
             using var square = new GraphicsPath();
-            const int r = 16; // corner diameter
+            const int r = 10; // corner diameter: a near-square ink mark
             square.AddArc(1, 1, r, r, 180, 90);
             square.AddArc(31 - r, 1, r, r, 270, 90);
             square.AddArc(31 - r, 31 - r, r, r, 0, 90);
             square.AddArc(1, 31 - r, r, r, 90, 90);
             square.CloseFigure();
-            using (var bg = new SolidBrush(Color.FromArgb(255, 0x16, 0x16, 0x18))) g.FillPath(bg, square);
+            using (var bg = new SolidBrush(Color.FromArgb(255, 0x0D, 0x0D, 0x0C))) g.FillPath(bg, square);
             using (var edge = new Pen(Color.FromArgb(70, 255, 255, 255), 1f)) g.DrawPath(edge, square); // visible on a dark taskbar
-            using var dot = new SolidBrush(Color.FromArgb(255, 0xE5, 0x53, 0x3A));
+            using var dot = new SolidBrush(Color.FromArgb(255, 0xE8, 0xE7, 0xE3)); // paper: red is only for recording
             g.FillEllipse(dot, 10.5f, 10.5f, 11f, 11f);
         }
         return Icon.FromHandle(bmp.GetHicon());

@@ -1,16 +1,17 @@
 <UserControl x:Class="Dictation.App.Views.ReadAloudPage"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:Dictation.App.Views">
     <ScrollViewer VerticalScrollBarVisibility="Auto">
         <StackPanel Margin="40,32,40,40" MaxWidth="760" HorizontalAlignment="Left">
-            <TextBlock Text="Read aloud" Style="{StaticResource SectionTitle}"/>
+            <local:PageHeader Title="Read aloud" Decor="読上" Readout="VOICE // ON THIS PC"/>
             <TextBlock x:Name="Intro" Style="{StaticResource Caption}"/>
 
             <Border Style="{StaticResource Card}" Margin="0,8,0,0">
                 <DockPanel Margin="18,14">
                     <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
                         <Button x:Name="InstallButton" Style="{StaticResource QuietButton}" Margin="0,0,8,0" Click="Install_Click"/>
-                        <Button x:Name="TryButton" Content="Try it" Style="{StaticResource PrimaryButton}" Click="Try_Click"/>
+                        <Button x:Name="TryButton" Content="TRY IT" Style="{StaticResource PrimaryButton}" Click="Try_Click"/>
                     </StackPanel>
                     <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
                         <TextBlock x:Name="StatusText" FontWeight="SemiBold"/>
@@ -20,18 +21,18 @@
                 </DockPanel>
             </Border>
 
-            <TextBlock Text="Model" Style="{StaticResource FieldLabel}" Margin="0,24,0,6"/>
+            <TextBlock Text="MODEL" Style="{StaticResource FieldLabel}" Margin="0,24,0,6"/>
             <ComboBox x:Name="ModelBox" Width="380" HorizontalAlignment="Left" DisplayMemberPath="Name"
                       SelectionChanged="ModelBox_SelectionChanged" AutomationProperties.Name="Text-to-speech model"/>
             <TextBlock x:Name="ModelNote" Style="{StaticResource Caption}" Margin="0,6,0,0"/>
 
-            <TextBlock Text="Voice" Style="{StaticResource FieldLabel}" Margin="0,18,0,6"/>
+            <TextBlock Text="VOICE" Style="{StaticResource FieldLabel}" Margin="0,18,0,6"/>
             <ComboBox x:Name="VoiceBox" Width="380" MaxDropDownHeight="420" HorizontalAlignment="Left" DisplayMemberPath="Label"
                       SelectionChanged="VoiceBox_SelectionChanged" AutomationProperties.Name="Voice"/>
             <TextBlock Style="{StaticResource Caption}" Margin="0,6,0,0"
                        Text="Used unless a profile picks its own model and voice (see its page under Speech to text)."/>
 
-            <TextBlock Text="Base speed" Style="{StaticResource FieldLabel}" Margin="0,20,0,6"/>
+            <TextBlock Text="BASE SPEED" Style="{StaticResource FieldLabel}" Margin="0,20,0,6"/>
             <StackPanel Orientation="Horizontal">
                 <Slider x:Name="SpeedSlider" Width="300" Minimum="0.25" Maximum="4" TickFrequency="0.05" IsSnapToTickEnabled="True"
                         Value="{Binding TtsBaseSpeed}" AutomationProperties.Name="Base speed"/>
@@ -41,7 +42,7 @@
             <TextBlock Style="{StaticResource Caption}" Margin="0,6,0,0"
                        Text="Every reading starts at this speed. The − and + buttons in the reader, and the menu that opens when you click the speed there, change it too, and the next reading starts where you left it."/>
 
-            <TextBlock Text="Player opacity" Style="{StaticResource FieldLabel}" Margin="0,20,0,6"/>
+            <TextBlock Text="PLAYER OPACITY" Style="{StaticResource FieldLabel}" Margin="0,20,0,6"/>
             <StackPanel Orientation="Horizontal">
                 <Slider x:Name="OpacitySlider" Width="300" Minimum="0.3" Maximum="1" TickFrequency="0.02" IsSnapToTickEnabled="True"
                         Value="{Binding ReaderOpacity}" AutomationProperties.Name="Player opacity"/>
@@ -51,7 +52,7 @@
             <TextBlock Style="{StaticResource Caption}" Margin="0,6,0,0"
                        Text="How much of the player's dark background shows; the text stays solid. The dictation pill has its own setting under Appearance."/>
 
-            <TextBlock Text="Player position" Style="{StaticResource FieldLabel}" Margin="0,20,0,6"/>
+            <TextBlock Text="PLAYER POSITION" Style="{StaticResource FieldLabel}" Margin="0,20,0,6"/>
             <CheckBox x:Name="SamePlaceBox" Style="{StaticResource Switch}" Content="Same place as the dictation overlay"
                       Checked="SamePlace_Changed" Unchecked="SamePlace_Changed" HorizontalAlignment="Left"/>
             <StackPanel x:Name="ReaderPositionPanel" Orientation="Horizontal" Margin="0,6,0,0">
@@ -66,7 +67,7 @@
             <TextBlock Style="{StaticResource Caption}" Margin="0,6,0,0"
                        Text="Put the player somewhere other than the dictation pill if you like. You can also drag it while it reads."/>
 
-            <TextBlock Text="How to use it" Style="{StaticResource FieldLabel}" Margin="0,20,0,6"/>
+            <TextBlock Text="HOW TO USE IT" Style="{StaticResource FieldLabel}" Margin="0,20,0,6"/>
             <TextBlock x:Name="HowTo" Style="{StaticResource Caption}"/>
         </StackPanel>
     </ScrollViewer>

@@ -26,7 +26,7 @@ public partial class HotkeysPage : UserControl
     {
         var err = App.HotkeyError;
         StatusText.Text = err ?? "✓ Shortcuts are registered.";
-        StatusText.Foreground = err == null ? System.Windows.Media.Brushes.SeaGreen : System.Windows.Media.Brushes.IndianRed;
+        StatusText.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, err == null ? "Ob.Text" : "Ob.Error");
     }
 
     void Box_Focus(object sender, KeyboardFocusChangedEventArgs e) { }

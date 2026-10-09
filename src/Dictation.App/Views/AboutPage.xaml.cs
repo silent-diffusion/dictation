@@ -16,7 +16,11 @@ public partial class AboutPage : UserControl
         InitializeComponent();
         DataContext = App.Services.Settings.Current;
         AutoSave.Hook(this, () => App.Services.Settings.Save());
-        VersionText.Text = $"{AppInfo.Name} {AppInfo.VersionText}" + (AppPaths.IsDevelopmentCopy ? "  (development copy)" : "");
+        VersionText.Text = ($"{AppInfo.Name} {AppInfo.VersionText}" + (AppPaths.IsDevelopmentCopy ? "  // development copy" : "")).ToUpper();
+        // The shortcuts the explanation mentions are the ones actually set
+        var s = App.Services.Settings.Current;
+        if (!string.IsNullOrEmpty(s.Hotkey)) DictateKey.Text = s.Hotkey;
+        if (!string.IsNullOrEmpty(s.SpeakHotkey)) SpeakKey.Text = s.SpeakHotkey;
         if (App.AvailableUpdate is { } pending) Show(pending);
     }
 
@@ -30,7 +34,7 @@ public partial class AboutPage : UserControl
             StatusText.Text += " This is a development copy: update it with \"git pull\" instead.";
             return;
         }
-        InstallButton.Content = info.Size > 0 ? $"Download and install ({info.Size / 1048576.0:0} MB)" : "Download and install";
+        InstallButton.Content = info.Size > 0 ? $"DOWNLOAD AND INSTALL ({info.Size / 1048576.0:0} MB)" : "DOWNLOAD AND INSTALL";
         InstallButton.Visibility = Visibility.Visible;
     }
 

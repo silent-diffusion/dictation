@@ -1,18 +1,21 @@
 <Window x:Class="Dictation.App.Views.OverlayWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:Dictation.App.Views"
         WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         Topmost="True" ShowInTaskbar="False" ShowActivated="False" Focusable="False"
         ResizeMode="NoResize" SizeToContent="WidthAndHeight" UseLayoutRounding="True"
         ThemeMode="None" Title="Oberton overlay" FontFamily="Segoe UI Variable Text, Segoe UI">
-    <!-- Always dark, whatever the app theme, so it reads on top of any window. Its background opacity is a setting. -->
+    <!-- Always dark, whatever the app theme, so it reads on top of any window: an ink capsule with paper-colored text.
+         Its background opacity is a setting. Red only for the recording dot; the accent for what the AI added. -->
     <Window.Resources>
         <Style x:Key="PillButton" TargetType="Button">
-            <Setter Property="Foreground" Value="White"/>
-            <Setter Property="Background" Value="#1AFFFFFF"/>
-            <Setter Property="BorderBrush" Value="Transparent"/>
-            <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="Foreground" Value="#E8E7E3"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderBrush" Value="#38E8E7E3"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="FontFamily" Value="Cascadia Mono, Consolas"/>
+            <Setter Property="FontSize" Value="11.5"/>
             <Setter Property="Height" Value="32"/>
             <Setter Property="Padding" Value="14,0"/>
             <Setter Property="Focusable" Value="False"/>
@@ -26,7 +29,7 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Bd" Property="Opacity" Value="0.85"/>
+                                <Setter TargetName="Bd" Property="Background" Value="#1AE8E7E3"/>
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
                                 <Setter TargetName="Bd" Property="Opacity" Value="0.7"/>
@@ -36,8 +39,11 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        <!-- The main action (Insert): a filled paper capsule with ink text -->
         <Style x:Key="AccentPill" TargetType="Button" BasedOn="{StaticResource PillButton}">
-            <Setter Property="Background" Value="#D9381E"/>
+            <Setter Property="Background" Value="#E8E7E3"/>
+            <Setter Property="Foreground" Value="#0D0D0C"/>
+            <Setter Property="BorderBrush" Value="#E8E7E3"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
         </Style>
         <Style x:Key="OutlinePill" TargetType="Button" BasedOn="{StaticResource PillButton}">
@@ -52,12 +58,12 @@
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="Padding" Value="0"/>
-            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="Foreground" Value="#E8E7E3"/>
             <Setter Property="FontSize" Value="14"/>
             <Setter Property="TextWrapping" Value="Wrap"/>
             <Setter Property="CaretBrush" Value="Transparent"/>
-            <Setter Property="SelectionBrush" Value="#F4A68C"/>
-            <Setter Property="SelectionOpacity" Value="0.45"/>
+            <Setter Property="SelectionBrush" Value="#E8E7E3"/>
+            <Setter Property="SelectionOpacity" Value="0.3"/>
             <Setter Property="IsInactiveSelectionHighlightEnabled" Value="True"/>
             <Setter Property="IsTabStop" Value="False"/>
             <Setter Property="Cursor" Value="IBeam"/>
@@ -67,26 +73,27 @@
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="Padding" Value="0"/>
-            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="Foreground" Value="#E8E7E3"/>
             <Setter Property="FontSize" Value="14"/>
             <Setter Property="CaretBrush" Value="Transparent"/>
-            <Setter Property="SelectionBrush" Value="#F4A68C"/>
-            <Setter Property="SelectionOpacity" Value="0.45"/>
+            <Setter Property="SelectionBrush" Value="#E8E7E3"/>
+            <Setter Property="SelectionOpacity" Value="0.3"/>
             <Setter Property="IsInactiveSelectionHighlightEnabled" Value="True"/>
             <Setter Property="IsTabStop" Value="False"/>
             <Setter Property="Cursor" Value="IBeam"/>
         </Style>
         <!-- A small "Copy" next to each box's name -->
         <Style x:Key="CopyLink" TargetType="Button">
-            <Setter Property="Content" Value="Copy"/>
-            <Setter Property="Foreground" Value="#B3FFFFFF"/>
-            <Setter Property="FontSize" Value="11.5"/>
+            <Setter Property="Content" Value="COPY"/>
+            <Setter Property="Foreground" Value="#CCE8E7E3"/>
+            <Setter Property="FontFamily" Value="Cascadia Mono, Consolas"/>
+            <Setter Property="FontSize" Value="10.5"/>
             <Setter Property="Focusable" Value="False"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border x:Name="Bd" Background="Transparent" CornerRadius="8" Padding="8,1" BorderBrush="#38FFFFFF" BorderThickness="1">
+                        <Border x:Name="Bd" Background="Transparent" CornerRadius="9" Padding="8,1" BorderBrush="#38E8E7E3" BorderThickness="1">
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
                         <ControlTemplate.Triggers>
@@ -100,19 +107,20 @@
         </Style>
         <Style x:Key="GhostPill" TargetType="Button" BasedOn="{StaticResource PillButton}">
             <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Foreground" Value="#C8FFFFFF"/>
+            <Setter Property="Foreground" Value="#C8E8E7E3"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
         </Style>
     </Window.Resources>
 
-    <Border x:Name="Card" Margin="16" CornerRadius="28" Padding="18,8,8,8" Background="#E0161618"
-            BorderBrush="#1FFFFFFF" BorderThickness="1" MouseEnter="Card_MouseEnter" MouseLeave="Card_MouseLeave"
+    <Border x:Name="Card" Margin="16" CornerRadius="28" Padding="18,8,8,8" Background="#E00D0D0C"
+            BorderBrush="#24E8E7E3" BorderThickness="1" MouseEnter="Card_MouseEnter" MouseLeave="Card_MouseLeave"
             MouseLeftButtonUp="Card_MouseLeftButtonUp">
         <Border.Effect>
             <DropShadowEffect BlurRadius="24" ShadowDepth="4" Opacity="0.35"/>
         </Border.Effect>
         <StackPanel x:Name="Body" Width="440">
             <!-- The transcript so far, while you speak: above the pill's own content -->
-            <TextBlock x:Name="LiveText" Foreground="#D9FFFFFF" FontSize="14" LineHeight="21" TextWrapping="Wrap"
+            <TextBlock x:Name="LiveText" Foreground="#D9E8E7E3" FontSize="14" LineHeight="21" TextWrapping="Wrap"
                        Margin="0,6,10,4" MaxHeight="63" Visibility="Collapsed"/>
             <Grid MinHeight="40">
                 <Grid.ColumnDefinitions>
@@ -125,51 +133,57 @@
 
                 <!-- Status indicator: one of these is visible at a time -->
                 <Grid x:Name="Indicator" Width="16" Height="16" VerticalAlignment="Center" Margin="0,0,12,0">
-                    <Ellipse x:Name="RecDot" Width="10" Height="10" Fill="#E5533A"/>
+                    <Ellipse x:Name="RecDot" Width="10" Height="10" Fill="#FF4636"/>
                     <Grid x:Name="Spinner" Width="16" Height="16" RenderTransformOrigin="0.5,0.5" Visibility="Collapsed">
                         <Grid.RenderTransform>
                             <RotateTransform x:Name="SpinnerRotation"/>
                         </Grid.RenderTransform>
-                        <Ellipse Width="14" Height="14" Stroke="#33FFFFFF" StrokeThickness="2"/>
-                        <Path Data="M 8,1 A 7,7 0 0 1 15,8" Stroke="White" StrokeThickness="2"
+                        <Ellipse Width="14" Height="14" Stroke="#33E8E7E3" StrokeThickness="1.5"/>
+                        <!-- The working arc takes the accent (set in code): something is happening -->
+                        <Path x:Name="SpinnerArc" Data="M 8,1 A 7,7 0 0 1 15,8" Stroke="#E8E7E3" StrokeThickness="2"
                               StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
                     </Grid>
-                    <Path x:Name="CheckIcon" Data="M 2.5,8.5 L 6.2,12 L 13.5,4.5" Stroke="White" StrokeThickness="1.8"
+                    <Path x:Name="CheckIcon" Data="M 2.5,8.5 L 6.2,12 L 13.5,4.5" Stroke="#E8E7E3" StrokeThickness="1.8"
                           StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Visibility="Collapsed"/>
                     <Path x:Name="WarnIcon" Data="M 8,1.8 L 14.8,14 L 1.2,14 Z M 8,6.5 L 8,9.6 M 8,11.8 L 8,11.9"
-                          Stroke="#F4A68C" StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                          Stroke="#E8E7E3" StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
                           StrokeLineJoin="Round" Visibility="Collapsed"/>
                 </Grid>
 
-                <TextBlock x:Name="TitleText" Grid.Column="1" Foreground="White" FontSize="14" FontWeight="SemiBold"
+                <TextBlock x:Name="TitleText" Grid.Column="1" Foreground="#E8E7E3" FontFamily="Cascadia Mono, Consolas" FontSize="13" FontWeight="SemiBold"
                            VerticalAlignment="Center"/>
 
                 <Grid Grid.Column="2" Margin="12,0" VerticalAlignment="Center">
-                    <StackPanel x:Name="Wave" Orientation="Horizontal" Height="28" Visibility="Collapsed"/>
-                    <TextBlock x:Name="SubtitleText" Foreground="#B3FFFFFF" FontSize="13" VerticalAlignment="Center"
+                    <!-- The level meter: columns of dots, lit from the bottom -->
+                    <StackPanel x:Name="Wave" Orientation="Horizontal" Height="28" Visibility="Collapsed" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="SubtitleText" Foreground="#B3E8E7E3" FontFamily="Cascadia Mono, Consolas" FontSize="11.5" VerticalAlignment="Center"
                                TextTrimming="CharacterEllipsis"/>
                     <StackPanel x:Name="Dots" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center"
                                 Visibility="Collapsed"/>
                 </Grid>
 
-                <Border x:Name="Chip" Grid.Column="3" CornerRadius="12" BorderBrush="#2EFFFFFF" BorderThickness="1"
-                        Padding="10,3" VerticalAlignment="Center" Margin="0,0,8,0" Visibility="Collapsed">
-                    <TextBlock x:Name="ChipText" Foreground="#B8FFFFFF" FontSize="12"/>
-                </Border>
+                <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
+                    <!-- A decorative word for the state (録音 recording, 処理中 processing, 挿入 inserted); see About -->
+                    <local:DecorText x:Name="StateDecor" FontSize="10.5" Foreground="#80E8E7E3" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                    <Border x:Name="Chip" CornerRadius="12" BorderBrush="#38E8E7E3" BorderThickness="1"
+                            Padding="10,3" VerticalAlignment="Center" Margin="0,0,8,0" Visibility="Collapsed">
+                        <TextBlock x:Name="ChipText" Foreground="#CCE8E7E3" FontFamily="Cascadia Mono, Consolas" FontSize="11"/>
+                    </Border>
+                </StackPanel>
 
                 <!-- "✕ Cancel" while a dictation is in progress; a plain ✕ when it closes a receipt -->
                 <Button x:Name="CancelButton" Grid.Column="4" Style="{StaticResource PillButton}" MinWidth="36" Height="36"
                         Padding="12,0" Click="Cancel_Click" ToolTip="Cancel this dictation" AutomationProperties.Name="Cancel dictation"
                         Visibility="Collapsed">
                     <StackPanel Orientation="Horizontal">
-                        <Path Data="M 1,1 L 11,11 M 11,1 L 1,11" Stroke="White" StrokeThickness="1.6" VerticalAlignment="Center"
+                        <Path Data="M 1,1 L 10,10 M 10,1 L 1,10" Stroke="#E8E7E3" StrokeThickness="1.4" VerticalAlignment="Center"
                               StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
-                        <TextBlock x:Name="CancelLabel" Text="Cancel" Margin="7,0,0,0" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="CancelLabel" Text="CANCEL" Margin="7,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </Button>
             </Grid>
 
-            <TextBlock x:Name="BodyText" Foreground="White" FontSize="15" LineHeight="22" TextWrapping="Wrap"
+            <TextBlock x:Name="BodyText" Foreground="#E8E7E3" FontSize="15" LineHeight="22" TextWrapping="Wrap"
                        Margin="0,4,10,6" MaxHeight="112" Visibility="Collapsed"/>
 
             <!-- Receipt, expanded by a click: what you said next to what the AI made of it -->
@@ -188,21 +202,21 @@
                     <DockPanel Margin="0,0,0,4">
                         <Button DockPanel.Dock="Right" Style="{StaticResource CopyLink}" Tag="Raw" Click="Copy_Click"
                                 ToolTip="Copy this box (or just the part you selected)" AutomationProperties.Name="Copy Transcription"/>
-                        <TextBlock Text="Transcription" Foreground="#99FFFFFF" FontFamily="Cascadia Mono, Consolas" FontSize="11" VerticalAlignment="Center"/>
+                        <TextBlock Text="01 // TRANSCRIPTION" Foreground="#99E8E7E3" FontFamily="Cascadia Mono, Consolas" FontSize="10.5" VerticalAlignment="Center"/>
                     </DockPanel>
-                    <TextBox x:Name="CompareRaw" Style="{StaticResource SelectableText}" Foreground="#D9FFFFFF" MaxHeight="220" VerticalScrollBarVisibility="Auto"/>
+                    <TextBox x:Name="CompareRaw" Style="{StaticResource SelectableText}" Foreground="#D9E8E7E3" MaxHeight="220" VerticalScrollBarVisibility="Auto"/>
                 </StackPanel>
-                <Border Grid.Column="1" Width="1" Background="#26FFFFFF" HorizontalAlignment="Center"/>
+                <Border Grid.Column="1" Width="1" Background="#38E8E7E3" HorizontalAlignment="Center"/>
                 <StackPanel x:Name="EditPanel" Grid.Column="2" VerticalAlignment="Top">
                     <DockPanel Margin="0,0,0,4">
                         <Button DockPanel.Dock="Right" Style="{StaticResource CopyLink}" Tag="Edit" Click="Copy_Click"
                                 ToolTip="Copy this box (or just the part you selected)" AutomationProperties.Name="Copy AI Edit"/>
-                        <TextBlock Text="AI Edit" Foreground="#99FFFFFF" FontFamily="Cascadia Mono, Consolas" FontSize="11" VerticalAlignment="Center"/>
+                        <TextBlock Text="02 // AI EDIT" Foreground="#99E8E7E3" FontFamily="Cascadia Mono, Consolas" FontSize="10.5" VerticalAlignment="Center"/>
                     </DockPanel>
                     <RichTextBox x:Name="CompareEdited" Style="{StaticResource SelectableRich}" MaxHeight="220" VerticalScrollBarVisibility="Auto"/>
                 </StackPanel>
-                <Border x:Name="InsertDivider" Grid.Column="3" Width="1" Background="#26FFFFFF" HorizontalAlignment="Center"/>
-                <Border x:Name="InsertFrame" Grid.Column="4" CornerRadius="12" BorderThickness="1" BorderBrush="Transparent"
+                <Border x:Name="InsertDivider" Grid.Column="3" Width="1" Background="#38E8E7E3" HorizontalAlignment="Center"/>
+                <Border x:Name="InsertFrame" Grid.Column="4" CornerRadius="6" BorderThickness="1" BorderBrush="Transparent"
                         Background="Transparent" VerticalAlignment="Top" RenderTransformOrigin="0.5,0.5">
                     <Border.RenderTransform>
                         <ScaleTransform x:Name="InsertScale" ScaleX="1" ScaleY="1"/>
@@ -211,7 +225,7 @@
                         <DockPanel Margin="0,0,0,4">
                         <Button DockPanel.Dock="Right" Style="{StaticResource CopyLink}" Tag="Inserted" Click="Copy_Click"
                                 ToolTip="Copy this box (or just the part you selected)" AutomationProperties.Name="Copy Inserted"/>
-                        <TextBlock x:Name="InsertLabel" Text="Inserted" Foreground="#99FFFFFF" FontFamily="Cascadia Mono, Consolas" FontSize="11" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="InsertLabel" Text="03 // INSERTED" Foreground="#99E8E7E3" FontFamily="Cascadia Mono, Consolas" FontSize="10.5" VerticalAlignment="Center"/>
                     </DockPanel>
                         <TextBox x:Name="CompareInserted" Style="{StaticResource SelectableText}" MaxHeight="220" VerticalScrollBarVisibility="Auto"/>
                     </StackPanel>
@@ -220,8 +234,8 @@
 
             <DockPanel x:Name="Actions" Margin="0,4,0,6" LastChildFill="False" Visibility="Collapsed">
                 <Button x:Name="InsertButton" Style="{StaticResource AccentPill}" Click="Insert_Click"/>
-                <Button Style="{StaticResource OutlinePill}" Content="Use original" Margin="8,0,0,0" Click="Raw_Click"/>
-                <Button DockPanel.Dock="Right" Style="{StaticResource GhostPill}" Content="Discard   Esc" Margin="0,0,4,0"
+                <Button Style="{StaticResource OutlinePill}" Content="USE ORIGINAL" Margin="8,0,0,0" Click="Raw_Click"/>
+                <Button DockPanel.Dock="Right" Style="{StaticResource GhostPill}" Content="DISCARD   ESC" Margin="0,0,4,0"
                         Click="Cancel_Click"/>
             </DockPanel>
         </StackPanel>

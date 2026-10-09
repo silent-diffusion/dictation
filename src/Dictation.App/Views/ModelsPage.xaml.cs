@@ -229,7 +229,7 @@ public partial class ModelsPage : UserControl
     UIElement Row(string name, string description, IEnumerable<(string Text, string Kind)> badges, Func<RowParts, Button?> action)
     {
         var title = new WrapPanel();
-        title.Children.Add(new TextBlock { Text = name, FontSize = 14, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 10, 2) });
+        title.Children.Add(new TextBlock { Text = name, FontFamily = new FontFamily("Cascadia Mono, Consolas"), FontSize = 13.5, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 10, 2) });
         foreach (var (text, kind) in badges) title.Children.Add(Badge(text, kind));
 
         var bar = new ProgressBar { Height = 4, Minimum = 0, Maximum = 1, Margin = new Thickness(0, 8, 0, 0), Visibility = Visibility.Collapsed };
@@ -266,17 +266,17 @@ public partial class ModelsPage : UserControl
 
     Button MakeButton(string text, Func<Task> click, bool primary = false)
     {
-        var b = new Button { Content = text, Style = (Style)FindResource(primary ? "PrimaryButton" : "QuietButton") };
+        var b = new Button { Content = text.ToUpper(), Style = (Style)FindResource(primary ? "PrimaryButton" : "QuietButton") };
         b.Click += async (_, _) => await click();
         return b;
     }
 
     static Border Badge(string text, string kind)
     {
-        var label = new TextBlock { Text = text, FontSize = 10.5, FontFamily = new FontFamily("Cascadia Mono, Consolas") };
+        var label = new TextBlock { Text = text.ToUpper(), FontSize = 10, FontFamily = new FontFamily("Cascadia Mono, Consolas") };
         var badge = new Border
         {
-            CornerRadius = new CornerRadius(9), Padding = new Thickness(7, 1, 7, 1), Margin = new Thickness(0, 0, 6, 2),
+            CornerRadius = new CornerRadius(9), Padding = new Thickness(8, 1, 8, 1), Margin = new Thickness(0, 0, 6, 2),
             VerticalAlignment = VerticalAlignment.Center, BorderThickness = new Thickness(1), Child = label,
         };
         switch (kind)
@@ -290,13 +290,13 @@ public partial class ModelsPage : UserControl
                 badge.SetResourceReference(Border.BorderBrushProperty, "Ob.Ok");
                 label.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Ok");
                 break;
-            case "cloud":
-                badge.SetResourceReference(Border.BorderBrushProperty, "Ob.Record");
-                label.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Record");
+            case "cloud": // text leaves this PC: worth noticing, so the accent (red is only for recording)
+                badge.SetResourceReference(Border.BorderBrushProperty, "Ob.Accent");
+                label.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Accent");
                 break;
             case "plain":
                 badge.SetResourceReference(Border.BackgroundProperty, "Ob.Subtle");
-                badge.SetResourceReference(Border.BorderBrushProperty, "Ob.Subtle");
+                badge.SetResourceReference(Border.BorderBrushProperty, "Ob.Divider");
                 label.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Text");
                 break;
             default:

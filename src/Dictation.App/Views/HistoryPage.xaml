@@ -1,6 +1,7 @@
 <UserControl x:Class="Dictation.App.Views.HistoryPage"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:Dictation.App.Views">
     <Grid Margin="32,28,32,24">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -8,15 +9,15 @@
         </Grid.RowDefinitions>
 
         <DockPanel Margin="0,0,0,14">
+            <local:PageHeader DockPanel.Dock="Top" Title="History" Decor="履歴" Readout="DICTATIONS // ON THIS PC"/>
             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
-                <TextBlock Text="Show" VerticalAlignment="Center" Foreground="{DynamicResource Ob.Muted}" Margin="0,0,8,0"/>
+                <TextBlock Text="SHOW" Style="{StaticResource MonoLabel}" VerticalAlignment="Center" Margin="0,0,8,0"/>
                 <ComboBox x:Name="GroupingBox" Width="230" SelectionChanged="Grouping_Changed" AutomationProperties.Name="Order">
                     <ComboBoxItem Content="Newest first" Tag="Chronological"/>
                     <ComboBoxItem Content="By app, newest first" Tag="ByApp"/>
                 </ComboBox>
             </StackPanel>
             <StackPanel>
-                <TextBlock Text="History" Style="{StaticResource SectionTitle}" Margin="0,0,0,2"/>
                 <TextBlock x:Name="CountText" Style="{StaticResource Caption}" Margin="0"/>
             </StackPanel>
         </DockPanel>
@@ -30,6 +31,7 @@
             <!-- The dictations -->
             <Border Style="{StaticResource Card}" Padding="6">
                 <ListBox x:Name="List" BorderThickness="0" Background="Transparent" SelectionChanged="List_SelectionChanged"
+                         ItemContainerStyle="{StaticResource RowItem}"
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled" AutomationProperties.Name="Dictations">
                     <ListBox.GroupStyle>
                         <!-- By app: each app is a collapsible section with its name large and its count beside it -->
@@ -39,13 +41,12 @@
                                     <Setter Property="Template">
                                         <Setter.Value>
                                             <ControlTemplate TargetType="GroupItem">
-                                                <Expander IsExpanded="True" Margin="2,6,2,2">
+                                                <Expander IsExpanded="True" Margin="0,6,0,2" Style="{StaticResource NavGroup}">
                                                     <Expander.Header>
                                                         <StackPanel Orientation="Horizontal">
-                                                            <TextBlock Text="{Binding Name}" FontSize="16" FontWeight="SemiBold"
-                                                                       VerticalAlignment="Center"/>
-                                                            <TextBlock Text="{Binding ItemCount}" FontSize="12.5" Margin="10,0,0,0"
-                                                                       VerticalAlignment="Center" Foreground="{DynamicResource Ob.Muted}"/>
+                                                            <TextBlock Text="{Binding Name}" FontSize="12" FontWeight="Bold"
+                                                                       Foreground="{DynamicResource Ob.Text}" VerticalAlignment="Center"/>
+                                                            <TextBlock Text="{Binding ItemCount}" Margin="10,0,0,0" VerticalAlignment="Center"/>
                                                         </StackPanel>
                                                     </Expander.Header>
                                                     <ItemsPresenter Margin="6,2,0,4"/>
@@ -61,14 +62,13 @@
                         <DataTemplate>
                             <StackPanel Margin="2,5">
                                 <DockPanel>
-                                    <TextBlock DockPanel.Dock="Right" Text="{Binding Duration}" FontSize="11"
-                                               Foreground="{DynamicResource Ob.Muted}"/>
-                                    <TextBlock FontSize="12" Foreground="{DynamicResource Ob.Muted}" TextTrimming="CharacterEllipsis">
+                                    <TextBlock DockPanel.Dock="Right" Text="{Binding Duration}" Style="{StaticResource MonoLabel}"/>
+                                    <TextBlock Style="{StaticResource MonoLabel}" TextTrimming="CharacterEllipsis">
                                         <Run Text="{Binding When, Mode=OneWay}"/><Run Text="  ·  "/><Run Text="{Binding AppName, Mode=OneWay}"/>
                                     </TextBlock>
                                 </DockPanel>
                                 <TextBlock Text="{Binding Preview}" TextWrapping="Wrap" MaxHeight="40" TextTrimming="CharacterEllipsis"
-                                           Margin="0,2,0,0"/>
+                                           Margin="0,3,0,0"/>
                             </StackPanel>
                         </DataTemplate>
                     </ListBox.ItemTemplate>
@@ -81,18 +81,18 @@
             <ScrollViewer Grid.Column="1" Margin="20,0,0,0" VerticalScrollBarVisibility="Auto">
                 <StackPanel x:Name="Detail" Visibility="Collapsed">
                     <DockPanel>
-                        <Button DockPanel.Dock="Right" Content="Delete" Style="{StaticResource QuietButton}" Click="Delete_Click"
+                        <Button DockPanel.Dock="Right" Content="DELETE" Style="{StaticResource QuietButton}" Click="Delete_Click"
                                 VerticalAlignment="Top"/>
                         <StackPanel>
-                            <TextBlock x:Name="TitleText" FontSize="17" FontWeight="SemiBold"/>
+                            <TextBlock x:Name="TitleText" FontFamily="{StaticResource Ob.Mono}" FontSize="16" FontWeight="Bold"/>
                             <TextBlock x:Name="WhereText" Style="{StaticResource Caption}" Margin="0,2,0,0"/>
                         </StackPanel>
                     </DockPanel>
 
                     <!-- Recording -->
-                    <Border x:Name="Player" Style="{StaticResource Card}" Margin="0,12,0,0" Padding="12,10">
+                    <Border x:Name="Player" Style="{StaticResource Card}" Margin="0,12,0,0" Padding="10,8">
                         <DockPanel>
-                            <Button x:Name="PlayButton" DockPanel.Dock="Left" Style="{StaticResource PrimaryButton}" Width="40"
+                            <Button x:Name="PlayButton" DockPanel.Dock="Left" Style="{StaticResource PrimaryButton}" Width="34"
                                     Padding="0" Click="Play_Click" AutomationProperties.Name="Play or pause">
                                 <TextBlock x:Name="PlayGlyph" Text="&#xE768;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"/>
                             </Button>
@@ -116,18 +116,18 @@
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
                             <StackPanel Margin="14,12,14,14">
-                                <TextBlock Text="Transcription" Style="{StaticResource MonoLabel}" Margin="0,0,0,6"/>
+                                <TextBlock Text="01 // TRANSCRIPTION" Style="{StaticResource MonoLabel}" Margin="0,0,0,6"/>
                                 <TextBlock x:Name="TranscriptBlock" TextWrapping="Wrap" FontSize="14" LineHeight="21"/>
                             </StackPanel>
                             <Border Grid.Column="1" BorderBrush="{DynamicResource Ob.Divider}" BorderThickness="1,0,0,0">
                                 <StackPanel Margin="14,12,14,14">
-                                    <TextBlock Text="AI Edit" Style="{StaticResource MonoLabel}" Margin="0,0,0,6"/>
+                                    <TextBlock Text="02 // AI EDIT" Style="{StaticResource MonoLabel}" Margin="0,0,0,6"/>
                                     <TextBlock x:Name="DiffBlock" TextWrapping="Wrap" FontSize="14" LineHeight="21"/>
                                 </StackPanel>
                             </Border>
                             <Border Grid.Column="2" BorderBrush="{DynamicResource Ob.Divider}" BorderThickness="1,0,0,0">
                                 <StackPanel Margin="14,12,14,14">
-                                    <TextBlock Text="Inserted" Style="{StaticResource MonoLabel}" Margin="0,0,0,6"/>
+                                    <TextBlock Text="03 // INSERTED" Style="{StaticResource MonoLabel}" Margin="0,0,0,6"/>
                                     <TextBlock x:Name="FinalBlock" TextWrapping="Wrap" FontSize="14" LineHeight="21"/>
                                 </StackPanel>
                             </Border>
@@ -136,11 +136,11 @@
                     <TextBlock x:Name="NoteText" Style="{StaticResource Caption}" Margin="0,6,0,0"/>
 
                     <WrapPanel Margin="0,14,0,0">
-                        <Button Content="Copy inserted text" Style="{StaticResource QuietButton}" Margin="0,0,8,8" Click="CopyFinal_Click"/>
-                        <Button Content="Copy transcription" Style="{StaticResource QuietButton}" Margin="0,0,8,8" Click="CopyRaw_Click"/>
-                        <Button x:Name="CopyAiButton" Content="Copy AI edit" Style="{StaticResource QuietButton}" Margin="0,0,8,8"
+                        <Button Content="COPY INSERTED TEXT" Style="{StaticResource QuietButton}" Margin="0,0,8,8" Click="CopyFinal_Click"/>
+                        <Button Content="COPY TRANSCRIPTION" Style="{StaticResource QuietButton}" Margin="0,0,8,8" Click="CopyRaw_Click"/>
+                        <Button x:Name="CopyAiButton" Content="COPY AI EDIT" Style="{StaticResource QuietButton}" Margin="0,0,8,8"
                                 Click="CopyAi_Click" ToolTip="The AI's own output, before it was fitted into the surrounding text"/>
-                        <Button Content="Insert transcription into the last app" Style="{StaticResource QuietButton}" Margin="0,0,8,8"
+                        <Button Content="INSERT TRANSCRIPTION INTO THE LAST APP" Style="{StaticResource QuietButton}" Margin="0,0,8,8"
                                 Click="InsertRaw_Click"/>
                     </WrapPanel>
                     <TextBlock x:Name="Info" Style="{StaticResource Caption}"/>

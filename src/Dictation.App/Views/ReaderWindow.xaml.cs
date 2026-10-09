@@ -19,9 +19,13 @@ namespace Dictation.App.Views;
 /// </summary>
 public partial class ReaderWindow : Window
 {
-    static readonly Brush Spoken = Freeze(new SolidColorBrush(Colors.White));
-    static readonly Brush Current = Freeze(new SolidColorBrush(Color.FromRgb(0xF4, 0xA6, 0x8C)));
-    static readonly Brush Upcoming = Freeze(new SolidColorBrush(Color.FromArgb(0x73, 0xFF, 0xFF, 0xFF)));
+    static readonly Brush Spoken = Freeze(new SolidColorBrush(Color.FromRgb(0xE8, 0xE7, 0xE3)));
+    static readonly Brush Upcoming = Freeze(new SolidColorBrush(Color.FromArgb(0x73, 0xE8, 0xE7, 0xE3)));
+    /// <summary>The word being read: the accent (its dark-paper version; the player is dark in both themes). One
+    /// instance per reading, since the whole-text view finds the current word by this brush.</summary>
+    Brush _current = Spoken;
+
+    static Brush Accent => Application.Current.TryFindResource("Ob.AccentOnDark") as Brush ?? Spoken;
     const int WindowChars = 150; // longer sentences show a moving window around the spoken position
     const double CompactWidth = 520, ExpandedWidth = 640;
 
@@ -81,7 +85,8 @@ public partial class ReaderWindow : Window
     {
         _autoClose.Stop();
         var opacity = Math.Clamp(App.Services.Settings.Current.ReaderOpacity, 0.3, 1.0);
-        Card.Background = new SolidColorBrush(Color.FromArgb((byte)Math.Round(opacity * 255), 0x16, 0x16, 0x18));
+        Card.Background = new SolidColorBrush(Color.FromArgb((byte)Math.Round(opacity * 255), 0x0D, 0x0D, 0x0C));
+        ProgressFill.Background = Accent; // the accent setting may have changed since the last reading
         if (!IsVisible) Show();
         Reposition();
     }
@@ -95,7 +100,7 @@ public partial class ReaderWindow : Window
         DownloadProgress.Visibility = Visibility.Collapsed;
         QuestionTitle.Text = title;
         QuestionBody.Text = body;
-        PrimaryButton.Content = primary;
+        PrimaryButton.Content = primary.ToUpper();
         _primary = onPrimary;
         ShowWindow();
     }
@@ -180,6 +185,7 @@ public partial class ReaderWindow : Window
         text = _doc.Plain;
         var s = App.Services.Settings.Current;
         var session = new ReadAloudSession(text, App.Services.Voices, _voice, s.TtsBaseSpeed);
+        _current = Accent;
         if (session.Sentences.Count == 0)
         {
             ShowError("There's nothing to read in that text.");
@@ -216,7 +222,7 @@ public partial class ReaderWindow : Window
         FasterButton.IsEnabled = s.Speed < ReadAloudSession.MaxSpeed - 0.001;
         var left = s.Remaining;
         RemainingText.Text = $"{(int)left.TotalMinutes}:{left.Seconds:00}";
-        StatusText.Text = ended ? "Done" : s.IsPaused ? "Paused" : s.IsBuffering ? "Preparing voice…" : "left";
+        StatusText.Text = ended ? "DONE" : s.IsPaused ? "PAUSED" : s.IsBuffering ? "PREPARING VOICE…" : "LEFT";
         ProgressFill.Width = s.Progress * Math.Max(0, ((FrameworkElement)ProgressFill.Parent).ActualWidth);
         ShowLines(s);
     }
@@ -251,7 +257,7 @@ public partial class ReaderWindow : Window
         Lines.Inlines.Clear();
         if (from > 0) Lines.Inlines.Add(new Run("… ") { Foreground = Upcoming });
         Add(Lines.Inlines, sentence, from, Math.Min(wordStart, to), Spoken);
-        Add(Lines.Inlines, sentence, Math.Max(from, wordStart), Math.Min(wordEnd, to), Current);
+        Add(Lines.Inlines, sentence, Math.Max(from, wordStart), Math.Min(wordEnd, to), _current);
         Add(Lines.Inlines, sentence, Math.Max(from, wordEnd), to, Upcoming);
         if (to < sentence.Length) Lines.Inlines.Add(new Run(" …") { Foreground = Upcoming });
     }
@@ -279,9 +285,9 @@ public partial class ReaderWindow : Window
         var current = _fullSentences[index];
         current.Inlines.Clear();
         AddFormatted(current.Inlines, span.Start, span.Start + span.Length, pos =>
-            pos - span.Start < wordStart ? Spoken : pos - span.Start < wordEnd ? Current : Upcoming);
+            pos - span.Start < wordStart ? Spoken : pos - span.Start < wordEnd ? _current : Upcoming);
         if (current.Inlines.Count == 0) current.Inlines.Add(new Run(sentence)); // keep the span, so it can be scrolled to
-        Follow(current.Inlines.OfType<Run>().FirstOrDefault(r => r.Foreground == Current) ?? (TextElement)current);
+        Follow(current.Inlines.OfType<Run>().FirstOrDefault(r => r.Foreground == _current) ?? (TextElement)current);
     }
 
     /// <summary>A word clicked in the whole-text view: read from there (forwards or backwards).</summary>
@@ -505,8 +511,8 @@ public partial class ReaderWindow : Window
                 MinWidth = 56,
                 Margin = new Thickness(3),
                 FontFamily = new FontFamily("Cascadia Mono, Consolas"),
-                Background = current ? Brushes.White : new SolidColorBrush(Color.FromArgb(0x1A, 0xFF, 0xFF, 0xFF)),
-                Foreground = current ? new SolidColorBrush(Color.FromRgb(0x16, 0x16, 0x18)) : Brushes.White,
+                Background = current ? Spoken : new SolidColorBrush(Color.FromArgb(0x1A, 0xE8, 0xE7, 0xE3)),
+                Foreground = current ? new SolidColorBrush(Color.FromRgb(0x0D, 0x0D, 0x0C)) : Spoken,
             };
             AutomationProperties.SetName(choice, $"{speed:0.##} times speed");
             choice.Click += (_, _) =>

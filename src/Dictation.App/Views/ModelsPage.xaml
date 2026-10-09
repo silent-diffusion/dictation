@@ -1,9 +1,10 @@
 <UserControl x:Class="Dictation.App.Views.ModelsPage"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:Dictation.App.Views">
     <ScrollViewer VerticalScrollBarVisibility="Auto">
         <StackPanel Margin="40,32,40,40" MaxWidth="820" HorizontalAlignment="Left">
-            <TextBlock Text="Models" Style="{StaticResource SectionTitle}"/>
+            <local:PageHeader Title="Models" Decor="設定" Readout="SECTION B.1"/>
             <TextBlock Style="{StaticResource Caption}"
                        Text="Download the models you want and choose which one is active. Local models run on this PC; downloading is the only time they use the internet."/>
 
@@ -11,7 +12,7 @@
             <StackPanel x:Name="SpeechList"/>
 
             <DockPanel Margin="0,22,0,8">
-                <Button DockPanel.Dock="Right" Content="Refresh" Style="{StaticResource QuietButton}" Padding="10,3"
+                <Button DockPanel.Dock="Right" Content="REFRESH" Style="{StaticResource QuietButton}" Padding="10,3"
                         Click="Refresh_Click"/>
                 <TextBlock Text="AI CLEANUP · ON THIS PC" Style="{StaticResource MonoLabel}" VerticalAlignment="Center"/>
             </DockPanel>
@@ -28,12 +29,12 @@
 
             <Expander Header="Advanced: local AI runtime" Margin="0,24,0,0">
                 <StackPanel Margin="0,8,0,0">
-                    <TextBlock Text="Runtime endpoint" Style="{StaticResource FieldLabel}"/>
+                    <TextBlock Text="RUNTIME ENDPOINT" Style="{StaticResource FieldLabel}"/>
                     <TextBox Text="{Binding Llm.Endpoint, UpdateSourceTrigger=LostFocus}" Width="300" HorizontalAlignment="Left"/>
                     <TextBlock Style="{StaticResource Caption}" Margin="0,4,0,0"
                                Text="Must be a local address (127.0.0.1 / localhost); other addresses are rejected."/>
                     <CheckBox Content="Start the bundled Ollama automatically" IsChecked="{Binding Llm.AutoStartRuntime}" Margin="0,10,0,0"/>
-                    <TextBlock Text="Give up after (seconds)" Style="{StaticResource FieldLabel}"/>
+                    <TextBlock Text="GIVE UP AFTER (SECONDS)" Style="{StaticResource FieldLabel}"/>
                     <TextBox Text="{Binding Llm.TimeoutSeconds, UpdateSourceTrigger=LostFocus}" Width="100" HorizontalAlignment="Left"/>
                 </StackPanel>
             </Expander>

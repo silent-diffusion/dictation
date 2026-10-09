@@ -13,7 +13,7 @@ public partial class SpeechToTextPage : UserControl
         var s = App.Services;
         var st = s.Settings.Current;
         HotkeyHint.Text = $"Press {st.Hotkey} in any app to dictate, and again to stop. The active profile decides what happens to your words.";
-        CycleHint.Text = string.IsNullOrEmpty(st.CycleProfileHotkey) ? "" : st.CycleProfileHotkey + " cycles";
+        CycleHint.Text = string.IsNullOrEmpty(st.CycleProfileHotkey) ? "" : (st.CycleProfileHotkey + " cycles").ToUpperInvariant();
         ProfileList.ItemsSource = s.Profiles.Profiles;
         ProfileList.SelectedItem = s.Profiles.Active;
         s.Profiles.Profiles.CollectionChanged += OnProfilesChanged;

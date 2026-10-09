@@ -41,9 +41,9 @@ public static class ThemeManager
         if (_scheme != null) app.Resources.MergedDictionaries.Remove(_scheme);
         app.Resources.MergedDictionaries.Add(palette);
         _palette = palette;
-        // The color scheme goes on top: later dictionaries win, so it only replaces the colors it names.
+        // The accent goes on top: later dictionaries win, so it only replaces the colors it names.
         _scheme = ColorSchemes.Build(colors, dark);
-        if (_scheme != null) app.Resources.MergedDictionaries.Add(_scheme);
+        app.Resources.MergedDictionaries.Add(_scheme);
 
         if (!_listening)
         {
@@ -73,51 +73,51 @@ public static class ThemeManager
 }
 
 /// <summary>
-/// The color schemes. Each replaces the background tints, outlines and accent of the Light and Dark palettes with a
-/// version of the same lightness, so text keeps its contrast (the text colors themselves are never replaced).
+/// The accent colors. Oberton is ink on paper; the accent marks what is live or matters most right now (today's count, a
+/// countdown, the word being read, words the AI added, errors). Red is never an accent: it means recording.
+/// The setting keeps its old name and values (<see cref="ColorScheme"/>) so saved settings load: each former color
+/// scheme maps to the accent closest to it, and Ember, the old red default, becomes Cobalt.
 /// </summary>
 public static class ColorSchemes
 {
-    /// <summary>The accent of each scheme (light, dark), for the picker's swatches.</summary>
+    /// <summary>The name shown in the picker.</summary>
+    public static string Name(ColorScheme c) => c switch
+    {
+        ColorScheme.Ocean => "Teal",
+        ColorScheme.Forest => "Signal green",
+        ColorScheme.Violet => "Violet",
+        ColorScheme.Rose => "Amber",
+        _ => "Cobalt",
+    };
+
+    /// <summary>The accent (on light paper, on dark paper).</summary>
     public static (string Light, string Dark) Accent(ColorScheme c) => c switch
     {
-        ColorScheme.Ocean => ("#1F6FD1", "#4C9AFF"),
-        ColorScheme.Forest => ("#23845A", "#4FBF7F"),
-        ColorScheme.Violet => ("#6C47E0", "#9C82FF"),
-        ColorScheme.Rose => ("#C2255C", "#F06595"),
-        _ => ("#D9381E", "#E5533A"),
+        ColorScheme.Ocean => ("#00747C", "#3CD2D9"),
+        ColorScheme.Forest => ("#00875A", "#3BE0A2"),
+        ColorScheme.Violet => ("#6A2CF5", "#B39BFF"),
+        ColorScheme.Rose => ("#9A6500", "#FFC233"),
+        _ => ("#2340FF", "#7F8DFF"),
     };
 
-    static readonly string[] Keys =
-        { "Ob.Window", "Ob.Sidebar", "Ob.Border", "Ob.Divider", "Ob.Subtle", "Ob.Hover", "Ob.Selected", "Ob.Track", "Ob.Mark", "Ob.Strong", "Ob.Record", "Ob.DiffAdded", "Ob.Card" };
+    /// <summary>The keys that take the accent. Ob.AccentOnDark is the dark-paper version in both themes, for the
+    /// overlay and the Read aloud player, which are always dark.</summary>
+    static readonly string[] Keys = { "Ob.Accent", "Ob.Busy", "Ob.Error", "Ob.DiffAdded" };
 
-    // Per scheme, light then dark, in the order of Keys. Ob.Strong in dark mode stays the light text color (null).
-    static string?[]? Colors(ColorScheme c, bool dark) => (c, dark) switch
+    /// <summary>The accent's brushes for light or dark mode, laid over the palette.</summary>
+    public static ResourceDictionary Build(ColorScheme c, bool dark)
     {
-        (ColorScheme.Ocean, false) => new string?[] { "#F3F6F9", "#E8EEF4", "#D5DEE8", "#E3E9F0", "#DFE6EE", "#DFE6EE", "#FFFFFF", "#C3CFDC", "#14212E", "#14212E", "#1F6FD1", "#1A5FB4", null },
-        (ColorScheme.Ocean, true) => new string?[] { "#15191E", "#0F1317", "#2E3742", "#252C34", "#252C34", "#1F262E", "#27303A", "#3E4955", "#27303A", null, "#4C9AFF", "#8CBEFF", "#1D232A" },
-        (ColorScheme.Forest, false) => new string?[] { "#F4F7F3", "#EAEFE8", "#D6DED3", "#E4EAE2", "#DFE6DC", "#DFE6DC", "#FFFFFF", "#C4CFC0", "#15241B", "#15241B", "#23845A", "#1E6E4A", null },
-        (ColorScheme.Forest, true) => new string?[] { "#151916", "#0F1310", "#2D3830", "#242C26", "#242C26", "#1E2620", "#26302A", "#3D4A40", "#26302A", null, "#4FBF7F", "#8FD9AE", "#1C231E" },
-        (ColorScheme.Violet, false) => new string?[] { "#F6F4F9", "#EDE9F3", "#DCD5E6", "#E8E3EF", "#E3DDEC", "#E3DDEC", "#FFFFFF", "#CBC2D8", "#1E162B", "#1E162B", "#6C47E0", "#5F3DC4", null },
-        (ColorScheme.Violet, true) => new string?[] { "#18161D", "#121016", "#353041", "#2A2632", "#2A2632", "#231F2A", "#2D2836", "#474052", "#2D2836", null, "#9C82FF", "#C3B3FF", "#211E28" },
-        (ColorScheme.Rose, false) => new string?[] { "#FAF4F5", "#F2E8EA", "#E7D6DA", "#EFE3E6", "#EADDE0", "#EADDE0", "#FFFFFF", "#D6C1C6", "#2B1219", "#2B1219", "#C2255C", "#A61E4D", null },
-        (ColorScheme.Rose, true) => new string?[] { "#1B1618", "#141012", "#3B3035", "#2E2629", "#2E2629", "#261F22", "#30282C", "#4D4147", "#30282C", null, "#F06595", "#FAA2C1", "#251E21" },
-        _ => null, // Ember: the palettes as they are
-    };
-
-    /// <summary>The overrides for a scheme in light or dark mode; null for Ember (nothing to override).</summary>
-    public static ResourceDictionary? Build(ColorScheme c, bool dark)
-    {
-        var colors = Colors(c, dark);
-        if (colors == null) return null;
+        var (light, darkHex) = Accent(c);
         var d = new ResourceDictionary();
-        for (var i = 0; i < Keys.Length; i++)
-        {
-            if (colors[i] is not { } hex) continue;
-            var brush = new System.Windows.Media.SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(hex));
-            brush.Freeze();
-            d[Keys[i]] = brush;
-        }
+        foreach (var key in Keys) d[key] = Brush(dark ? darkHex : light);
+        d["Ob.AccentOnDark"] = Brush(darkHex);
         return d;
+    }
+
+    static System.Windows.Media.SolidColorBrush Brush(string hex)
+    {
+        var brush = new System.Windows.Media.SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(hex));
+        brush.Freeze();
+        return brush;
     }
 }

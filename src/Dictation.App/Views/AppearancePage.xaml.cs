@@ -24,7 +24,7 @@ public partial class AppearancePage : UserControl
         AutoSave.Hook(this, () => App.Services.Settings.Save());
     }
 
-    // ----- color schemes -----
+    // ----- accent colors (the setting keeps its old name, ColorScheme) -----
 
     void BuildSchemePicker()
     {
@@ -32,23 +32,30 @@ public partial class AppearancePage : UserControl
         foreach (var scheme in Enum.GetValues<ColorScheme>())
         {
             var (light, dark) = ColorSchemes.Accent(scheme);
+            // The accent on light paper and on dark paper, as two squares
             var swatches = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(4, 4, 0, 0) };
-            foreach (var hex in new[] { light, dark })
-                swatches.Children.Add(new System.Windows.Shapes.Ellipse
+            foreach (var (hex, paper) in new[] { (light, "#E8E7E3"), (dark, "#0E0E0D") })
+                swatches.Children.Add(new Border
                 {
-                    Width = 18, Height = 18, Margin = new Thickness(0, 0, 6, 0),
-                    Fill = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex)),
+                    Width = 22, Height = 22, Margin = new Thickness(0, 0, 4, 0), Padding = new Thickness(5),
+                    Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(paper)),
+                    BorderBrush = new SolidColorBrush(Color.FromArgb(0x55, 0x80, 0x80, 0x80)), BorderThickness = new Thickness(1),
+                    Child = new Border { Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex)) },
                 });
             var content = new StackPanel();
             content.Children.Add(swatches);
-            content.Children.Add(new TextBlock { Text = scheme.ToString(), Margin = new Thickness(4, 8, 0, 2), FontSize = 14 });
+            content.Children.Add(new TextBlock
+            {
+                Text = ColorSchemes.Name(scheme).ToUpper(), Margin = new Thickness(4, 10, 0, 2), FontSize = 11, FontWeight = FontWeights.Bold,
+                FontFamily = (FontFamily)FindResource("Ob.Mono"),
+            });
             var card = new RadioButton
             {
                 GroupName = "Scheme", Style = (Style)FindResource("ChoiceCard"), Content = content,
                 Margin = new Thickness(scheme == ColorScheme.Ember ? 0 : 4, 0, scheme == ColorScheme.Rose ? 0 : 4, 0),
                 IsChecked = s.ColorScheme == scheme,
             };
-            System.Windows.Automation.AutomationProperties.SetName(card, scheme.ToString());
+            System.Windows.Automation.AutomationProperties.SetName(card, ColorSchemes.Name(scheme));
             card.Checked += (_, _) =>
             {
                 if (!IsLoaded) return;
@@ -109,7 +116,7 @@ public partial class AppearancePage : UserControl
 
     void UpdateSystemHint() =>
         SystemHint.Text = App.Services.Settings.Current.Theme == AppTheme.System
-            ? (ThemeManager.IsDark ? "Dark right now" : "Light right now")
+            ? (ThemeManager.IsDark ? "DARK RIGHT NOW" : "LIGHT RIGHT NOW")
             : " ";
 
     /// <summary>"BottomCenter" → "Bottom center".</summary>

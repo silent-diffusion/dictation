@@ -56,11 +56,12 @@ The folder keeps its pre-rename name so updates from Local Dictation 1.x keep yo
 
 ## Using it
 
-The sidebar has five sections: **Active dashboard** (one screen, no scrolling: what's active and loaded, dials for
-words dictated and words read aloud today, turnaround, AI edits kept, history and the speech model's unload countdown, and charts of words per day (dictated and read aloud, side by side) and
-the apps you dictate into; the top tiles' text grows with the window. Every tile, dial and chart opens its page when
-clicked (History, the profiles, Models, Model unloading); the big number on the speech-model dial unloads that model
-right away, and the big number on the History dial copies the last dictation (the text that was inserted) and says so. The figures come from daily counts in
+The sidebar has five sections: **Dashboard** (one screen, no scrolling: the signal path of what's active and loaded
+(profile → speech recognition → AI cleanup → read aloud), meters for words dictated and words read aloud today, turnaround,
+AI edits kept, history and the speech model's unload countdown, and charts of words per day (dictated and read aloud, side by side) and
+the apps you dictate into; the signal path's text grows with the window. Every step, meter and chart opens its page when
+clicked (History, the profiles, Models, Model unloading); the big number on the speech-model meter unloads that model
+right away, and the big number on the History meter copies the last dictation (the text that was inserted) and says so. The figures come from daily counts in
 `data\usage.json` (dictations, words, seconds spoken, turnaround, AI edits kept, readings and dictations per app name; never
 any text, audio or window titles), so they survive History being trimmed, cleared or off), **Speech to text** (profiles), **Read aloud**, **History** and **Settings**. The menu button
 in the top-left corner (✕ while the sidebar is open, ☰ while it's hidden; or **Ctrl+B**) slides the sidebar away to give
@@ -113,8 +114,16 @@ window's edge.
   and numbered lists, quotes, code, bold, italic and links) while the voice reads it as plain text. Click any word in that
   view to have the voice jump there, forwards or backwards. The player's opacity is a setting under *Read aloud*.
 * **Settings**: grouped into Dictation, Models & AI, Look & feel and App; each group folds away (remembered).
-  **Appearance** follows the Windows light/dark setting, or pick Light or Dark, plus a color scheme (Ember, Ocean,
-  Forest, Violet, Rose), each with a light and a dark version.
+  **Appearance** follows the Windows light/dark setting, or pick Light or Dark, plus an accent color (Cobalt, Teal,
+  Signal green, Violet, Amber), each with a version for light and for dark paper.
+  **About & updates** explains what Oberton is, how it works and its design language, with the meaning of every Japanese
+  word in the interface.
+* **Design** (4.0): Oberton is drawn like a printed instrument panel: black ink on gray paper, 1px lines, capitalized
+  monospaced labels and readouts, rings of dots and block bars for numbers; dark mode is the same sheet inverted. Color is
+  a signal: the accent marks what is live or most important (today's count, a countdown, the word being read, words the AI
+  added, errors), and red means the microphone is recording, nowhere else. The small Japanese words beside some labels
+  (倍音 overtone, 計器 instrument, 口述 dictation, 読上 reading aloud, 履歴 history, 設定 settings, 概要 about, 録音 recording,
+  処理中 processing, 挿入 insertion) are decoration only and hidden from screen readers.
 * **Profiles** (*Speech to text*): *Light Cleanup*, *Grammar & Clarity*, *Natural Phrasing*, *Custom*, *Raw* (no AI: the recognizer's words,
   with the seams between live pieces fixed), plus your own. Edit the prompt, pick a model (only models downloaded to this PC are listed, plus cloud models once
   they are set up), pick its models in one *Models* card: a speech-to-text (Whisper) model, the AI model and a Read aloud model and voice (downloaded ones only; a profile with

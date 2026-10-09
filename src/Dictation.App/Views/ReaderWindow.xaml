@@ -5,11 +5,12 @@
         Topmost="True" ShowInTaskbar="False" ShowActivated="False" Focusable="False"
         ResizeMode="NoResize" SizeToContent="WidthAndHeight" UseLayoutRounding="True"
         ThemeMode="None" Title="Oberton read aloud" FontFamily="Segoe UI Variable Text, Segoe UI">
-    <!-- Same look as the dictation overlay: always dark, never takes focus from the app being read. -->
+    <!-- Same look as the dictation overlay: an ink panel in both themes, never takes focus from the app being read.
+         The accent marks what is live: the word being read and the progress. -->
     <Window.Resources>
         <Style x:Key="RoundButton" TargetType="Button">
-            <Setter Property="Foreground" Value="White"/>
-            <Setter Property="Background" Value="#1AFFFFFF"/>
+            <Setter Property="Foreground" Value="#E8E7E3"/>
+            <Setter Property="Background" Value="#1AE8E7E3"/>
             <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="Width" Value="36"/>
             <Setter Property="Height" Value="36"/>
@@ -39,14 +40,15 @@
         <Style x:Key="PlayButton" TargetType="Button" BasedOn="{StaticResource RoundButton}">
             <Setter Property="Width" Value="44"/>
             <Setter Property="Height" Value="44"/>
-            <Setter Property="Background" Value="White"/>
-            <Setter Property="Foreground" Value="#161618"/>
+            <Setter Property="Background" Value="#E8E7E3"/>
+            <Setter Property="Foreground" Value="#0D0D0C"/>
         </Style>
         <Style x:Key="PillButton" TargetType="Button" BasedOn="{StaticResource RoundButton}">
             <Setter Property="Width" Value="Auto"/>
             <Setter Property="Height" Value="34"/>
             <Setter Property="Padding" Value="16,0"/>
-            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontFamily" Value="Cascadia Mono, Consolas"/>
+            <Setter Property="FontSize" Value="11.5"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
@@ -69,8 +71,8 @@
         </Style>
     </Window.Resources>
 
-    <Border x:Name="Card" Margin="16" CornerRadius="20" Padding="16,12,12,14" Background="#F0161618"
-            BorderBrush="#1FFFFFFF" BorderThickness="1">
+    <Border x:Name="Card" Margin="16" CornerRadius="16" Padding="16,12,12,14" Background="#F00D0D0C"
+            BorderBrush="#24E8E7E3" BorderThickness="1">
         <Border.Effect>
             <DropShadowEffect BlurRadius="24" ShadowDepth="4" Opacity="0.35"/>
         </Border.Effect>
@@ -121,7 +123,7 @@
                                 ToolTip="Choose a speed" AutomationProperties.Name="Choose a speed">
                             <Button.Template>
                                 <ControlTemplate TargetType="Button">
-                                    <Border x:Name="Bd" Background="Transparent" CornerRadius="15">
+                                    <Border x:Name="Bd" Background="Transparent" CornerRadius="15" BorderThickness="1" BorderBrush="#38E8E7E3">
                                         <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Border>
                                     <ControlTemplate.Triggers>
@@ -131,13 +133,13 @@
                                     </ControlTemplate.Triggers>
                                 </ControlTemplate>
                             </Button.Template>
-                            <TextBlock x:Name="SpeedText" Text="1.0×" Foreground="White" FontFamily="Cascadia Mono, Consolas" FontSize="13"/>
+                            <TextBlock x:Name="SpeedText" Text="1.0×" Foreground="#E8E7E3" FontFamily="Cascadia Mono, Consolas" FontSize="12.5"/>
                         </Button>
                         <Popup x:Name="SpeedMenu" PlacementTarget="{Binding ElementName=SpeedButton}" Placement="Top" VerticalOffset="-6"
                                StaysOpen="False" AllowsTransparency="True" PopupAnimation="Fade">
-                            <Border Background="#F2202024" BorderBrush="#33FFFFFF" BorderThickness="1" CornerRadius="12" Padding="8">
+                            <Border Background="#F20D0D0C" BorderBrush="#38E8E7E3" BorderThickness="1" CornerRadius="10" Padding="8">
                                 <StackPanel>
-                                    <TextBlock Text="Speed" Foreground="#99FFFFFF" FontSize="11" Margin="4,0,0,6"/>
+                                    <TextBlock Text="SPEED" Foreground="#99E8E7E3" FontFamily="Cascadia Mono, Consolas" FontSize="10.5" Margin="4,0,0,6"/>
                                     <UniformGrid x:Name="SpeedChoices" Columns="4"/>
                                 </StackPanel>
                             </Border>
@@ -149,9 +151,9 @@
                     </StackPanel>
 
                     <StackPanel Grid.Column="2" VerticalAlignment="Center" Margin="0,0,12,0">
-                        <TextBlock x:Name="RemainingText" Foreground="White" FontFamily="Cascadia Mono, Consolas" FontSize="15"
+                        <TextBlock x:Name="RemainingText" Foreground="#E8E7E3" FontFamily="Cascadia Mono, Consolas" FontSize="15"
                                    HorizontalAlignment="Right" ToolTip="Estimated time left"/>
-                        <TextBlock x:Name="StatusText" Foreground="#99FFFFFF" FontSize="11" HorizontalAlignment="Right"/>
+                        <TextBlock x:Name="StatusText" Foreground="#99E8E7E3" FontFamily="Cascadia Mono, Consolas" FontSize="10" HorizontalAlignment="Right"/>
                     </StackPanel>
 
                     <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Top">
@@ -161,26 +163,39 @@
                         </Button>
                         <Button Style="{StaticResource RoundButton}" Width="30" Height="30"
                                 Click="Close_Click" ToolTip="Stop" AutomationProperties.Name="Stop reading">
-                            <Path Data="M 1,1 L 9,9 M 9,1 L 1,9" Stroke="White" StrokeThickness="1.5"
+                            <Path Data="M 1,1 L 9,9 M 9,1 L 1,9" Stroke="#E8E7E3" StrokeThickness="1.4"
                                   StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
                         </Button>
                     </StackPanel>
                 </Grid>
 
-                <!-- Progress through the whole text -->
-                <Grid Height="3" Margin="2,12,2,10">
-                    <Border Background="#26FFFFFF" CornerRadius="1.5"/>
-                    <Border x:Name="ProgressFill" Background="#E5533A" CornerRadius="1.5" HorizontalAlignment="Left" Width="0"/>
+                <!-- Progress through the whole text: a ruler, filled in the accent as it reads -->
+                <Grid Height="6" Margin="2,12,2,10">
+                    <Rectangle Height="6" VerticalAlignment="Bottom">
+                        <Rectangle.Fill>
+                            <DrawingBrush TileMode="Tile" Viewport="0,0,8,6" ViewportUnits="Absolute" Stretch="None">
+                                <DrawingBrush.Drawing>
+                                    <GeometryDrawing Brush="#40E8E7E3">
+                                        <GeometryDrawing.Geometry>
+                                            <RectangleGeometry Rect="0,0,1,6"/>
+                                        </GeometryDrawing.Geometry>
+                                    </GeometryDrawing>
+                                </DrawingBrush.Drawing>
+                            </DrawingBrush>
+                        </Rectangle.Fill>
+                    </Rectangle>
+                    <Border Height="1" VerticalAlignment="Bottom" Background="#40E8E7E3"/>
+                    <Border x:Name="ProgressFill" Height="2" VerticalAlignment="Bottom" Background="#E8E7E3" HorizontalAlignment="Left" Width="0"/>
                 </Grid>
 
                 <!-- The sentence being read, highlighted as it goes; at most two lines -->
-                <TextBlock x:Name="Lines" Foreground="#73FFFFFF" FontSize="16" LineHeight="24" TextWrapping="Wrap"
+                <TextBlock x:Name="Lines" Foreground="#73E8E7E3" FontSize="16" LineHeight="24" TextWrapping="Wrap"
                            TextTrimming="CharacterEllipsis" MaxHeight="48" Margin="2,0,2,0"/>
 
                 <!-- Expanded: the whole text, read so far in white, the current word accented; scrolls along -->
                 <ScrollViewer x:Name="FullScroll" Visibility="Collapsed" MaxHeight="380" Focusable="False"
                               VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="2,0,0,0">
-                    <TextBlock x:Name="FullText" Foreground="#73FFFFFF" FontSize="15" LineHeight="23" TextWrapping="Wrap" Cursor="Hand"
+                    <TextBlock x:Name="FullText" Foreground="#73E8E7E3" FontSize="15" LineHeight="23" TextWrapping="Wrap" Cursor="Hand"
                                MouseLeftButtonUp="FullText_MouseLeftButtonUp" ToolTip="Click a word to read from there"
                                Margin="0,0,12,4"/>
                 </ScrollViewer>
@@ -191,22 +206,22 @@
                 <DockPanel>
                     <Button DockPanel.Dock="Right" Style="{StaticResource RoundButton}" Width="30" Height="30" VerticalAlignment="Top"
                             Click="Close_Click" ToolTip="Close" AutomationProperties.Name="Close">
-                        <Path Data="M 1,1 L 9,9 M 9,1 L 1,9" Stroke="White" StrokeThickness="1.5"
+                        <Path Data="M 1,1 L 9,9 M 9,1 L 1,9" Stroke="#E8E7E3" StrokeThickness="1.4"
                               StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
                     </Button>
-                    <TextBlock x:Name="QuestionTitle" Foreground="White" FontSize="15" FontWeight="SemiBold" TextWrapping="Wrap"
+                    <TextBlock x:Name="QuestionTitle" Foreground="#E8E7E3" FontSize="15" FontWeight="SemiBold" TextWrapping="Wrap"
                                VerticalAlignment="Center" Margin="2,0,12,0"/>
                 </DockPanel>
-                <TextBlock x:Name="QuestionBody" Foreground="#B3FFFFFF" FontSize="13.5" LineHeight="20" TextWrapping="Wrap"
+                <TextBlock x:Name="QuestionBody" Foreground="#B3E8E7E3" FontSize="13.5" LineHeight="20" TextWrapping="Wrap"
                            Margin="2,8,12,0" MaxHeight="80" TextTrimming="CharacterEllipsis"/>
                 <Grid x:Name="DownloadProgress" Height="4" Margin="2,12,12,0" Visibility="Collapsed">
-                    <Border Background="#26FFFFFF" CornerRadius="2"/>
-                    <Border x:Name="DownloadFill" Background="White" CornerRadius="2" HorizontalAlignment="Left" Width="0"/>
+                    <Border Background="#26E8E7E3"/>
+                    <Border x:Name="DownloadFill" Background="#E8E7E3" HorizontalAlignment="Left" Width="0"/>
                 </Grid>
                 <StackPanel x:Name="QuestionButtons" Orientation="Horizontal" Margin="0,14,0,0">
-                    <Button x:Name="PrimaryButton" Style="{StaticResource PillButton}" Background="#E5533A" FontWeight="SemiBold"
+                    <Button x:Name="PrimaryButton" Style="{StaticResource PillButton}" Background="#E8E7E3" Foreground="#0D0D0C" FontWeight="SemiBold"
                             Click="Primary_Click"/>
-                    <Button Style="{StaticResource PillButton}" Margin="8,0,0,0" Content="Cancel" Click="Close_Click"/>
+                    <Button Style="{StaticResource PillButton}" Margin="8,0,0,0" Content="CANCEL" Click="Close_Click"/>
                 </StackPanel>
             </StackPanel>
         </Grid>

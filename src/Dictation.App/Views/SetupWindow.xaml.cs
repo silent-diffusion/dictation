@@ -34,7 +34,7 @@ public partial class SetupWindow : Window
         PlanText.Text = $"About {RuntimeInstaller.EstimatedDownloadGb(gpu):0.#} GB in total, saved to {AppPaths.Root}." +
                         (gpu ? "" : " On the CPU, expect roughly 5–10 seconds of processing after each dictation.");
         if (File.Exists(AppPaths.PythonExe) || File.Exists(AppPaths.OllamaExe))
-            StartButton.Content = "Continue setup";
+            StartButton.Content = "CONTINUE SETUP";
     }
 
     async void Start_Click(object sender, RoutedEventArgs e)
@@ -43,7 +43,7 @@ public partial class SetupWindow : Window
         _running = true;
         _cts = new CancellationTokenSource();
         StartButton.IsEnabled = false;
-        CancelButton.Content = "Cancel";
+        CancelButton.Content = "CANCEL";
         ErrorText.Visibility = Visibility.Collapsed;
         ProgressPanel.Visibility = Visibility.Visible;
 
@@ -63,7 +63,7 @@ public partial class SetupWindow : Window
             DetailText.Text = $"Press {App.Services.Settings.Current.Hotkey} in any app to start dictating, and press it again to stop.";
             Bar.IsIndeterminate = false;
             Bar.Value = 1;
-            StartButton.Content = "Start using Oberton";
+            StartButton.Content = "START USING OBERTON";
             StartButton.IsEnabled = true;
             CancelButton.Visibility = Visibility.Collapsed;
         }
@@ -85,9 +85,9 @@ public partial class SetupWindow : Window
         ErrorText.Text = message;
         ErrorText.Visibility = Visibility.Visible;
         Bar.IsIndeterminate = false;
-        StartButton.Content = "Continue setup";
+        StartButton.Content = "CONTINUE SETUP";
         StartButton.IsEnabled = true;
-        CancelButton.Content = "Quit";
+        CancelButton.Content = "QUIT";
     }
 
     void Cancel_Click(object sender, RoutedEventArgs e)

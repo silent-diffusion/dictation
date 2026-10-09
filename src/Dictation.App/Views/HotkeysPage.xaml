@@ -1,31 +1,32 @@
 <UserControl x:Class="Dictation.App.Views.HotkeysPage"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:Dictation.App.Views">
     <ScrollViewer VerticalScrollBarVisibility="Auto">
         <StackPanel Margin="40,32,40,40" MaxWidth="760" HorizontalAlignment="Left">
-            <TextBlock Text="Hotkeys" Style="{StaticResource SectionTitle}"/>
+            <local:PageHeader Title="Hotkeys" Decor="設定" Readout="SECTION A.2"/>
             <TextBlock Style="{StaticResource Caption}"
                        Text="Click a box and press the shortcut you want. Shortcuts work in every application. Use at least one of Ctrl, Alt, Shift or Win (or an F-key)."/>
 
-            <TextBlock Text="Start / stop dictation" Style="{StaticResource FieldLabel}"/>
+            <TextBlock Text="START / STOP DICTATION" Style="{StaticResource FieldLabel}"/>
             <StackPanel Orientation="Horizontal">
                 <TextBox x:Name="ToggleBox" IsReadOnly="True" Width="240" Padding="8,6" IsReadOnlyCaretVisible="False"
                          PreviewKeyDown="Toggle_KeyDown" GotKeyboardFocus="Box_Focus"/>
-                <Button Content="Reset" Margin="8,0,0,0" Padding="12,6" Click="ResetToggle_Click"/>
+                <Button Style="{StaticResource QuietButton}" Content="RESET" Margin="8,0,0,0" Padding="12,6" Click="ResetToggle_Click"/>
             </StackPanel>
 
-            <TextBlock Text="Switch to next profile" Style="{StaticResource FieldLabel}"/>
+            <TextBlock Text="SWITCH TO NEXT PROFILE" Style="{StaticResource FieldLabel}"/>
             <StackPanel Orientation="Horizontal">
                 <TextBox x:Name="CycleBox" IsReadOnly="True" Width="240" Padding="8,6" IsReadOnlyCaretVisible="False"
                          PreviewKeyDown="Cycle_KeyDown" GotKeyboardFocus="Box_Focus"/>
-                <Button Content="Clear" Margin="8,0,0,0" Padding="12,6" Click="ClearCycle_Click"/>
+                <Button Style="{StaticResource QuietButton}" Content="CLEAR" Margin="8,0,0,0" Padding="12,6" Click="ClearCycle_Click"/>
             </StackPanel>
 
-            <TextBlock Text="Read selected text aloud" Style="{StaticResource FieldLabel}"/>
+            <TextBlock Text="READ SELECTED TEXT ALOUD" Style="{StaticResource FieldLabel}"/>
             <StackPanel Orientation="Horizontal">
                 <TextBox x:Name="SpeakBox" IsReadOnly="True" Width="240" Padding="8,6" IsReadOnlyCaretVisible="False"
                          PreviewKeyDown="Speak_KeyDown" GotKeyboardFocus="Box_Focus"/>
-                <Button Content="Reset" Margin="8,0,0,0" Padding="12,6" Click="ResetSpeak_Click"/>
+                <Button Style="{StaticResource QuietButton}" Content="RESET" Margin="8,0,0,0" Padding="12,6" Click="ResetSpeak_Click"/>
             </StackPanel>
 
             <TextBlock x:Name="StatusText" Margin="0,16,0,0" TextWrapping="Wrap"/>
