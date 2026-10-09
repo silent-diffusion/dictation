@@ -92,18 +92,81 @@ public sealed record InsertionContext(string Before, string After)
         {
             var focused = AutomationElement.FocusedElement;
             if (focused == null || !focused.TryGetCurrentPattern(TextPattern.Pattern, out var p)) return false;
-            var selection = ((TextPattern)p).GetSelection();
+            var pattern = (TextPattern)p;
+            var selection = pattern.GetSelection();
             if (selection.Length == 0) return false;
             var range = selection[0].Clone();
             range.MoveEndpointByRange(TextPatternRangeEndpoint.Start, range, TextPatternRangeEndpoint.End); // collapse to the caret
             range.MoveEndpointByUnit(TextPatternRangeEndpoint.Start, TextUnit.Character, -expected.Length);
             if (!SameText(range.GetText(expected.Length + 16), expected)) return false;
             range.Select();
-            return true;
+            // Some apps accept the call without moving their selection; pasting then would add the text a second time.
+            if (IsSelected(pattern, expected)) return true;
+            Log.Info("The app didn't take the live text's selection");
+            CollapseToEnd(range);
+            return false;
         }
         catch (Exception e)
         {
             Log.Info("Could not select the live text: " + e.GetType().Name);
+            return false;
+        }
+    }
+
+    static bool IsSelected(TextPattern pattern, string expected)
+    {
+        var now = pattern.GetSelection();
+        return now.Length > 0 && SameText(now[0].GetText(expected.Length + 16), expected);
+    }
+
+    /// <summary>Put the caret back at the end of <paramref name="range"/>, with nothing selected.</summary>
+    static void CollapseToEnd(TextPatternRange range)
+    {
+        try
+        {
+            var end = range.Clone();
+            end.MoveEndpointByRange(TextPatternRangeEndpoint.Start, range, TextPatternRangeEndpoint.End);
+            end.Select();
+        }
+        catch (Exception e) { Log.Info("Could not clear the selection: " + e.GetType().Name); }
+    }
+
+    /// <summary>
+    /// After live dictation's final pass: if the text before the caret reads <paramref name="first"/> immediately
+    /// followed by <paramref name="second"/> (the replacement went in without replacing), select
+    /// <paramref name="first"/> so it can be removed. False, and nothing selected, otherwise.
+    /// </summary>
+    public static async Task<bool> SelectDoubledAsync(string first, string second, TimeSpan timeout)
+    {
+        var select = Task.Run(() => SelectDoubled(first, second));
+        return await Task.WhenAny(select, Task.Delay(timeout)) == select && select.Result;
+    }
+
+    static bool SelectDoubled(string first, string second)
+    {
+        if (first.Trim().Length == 0 || second.Trim().Length == 0) return false;
+        try
+        {
+            var focused = AutomationElement.FocusedElement;
+            if (focused == null || !focused.TryGetCurrentPattern(TextPattern.Pattern, out var p)) return false;
+            var pattern = (TextPattern)p;
+            var selection = pattern.GetSelection();
+            if (selection.Length == 0) return false;
+            var both = first + second;
+            var range = selection[0].Clone();
+            range.MoveEndpointByRange(TextPatternRangeEndpoint.Start, range, TextPatternRangeEndpoint.End); // collapse to the caret
+            range.MoveEndpointByUnit(TextPatternRangeEndpoint.Start, TextUnit.Character, -both.Length);
+            if (!SameText(range.GetText(both.Length + 16), both)) return false;
+            range.MoveEndpointByUnit(TextPatternRangeEndpoint.End, TextUnit.Character, -second.Length);
+            if (!SameText(range.GetText(first.Length + 16), first)) return false;
+            range.Select();
+            if (IsSelected(pattern, first)) return true;
+            CollapseToEnd(selection[0]);
+            return false;
+        }
+        catch (Exception e)
+        {
+            Log.Info("Could not check for doubled live text: " + e.GetType().Name);
             return false;
         }
     }
