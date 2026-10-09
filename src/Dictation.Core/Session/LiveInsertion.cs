@@ -138,10 +138,15 @@ public sealed class LiveInsertion
         {
             await _inserter.EraseAsync(_partialTyped[keep..], _target, ct);
             _partialTyped = _partialTyped[..keep];
+            _lastInsert = DateTime.Now;
         }
         if (keep < want.Length)
         {
-            if (_profile.LiveTyping) await _inserter.TypeAsync(want[keep..], _target, ct);
+            if (_profile.LiveTyping)
+            {
+                await _inserter.TypeAsync(want[keep..], _target, ct);
+                _lastInsert = DateTime.Now;
+            }
             else
             {
                 await BeforeInsertAsync(ct);
@@ -230,11 +235,13 @@ public sealed class LiveInsertion
             throw new UserFacingException("Couldn't switch back to the app you were typing in. Click into it and try again.");
 
         var rewrite = _profile.RewriteWhole && _profile.AutoProcess;
-        if (IsPlausibleReplacement(finalText, Typed, rewrite) && await InsertionContext.SelectBeforeCaretAsync(Typed, UiaTimeout))
+        if (IsPlausibleReplacement(finalText, Typed, rewrite) && await SelectTypedAsync(ct))
         {
             var replacement = ContextFit.Fit(finalText, await _context, spacingOnly: rewrite);
+            var typed = Typed;
             await InsertLiveAsync(replacement, ct); // replaces the selection
-            Log.Info($"Live dictation: final pass replaced {Typed.Length} typed chars with {replacement.Length}");
+            Log.Info($"Live dictation: final pass replaced {typed.Length} typed chars with {replacement.Length}");
+            await RemoveDoubleAsync(typed, replacement, ct);
             return (replacement, null);
         }
 
@@ -263,6 +270,39 @@ public sealed class LiveInsertion
             "and only the rest was added.");
     }
 
+    /// <summary>Settle time after the last live paste, Backspace or keystroke: the app handles them a moment after
+    /// they are sent, and reading the document before then finds it out of date.</summary>
+    static readonly TimeSpan Settle = TimeSpan.FromMilliseconds(450);
+
+    /// <summary>Select the text typed live, once the app has caught up with the last edit; tried a few times, since a
+    /// busy app can take a while to show its last paste.</summary>
+    async Task<bool> SelectTypedAsync(CancellationToken ct)
+    {
+        for (var attempt = 0; attempt < 4; attempt++)
+        {
+            var wait = Settle - (DateTime.Now - _lastInsert);
+            if (wait > TimeSpan.Zero) await Task.Delay(wait, ct);
+            if (await InsertionContext.SelectBeforeCaretAsync(Typed, UiaTimeout)) return true;
+            _lastInsert = DateTime.Now; // wait a full settle before the next try
+        }
+        return false;
+    }
+
+    /// <summary>A last check that the final pass replaced the live text instead of landing after it: if the document
+    /// reads the live text and then the replacement, take the live text out.</summary>
+    async Task RemoveDoubleAsync(string typed, string replacement, CancellationToken ct)
+    {
+        try
+        {
+            await Task.Delay(Settle, ct);
+            if (!await InsertionContext.SelectDoubledAsync(typed, replacement, UiaTimeout)) return;
+            await _inserter.DeleteSelectionAsync(ct);
+            Log.Info("Live dictation: the final pass landed after the live text instead of replacing it; removed the live text");
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception e) { Log.Warn("Couldn't check for doubled live text: " + e.Message); }
+    }
+
     /// <summary>The final pass must cover at least most of what was already typed: an empty or much shorter result
     /// (a failed final decode, a model that summarized) would delete the user's words. A rewrite (see
     /// <see cref="Profile.RewriteWhole"/>) may legitimately be much shorter; the AI step already checked it.</summary>
@@ -278,7 +318,7 @@ public sealed class LiveInsertion
         Stop();
         await DrainAsync();
         if (!HasTyped || !await _inserter.FocusAsync(_target)) return;
-        if (await InsertionContext.SelectBeforeCaretAsync(Typed, UiaTimeout)) await _inserter.DeleteSelectionAsync();
+        if (await SelectTypedAsync(CancellationToken.None)) await _inserter.DeleteSelectionAsync();
         else Log.Info("Live dictation cancelled; the typed text couldn't be confirmed, so it was left in place");
     }
 }
