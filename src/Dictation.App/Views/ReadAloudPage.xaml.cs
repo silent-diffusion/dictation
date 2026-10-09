@@ -122,7 +122,7 @@ public partial class ReadAloudPage : UserControl
             : piper != null ? $"A one-time download of about {piper.Mb} MB, also offered the first time you use it."
             : VoiceCatalog.IsWindowsVoice(voice) ? "That Windows voice isn't on this PC any more. Pick another one."
             : $"A one-time download of about {RuntimeInstaller.ReadAloudDownloadMb} MB, also offered the first time you use Read aloud.";
-        InstallButton.Content = "Download voice";
+        InstallButton.Content = "DOWNLOAD VOICE";
         InstallButton.Visibility = installed || VoiceCatalog.IsWindowsVoice(voice) ? Visibility.Collapsed : Visibility.Visible;
         TryButton.IsEnabled = true;
     }

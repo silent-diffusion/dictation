@@ -7,8 +7,8 @@ public enum InsertionMode { Auto, Typing, Clipboard }
 /// <summary>System follows the Windows app theme; Light and Dark override it.</summary>
 public enum AppTheme { System, Light, Dark }
 
-/// <summary>The color scheme laid over Light or Dark: tinted backgrounds and outlines and an accent color, each with a
-/// light and a dark version. Ember is the original look.</summary>
+/// <summary>The accent color laid over Light or Dark (named for the color schemes it replaced in 4.0, so saved settings
+/// still load): Ember = Cobalt (the default), Ocean = Teal, Forest = Signal green, Violet = Violet, Rose = Amber.</summary>
 public enum ColorScheme { Ember, Ocean, Forest, Violet, Rose }
 
 /// <summary>Where the overlay sits on the screen. Declared row by row (top, middle, bottom), left to right.</summary>

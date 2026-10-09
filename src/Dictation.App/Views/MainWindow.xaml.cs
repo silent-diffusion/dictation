@@ -21,6 +21,9 @@ public partial class MainWindow : Window
         UpdateDots();
         s.Settings.Changed += UpdatePrivacy;
         UpdatePrivacy();
+        // The logo's dot turns red while the microphone is open, as the overlay's does.
+        s.Controller.StateChanged += state => Dispatcher.BeginInvoke(() =>
+            MarkDot.SetResourceReference(Shape.FillProperty, state == Dictation.Core.Session.DictationState.Recording ? "Ob.Record" : "Ob.MarkDot"));
         Icon = System.Windows.Interop.Imaging.CreateBitmapSourceFromHIcon(
             Services.TrayIcon.CreateIcon().Handle, Int32Rect.Empty, System.Windows.Media.Imaging.BitmapSizeOptions.FromEmptyOptions());
         NavList.SelectedItem = DashboardItem;
@@ -44,7 +47,7 @@ public partial class MainWindow : Window
 
     // ===== sidebar: slides away to the left; the menu button morphs ☰ ⇄ ✕ =====
 
-    const double SidebarWidth = 268;
+    const double SidebarWidth = 216;
     bool _open = true;
     double _shut; // 0 = sidebar fully shown, 1 = fully away
     EventHandler? _slide;
@@ -100,7 +103,7 @@ public partial class MainWindow : Window
         Sidebar.Visibility = shut >= 1 ? Visibility.Collapsed : Visibility.Visible; // off screen: out of the tab order too
     }
 
-    const double TopBarHeight = 64;
+    const double TopBarHeight = 56;
 
     /// <summary>Three bars ⇄ a cross: the top and bottom bars meet in the middle and turn ±45°, the middle one fades.</summary>
     void MorphMenuIcon(bool cross, bool animate)
@@ -166,8 +169,8 @@ public partial class MainWindow : Window
     }
 
     void UpdatePrivacy() => PrivacyText.Text = App.Services.Settings.Current.Cloud.KeepOffline
-        ? "Everything stays on this PC."
-        : "Cloud AI allowed: profiles with a cloud model send their text to it.";
+        ? "127.0.0.1 // OFFLINE\nEVERYTHING STAYS ON THIS PC"
+        : "CLOUD AI ALLOWED\nPROFILES WITH A CLOUD MODEL SEND THEIR TEXT TO IT";
 
     void NavList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {

@@ -5,7 +5,6 @@ using System.Windows.Documents;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
-using System.Windows.Media.Effects;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 using Dictation.Core.Insertion;
@@ -24,16 +23,19 @@ public partial class OverlayWindow : Window
     const double CompactWidth = 440, WideWidth = 470, NarrowWidth = 360, CompareWideWidth = 860;
     /// <summary>The "Inserted" receipt is dimmed so it doesn't compete with the text; hovering brings it back.</summary>
     const double ReceiptDim = 0.55;
-    const int WaveBars = 30;
+    /// <summary>Columns of the level meter (each a stack of <see cref="WaveDots"/> dots, lit from the bottom).</summary>
+    const int WaveBars = 22, WaveDots = 5;
 
-    static readonly Brush Muted = Freeze(new SolidColorBrush(Color.FromArgb(0xB3, 0xFF, 0xFF, 0xFF)));
-    static readonly Brush DiffRemoved = Freeze(new SolidColorBrush(Color.FromArgb(0x70, 0xFF, 0xFF, 0xFF)));
-    static readonly Brush DiffAdded = Freeze(new SolidColorBrush(Color.FromRgb(0xF4, 0xA6, 0x8C)));
-    static readonly Brush ErrorStroke = Freeze(new SolidColorBrush(Color.FromRgb(0xF9, 0x70, 0x66)));
-    static readonly Brush WarnStroke = Freeze(new SolidColorBrush(Color.FromRgb(0xF4, 0xA6, 0x8C)));
-    static readonly Brush RecordFill = Freeze(new SolidColorBrush(Color.FromRgb(0xE5, 0x53, 0x3A)));
-    static readonly FontFamily Mono = new("Cascadia Mono, Consolas");
-    static readonly FontFamily Ui = new("Segoe UI Variable Text, Segoe UI");
+    // Always dark: paper-colored text on an ink capsule. Red is only the recording dot.
+    static readonly Brush Paper = Freeze(new SolidColorBrush(Color.FromRgb(0xE8, 0xE7, 0xE3)));
+    static readonly Brush Muted = Freeze(new SolidColorBrush(Color.FromArgb(0xB3, 0xE8, 0xE7, 0xE3)));
+    static readonly Brush DiffRemoved = Freeze(new SolidColorBrush(Color.FromArgb(0x70, 0xE8, 0xE7, 0xE3)));
+    static readonly Brush WarnStroke = Paper;
+    static readonly Brush RecordFill = Freeze(new SolidColorBrush(Color.FromRgb(0xFF, 0x46, 0x36)));
+
+    /// <summary>The accent, in its dark-paper version (the overlay is dark in both themes): words the AI added, errors,
+    /// and the working spinner.</summary>
+    static Brush Accent => Application.Current.TryFindResource("Ob.AccentOnDark") as Brush ?? Paper;
 
     readonly DispatcherTimer _hideTimer = new();
     readonly DispatcherTimer _clockTimer = new() { Interval = TimeSpan.FromMilliseconds(200) };
@@ -60,11 +62,12 @@ public partial class OverlayWindow : Window
         _clockTimer.Tick += (_, _) => TitleText.Text = FormatClock(_recordClock.Elapsed);
         SizeChanged += (_, _) => Reposition();
         for (var i = 0; i < WaveBars; i++)
-            Wave.Children.Add(new Rectangle
-            {
-                Width = 3, Height = 4, RadiusX = 1.5, RadiusY = 1.5, Margin = new Thickness(0, 0, 3, 0),
-                Fill = Brushes.White, Opacity = 0.85, VerticalAlignment = VerticalAlignment.Center,
-            });
+        {
+            var column = new StackPanel { Margin = new Thickness(0, 0, 3, 0), VerticalAlignment = VerticalAlignment.Center };
+            for (var d = 0; d < WaveDots; d++)
+                column.Children.Add(new Ellipse { Width = 3, Height = 3, Margin = new Thickness(0, 1, 0, 1), Fill = Paper, Opacity = 0.2 });
+            Wave.Children.Add(column);
+        }
     }
 
     static Brush Freeze(Brush b) { b.Freeze(); return b; }
@@ -105,7 +108,7 @@ public partial class OverlayWindow : Window
         Body.Width = width;
         Card.CornerRadius = new CornerRadius(expanded ? 20 : 28);
         var opacity = Math.Clamp(App.Services.Settings.Current.OverlayOpacity, 0.3, 1.0);
-        Card.Background = new SolidColorBrush(Color.FromArgb((byte)Math.Round(opacity * 255), 0x16, 0x16, 0x18));
+        Card.Background = new SolidColorBrush(Color.FromArgb((byte)Math.Round(opacity * 255), 0x0D, 0x0D, 0x0C));
         Opacity = 1;
         _hideTimer.Stop();
         if (!IsVisible) Show();
@@ -148,15 +151,15 @@ public partial class OverlayWindow : Window
         BodyText.Visibility = Actions.Visibility = Compare.Visibility = LiveText.Visibility = Visibility.Collapsed;
         _receipt = null;
         _compareOpen = false;
+        StateDecor.Text = "";
         FocusInserted(false);
         Card.Cursor = null;
         CancelButton.ToolTip = "Cancel this dictation";
         CancelLabel.Visibility = Visibility.Visible;
         CancelButton.Padding = new Thickness(12, 0, 12, 0);
-        BodyText.Foreground = Brushes.White;
+        BodyText.Foreground = Paper;
         BodyText.Inlines.Clear();
         TitleText.Inlines.Clear();
-        TitleText.FontFamily = Ui;
         TitleText.FontWeight = FontWeights.SemiBold;
         SubtitleText.Text = "";
     }
@@ -164,6 +167,7 @@ public partial class OverlayWindow : Window
     void ShowSpinner()
     {
         Spinner.Visibility = Visibility.Visible;
+        SpinnerArc.Stroke = Accent;
         SpinnerRotation.BeginAnimation(RotateTransform.AngleProperty,
             new DoubleAnimation(0, 360, TimeSpan.FromSeconds(1)) { RepeatBehavior = RepeatBehavior.Forever });
     }
@@ -205,17 +209,18 @@ public partial class OverlayWindow : Window
         {
             case DictationState.Starting:
                 _liveText = ""; // a new dictation
+                StateDecor.Text = "処理中";
                 ShowSpinner();
-                TitleText.Text = "Starting";
+                TitleText.Text = "STARTING";
                 ShowChip(profileName);
                 CancelButton.Visibility = Visibility.Visible;
                 break;
 
             case DictationState.Recording:
+                StateDecor.Text = "録音";
                 RecDot.Visibility = Visibility.Visible;
                 RecDot.BeginAnimation(OpacityProperty, new DoubleAnimation(1, 0.35, TimeSpan.FromMilliseconds(700))
                     { AutoReverse = true, RepeatBehavior = RepeatBehavior.Forever });
-                TitleText.FontFamily = Mono;
                 TitleText.FontWeight = FontWeights.Normal;
                 _recordClock.Restart();
                 TitleText.Text = FormatClock(TimeSpan.Zero);
@@ -229,18 +234,20 @@ public partial class OverlayWindow : Window
                 break;
 
             case DictationState.Transcribing:
+                StateDecor.Text = "処理中";
                 _recordClock.Stop();
                 ShowSpinner();
-                TitleText.Text = _engineLoading ? "Loading the speech model" : "Transcribing";
-                SubtitleText.Text = $"{Math.Max(1, (int)Math.Round(_recordClock.Elapsed.TotalSeconds))} s of audio";
+                TitleText.Text = _engineLoading ? "LOADING SPEECH MODEL" : "TRANSCRIBING";
+                SubtitleText.Text = $"{Math.Max(1, (int)Math.Round(_recordClock.Elapsed.TotalSeconds))} S OF AUDIO";
                 ShowChip(profileName);
                 CancelButton.Visibility = Visibility.Visible;
                 ShowLiveText();
                 break;
 
             case DictationState.Processing:
+                StateDecor.Text = "処理中";
                 ShowSpinner();
-                TitleText.Text = (live ? "Final pass with " : "Tidying with ") + profileName;
+                TitleText.Text = (live ? "FINAL PASS // " : "TIDYING // ") + profileName.ToUpper();
                 ShowChip(model);
                 BodyText.Foreground = Muted;
                 ShowBody(raw);
@@ -251,18 +258,19 @@ public partial class OverlayWindow : Window
 
             case DictationState.Confirming:
                 CheckIcon.Visibility = Visibility.Visible;
-                TitleText.Text = "Ready to insert";
+                TitleText.Text = "READY TO INSERT";
                 ShowChip(profileName);
                 ShowPreviewBoxes(raw, preview, App.Services.Profiles.Active.AutoProcess);
-                InsertButton.Content = string.IsNullOrEmpty(_hotkey) ? "Insert" : $"Insert   {_hotkey}";
+                InsertButton.Content = string.IsNullOrEmpty(_hotkey) ? "INSERT" : $"INSERT   {_hotkey.ToUpper()}";
                 Actions.Visibility = Visibility.Visible;
                 width = CompareWideWidth;
                 expanded = true;
                 break;
 
             case DictationState.Inserting:
+                StateDecor.Text = "挿入";
                 ShowSpinner();
-                TitleText.Text = "Inserting";
+                TitleText.Text = "INSERTING";
                 break;
         }
         Display(width, expanded);
@@ -280,7 +288,7 @@ public partial class OverlayWindow : Window
     {
         _engineLoading = loading;
         if (_state is DictationState.Recording or DictationState.Transcribing) ShowLiveText();
-        if (!loading && _state == DictationState.Transcribing) TitleText.Text = "Transcribing";
+        if (!loading && _state == DictationState.Transcribing) TitleText.Text = "TRANSCRIBING";
     }
 
     void ShowLiveText()
@@ -288,7 +296,7 @@ public partial class OverlayWindow : Window
         LiveText.Inlines.Clear();
         if (_liveText.Length > 0)
         {
-            LiveText.Foreground = new SolidColorBrush(Color.FromArgb(0xD9, 0xFF, 0xFF, 0xFF));
+            LiveText.Foreground = new SolidColorBrush(Color.FromArgb(0xD9, 0xE8, 0xE7, 0xE3));
             LiveText.Text = Tail(_liveText, 180);
         }
         else if (_engineLoading)
@@ -310,7 +318,7 @@ public partial class OverlayWindow : Window
         {
             WarnIcon.Stroke = WarnStroke;
             WarnIcon.Visibility = Visibility.Visible;
-            TitleText.Text = !r.SafetyNet ? "Inserted" : r.Edited ? "Partly edited" : "Original words inserted";
+            TitleText.Text = !r.SafetyNet ? "INSERTED" : r.Edited ? "PARTLY EDITED" : "ORIGINAL WORDS INSERTED";
             ShowBody(r.Note ?? "The AI's edit changed too much (or came back empty), so your words went in unchanged. " +
                      "You can adjust the safety net on the profile's page.");
             Display(WideWidth, expanded: true);
@@ -319,8 +327,9 @@ public partial class OverlayWindow : Window
         }
 
         CheckIcon.Visibility = Visibility.Visible;
-        TitleText.Text = "Inserted";
-        SubtitleText.Text = $"{r.Words} {(r.Words == 1 ? "word" : "words")} · {r.Elapsed.TotalSeconds:0.0} s";
+        StateDecor.Text = "挿入";
+        TitleText.Text = "INSERTED";
+        SubtitleText.Text = $"{r.Words} {(r.Words == 1 ? "WORD" : "WORDS")} // {r.Elapsed.TotalSeconds:0.0} S";
         Display(NarrowWidth, expanded: false);
         Opacity = ReceiptDim;
         HideAfter(TimeSpan.FromSeconds(3));
@@ -354,8 +363,8 @@ public partial class OverlayWindow : Window
         var paragraph = new Paragraph { Margin = new Thickness(0), LineHeight = 21 };
         if (aiEdit != null)
         {
-            paragraph.Foreground = Brushes.White;
-            DiffText.Render(paragraph.Inlines, WordDiff.Compute(raw, aiEdit.Trim()), DiffRemoved, DiffAdded);
+            paragraph.Foreground = Paper;
+            DiffText.Render(paragraph.Inlines, WordDiff.Compute(raw, aiEdit.Trim()), DiffRemoved, Accent);
         }
         else
         {
@@ -363,7 +372,7 @@ public partial class OverlayWindow : Window
             paragraph.Inlines.Add(new Run(noEdit));
         }
         CompareEdited.Document = new FlowDocument(paragraph) { PagePadding = new Thickness(0) };
-        foreach (var b in new[] { "Raw", "Edit", "Inserted" }) SetCopyLabel(b, "Copy");
+        foreach (var b in new[] { "Raw", "Edit", "Inserted" }) SetCopyLabel(b, "COPY");
         Compare.Visibility = Visibility.Visible;
     }
 
@@ -380,9 +389,9 @@ public partial class OverlayWindow : Window
         };
         if (string.IsNullOrWhiteSpace(text)) return;
         try { Clipboard.SetText(text.Trim()); } catch { return; }
-        SetCopyLabel(box, "Copied ✓");
+        SetCopyLabel(box, "COPIED ✓");
         var reset = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.4) };
-        reset.Tick += (_, _) => { reset.Stop(); SetCopyLabel(box, "Copy"); };
+        reset.Tick += (_, _) => { reset.Stop(); SetCopyLabel(box, "COPY"); };
         reset.Start();
         e.Handled = true;
     }
@@ -419,11 +428,10 @@ public partial class OverlayWindow : Window
         RawPanel.Opacity = EditPanel.Opacity = on ? 0.45 : 1;
         InsertColumn.Width = new GridLength(on ? 1.4 : 1, GridUnitType.Star);
         InsertDivider.Visibility = on ? Visibility.Hidden : Visibility.Visible;
-        InsertFrame.Background = on ? new SolidColorBrush(Color.FromArgb(0x24, 0xFF, 0xFF, 0xFF)) : Brushes.Transparent;
-        InsertFrame.BorderBrush = on ? new SolidColorBrush(Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF)) : Brushes.Transparent;
+        InsertFrame.Background = on ? new SolidColorBrush(Color.FromArgb(0x1F, 0xE8, 0xE7, 0xE3)) : Brushes.Transparent;
+        InsertFrame.BorderBrush = on ? new SolidColorBrush(Color.FromArgb(0x66, 0xE8, 0xE7, 0xE3)) : Brushes.Transparent;
         InsertFrame.Padding = on ? new Thickness(14, 10, 14, 12) : new Thickness(0);
-        InsertFrame.Effect = on ? new DropShadowEffect { BlurRadius = 18, ShadowDepth = 2, Opacity = 0.45 } : null;
-        InsertLabel.Foreground = on ? Brushes.White : new SolidColorBrush(Color.FromArgb(0x99, 0xFF, 0xFF, 0xFF));
+        InsertLabel.Foreground = on ? Paper : new SolidColorBrush(Color.FromArgb(0x99, 0xE8, 0xE7, 0xE3));
         CompareInserted.FontSize = on ? 15.5 : 14;
         if (on)
         {
@@ -465,7 +473,7 @@ public partial class OverlayWindow : Window
         if (_pinnedByState) return;
         ResetView();
         RecDot.Visibility = Visibility.Visible;
-        TitleText.Text = "Dictation appears here";
+        TitleText.Text = "DICTATION APPEARS HERE";
         Display(NarrowWidth, expanded: false);
         HideAfter(TimeSpan.FromSeconds(1.5));
     }
@@ -478,7 +486,7 @@ public partial class OverlayWindow : Window
             if (_pinnedByState) return; // mid-dictation: the chip already shows the profile
             ResetView();
             Indicator.Visibility = Visibility.Collapsed;
-            TitleText.Inlines.Add(new Run("Profile   ") { Foreground = Muted, FontWeight = FontWeights.Normal });
+            TitleText.Inlines.Add(new Run("PROFILE   ") { Foreground = Muted, FontWeight = FontWeights.Normal });
             TitleText.Inlines.Add(new Run(name));
             Dots.Children.Clear();
             for (var i = 0; i < count; i++)
@@ -486,7 +494,7 @@ public partial class OverlayWindow : Window
                 {
                     Width = i == index ? 16 : 6, Height = 6, CornerRadius = new CornerRadius(3),
                     Margin = new Thickness(5, 0, 0, 0),
-                    Background = i == index ? Brushes.White : new SolidColorBrush(Color.FromArgb(0x4D, 0xFF, 0xFF, 0xFF)),
+                    Background = i == index ? Paper : new SolidColorBrush(Color.FromArgb(0x4D, 0xE8, 0xE7, 0xE3)),
                 });
             Dots.Visibility = count > 1 ? Visibility.Visible : Visibility.Collapsed;
             Display(NarrowWidth, expanded: false);
@@ -502,10 +510,17 @@ public partial class OverlayWindow : Window
         DrawWave();
     });
 
+    /// <summary>Each column lights as many dots, from the bottom, as its level reaches (at least one, so the meter
+    /// reads as a row of dots in silence).</summary>
     void DrawWave()
     {
         for (var i = 0; i < WaveBars; i++)
-            ((Rectangle)Wave.Children[i]).Height = 4 + 24 * _levels[i];
+        {
+            var lit = Math.Max(1, (int)Math.Round(_levels[i] * WaveDots));
+            var dots = ((StackPanel)Wave.Children[i]).Children;
+            for (var d = 0; d < WaveDots; d++)
+                dots[d].Opacity = WaveDots - d <= lit ? 0.95 : 0.2;
+        }
     }
 
     public void ShowMessage(string text, NoticeLevel level)
@@ -521,14 +536,14 @@ public partial class OverlayWindow : Window
             }
             else
             {
-                WarnIcon.Stroke = level == NoticeLevel.Error ? ErrorStroke : WarnStroke;
+                WarnIcon.Stroke = level == NoticeLevel.Error ? Accent : WarnStroke;
                 WarnIcon.Visibility = Visibility.Visible;
             }
             TitleText.Text = level switch
             {
-                NoticeLevel.Error => "Something went wrong",
-                NoticeLevel.Warning => "Heads up",
-                _ => "Oberton",
+                NoticeLevel.Error => "SOMETHING WENT WRONG",
+                NoticeLevel.Warning => "HEADS UP",
+                _ => "OBERTON",
             };
             ShowBody(text);
             Display(WideWidth, expanded: true);
@@ -583,10 +598,10 @@ public partial class OverlayWindow : Window
         _trialRaw = raw;
         _trialEdited = edited;
         CheckIcon.Visibility = Visibility.Visible;
-        TitleText.Text = "Ready to insert";
+        TitleText.Text = "READY TO INSERT";
         ShowChip("Try it · " + profileName);
         ShowPreviewBoxes(raw, edited, usesAi);
-        InsertButton.Content = "Insert";
+        InsertButton.Content = "INSERT";
         Actions.Visibility = Visibility.Visible;
         Display(CompareWideWidth, expanded: true);
         return tcs.Task;

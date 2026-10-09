@@ -1,66 +1,70 @@
 <UserControl x:Class="Dictation.App.Views.SettingsPage"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:Dictation.App.Views">
     <UserControl.Resources>
-        <!-- Settings entries: a step larger than before, easy to read and hit -->
+        <!-- Settings entries: capsules in the mono face, like the main menu -->
         <Style x:Key="SettingsNavItem" TargetType="ListBoxItem" BasedOn="{StaticResource NavItem}">
-            <Setter Property="Padding" Value="12,9"/>
+            <Setter Property="Padding" Value="12,6"/>
             <Setter Property="Margin" Value="0,1"/>
-            <Setter Property="FontSize" Value="14.5"/>
+            <Setter Property="FontSize" Value="11.5"/>
         </Style>
     </UserControl.Resources>
     <Grid>
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="260"/>
+            <ColumnDefinition Width="220"/>
             <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
 
         <!-- Settings sections, in collapsible groups -->
-        <Border BorderBrush="{DynamicResource Ob.Divider}" BorderThickness="0,0,1,0">
+        <Border BorderBrush="{DynamicResource Ob.Border}" BorderThickness="0,0,1,0">
             <ScrollViewer VerticalScrollBarVisibility="Auto">
-                <StackPanel x:Name="Groups" Margin="14,30,14,16">
-                    <TextBlock Text="Settings" FontSize="22" FontWeight="SemiBold" Margin="10,0,0,16"/>
-                    <Expander x:Name="DictationGroup" IsExpanded="True" Margin="0,0,0,10" Expanded="Group_Toggled" Collapsed="Group_Toggled">
+                <StackPanel x:Name="Groups" Margin="12,26,12,16">
+                    <DockPanel Margin="12,0,12,18">
+                        <local:DecorText DockPanel.Dock="Right" Text="設定" VerticalAlignment="Bottom" Margin="0,0,0,3"/>
+                        <TextBlock Text="SETTINGS" FontFamily="{StaticResource Ob.Mono}" FontSize="18" FontWeight="Bold"/>
+                    </DockPanel>
+                    <Expander x:Name="DictationGroup" Style="{StaticResource NavGroup}" IsExpanded="True" Margin="0,0,0,8" Expanded="Group_Toggled" Collapsed="Group_Toggled">
                         <Expander.Header>
-                            <TextBlock Text="Dictation" FontSize="15.5" FontWeight="SemiBold" Margin="2,2,0,2"/>
+                            <TextBlock Text="A // DICTATION"/>
                         </Expander.Header>
                         <ListBox Style="{StaticResource NavList}" ItemContainerStyle="{StaticResource SettingsNavItem}" Margin="0,4,0,0"
                                  SelectionChanged="Nav_SelectionChanged" AutomationProperties.Name="Dictation settings">
-                            <ListBoxItem Content="General" Tag="General"/>
-                            <ListBoxItem Content="Hotkeys" Tag="Hotkeys"/>
-                            <ListBoxItem Content="Microphone" Tag="Audio"/>
-                            <ListBoxItem Content="History" Tag="HistorySettings"/>
+                            <ListBoxItem Content="GENERAL" Tag="General" AutomationProperties.Name="General"/>
+                            <ListBoxItem Content="HOTKEYS" Tag="Hotkeys" AutomationProperties.Name="Hotkeys"/>
+                            <ListBoxItem Content="MICROPHONE" Tag="Audio" AutomationProperties.Name="Microphone"/>
+                            <ListBoxItem Content="HISTORY" Tag="HistorySettings" AutomationProperties.Name="History"/>
                         </ListBox>
                     </Expander>
-                    <Expander x:Name="ModelsGroup" IsExpanded="True" Margin="0,0,0,10" Expanded="Group_Toggled" Collapsed="Group_Toggled">
+                    <Expander x:Name="ModelsGroup" Style="{StaticResource NavGroup}" IsExpanded="True" Margin="0,0,0,8" Expanded="Group_Toggled" Collapsed="Group_Toggled">
                         <Expander.Header>
-                            <TextBlock Text="Models &amp; AI" FontSize="15.5" FontWeight="SemiBold" Margin="2,2,0,2"/>
+                            <TextBlock Text="B // MODELS &amp; AI"/>
                         </Expander.Header>
                         <ListBox Style="{StaticResource NavList}" ItemContainerStyle="{StaticResource SettingsNavItem}" Margin="0,4,0,0"
                                  SelectionChanged="Nav_SelectionChanged" AutomationProperties.Name="Models &amp; AI settings">
-                            <ListBoxItem Content="Models" Tag="Models"/>
-                            <ListBoxItem Content="Speech recognition" Tag="Speech"/>
-                            <ListBoxItem Content="Cloud AI" Tag="Cloud"/>
-                            <ListBoxItem Content="Model unloading" Tag="Unloading"/>
+                            <ListBoxItem Content="MODELS" Tag="Models" AutomationProperties.Name="Models"/>
+                            <ListBoxItem Content="SPEECH RECOGNITION" Tag="Speech" AutomationProperties.Name="Speech recognition"/>
+                            <ListBoxItem Content="CLOUD AI" Tag="Cloud" AutomationProperties.Name="Cloud AI"/>
+                            <ListBoxItem Content="MODEL UNLOADING" Tag="Unloading" AutomationProperties.Name="Model unloading"/>
                         </ListBox>
                     </Expander>
-                    <Expander x:Name="LookGroup" IsExpanded="True" Margin="0,0,0,10" Expanded="Group_Toggled" Collapsed="Group_Toggled">
+                    <Expander x:Name="LookGroup" Style="{StaticResource NavGroup}" IsExpanded="True" Margin="0,0,0,8" Expanded="Group_Toggled" Collapsed="Group_Toggled">
                         <Expander.Header>
-                            <TextBlock Text="Look &amp; feel" FontSize="15.5" FontWeight="SemiBold" Margin="2,2,0,2"/>
+                            <TextBlock Text="C // LOOK &amp; FEEL"/>
                         </Expander.Header>
                         <ListBox Style="{StaticResource NavList}" ItemContainerStyle="{StaticResource SettingsNavItem}" Margin="0,4,0,0"
                                  SelectionChanged="Nav_SelectionChanged" AutomationProperties.Name="Look &amp; feel settings">
-                            <ListBoxItem Content="Appearance" Tag="Appearance"/>
+                            <ListBoxItem Content="APPEARANCE" Tag="Appearance" AutomationProperties.Name="Appearance"/>
                         </ListBox>
                     </Expander>
-                    <Expander x:Name="AppGroup" IsExpanded="True" Margin="0,0,0,10" Expanded="Group_Toggled" Collapsed="Group_Toggled">
+                    <Expander x:Name="AppGroup" Style="{StaticResource NavGroup}" IsExpanded="True" Margin="0,0,0,8" Expanded="Group_Toggled" Collapsed="Group_Toggled">
                         <Expander.Header>
-                            <TextBlock Text="App" FontSize="15.5" FontWeight="SemiBold" Margin="2,2,0,2"/>
+                            <TextBlock Text="D // APP"/>
                         </Expander.Header>
                         <ListBox Style="{StaticResource NavList}" ItemContainerStyle="{StaticResource SettingsNavItem}" Margin="0,4,0,0"
                                  SelectionChanged="Nav_SelectionChanged" AutomationProperties.Name="App settings">
-                            <ListBoxItem Content="Advanced" Tag="Advanced"/>
-                            <ListBoxItem Content="About &amp; updates" Tag="About"/>
+                            <ListBoxItem Content="ADVANCED" Tag="Advanced" AutomationProperties.Name="Advanced"/>
+                            <ListBoxItem Content="ABOUT &amp; UPDATES" Tag="About" AutomationProperties.Name="About and updates"/>
                         </ListBox>
                     </Expander>
                 </StackPanel>

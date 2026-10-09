@@ -1,30 +1,42 @@
 <Window x:Class="Dictation.App.Views.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:Dictation.App.Views"
         Title="Oberton" Width="1200" Height="780" MinWidth="960" MinHeight="600"
         WindowStartupLocation="CenterScreen" Background="{DynamicResource Ob.Window}"
         FontFamily="{StaticResource Ob.Ui}">
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="B2V"/>
-        <Style x:Key="NavIcon" TargetType="TextBlock">
-            <Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets"/>
-            <Setter Property="FontSize" Value="19"/>
+        <!-- Line icons, drawn at 16 px with the item's own color -->
+        <Style x:Key="NavIcon" TargetType="Path">
+            <Setter Property="Width" Value="16"/>
+            <Setter Property="Height" Value="16"/>
+            <Setter Property="Stretch" Value="None"/>
+            <Setter Property="StrokeThickness" Value="1.2"/>
+            <Setter Property="StrokeStartLineCap" Value="Round"/>
+            <Setter Property="StrokeEndLineCap" Value="Round"/>
+            <Setter Property="StrokeLineJoin" Value="Round"/>
             <Setter Property="VerticalAlignment" Value="Center"/>
-            <Setter Property="Margin" Value="2,0,14,0"/>
-            <Setter Property="FontWeight" Value="Normal"/>
+            <Setter Property="Margin" Value="0,0,12,0"/>
+            <Setter Property="Stroke" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ListBoxItem}}"/>
         </Style>
-        <!-- Big, easy-to-read section entries -->
-        <Style x:Key="BigNavItem" TargetType="ListBoxItem" BasedOn="{StaticResource NavItem}">
-            <Setter Property="Padding" Value="12,12"/>
-            <Setter Property="Margin" Value="0,2"/>
-            <Setter Property="FontSize" Value="16"/>
+        <Style x:Key="NavDecor" TargetType="local:DecorText">
+            <Setter Property="FontFamily" Value="{StaticResource Ob.Jp}"/>
+            <Setter Property="FontSize" Value="10.5"/>
+            <Setter Property="Opacity" Value="0.6"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="IsHitTestVisible" Value="False"/>
+            <Setter Property="Foreground" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ListBoxItem}}"/>
         </Style>
         <Style x:Key="IconButton" TargetType="Button" BasedOn="{StaticResource QuietButton}">
             <Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets"/>
-            <Setter Property="FontSize" Value="15"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="Normal"/>
             <Setter Property="Width" Value="36"/>
             <Setter Property="Height" Value="36"/>
+            <Setter Property="MinHeight" Value="36"/>
             <Setter Property="Padding" Value="0"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
         </Style>
         <Style x:Key="StatusDot" TargetType="Ellipse">
             <Setter Property="Width" Value="7"/>
@@ -37,75 +49,86 @@
          match, so hiding it is a slide rather than a jump. -->
     <Grid TextElement.Foreground="{DynamicResource Ob.Text}">
         <!-- Content -->
-        <ContentPresenter x:Name="Host" Margin="268,0,0,0"/>
+        <ContentPresenter x:Name="Host" Margin="216,0,0,0"/>
 
-        <!-- Sidebar -->
-        <Border x:Name="Sidebar" Width="268" HorizontalAlignment="Left" Panel.ZIndex="1" Background="{DynamicResource Ob.Sidebar}"
-                BorderBrush="{DynamicResource Ob.Divider}" BorderThickness="0,0,1,0">
+        <!-- Sidebar: paper like the page, set off by an ink line -->
+        <Border x:Name="Sidebar" Width="216" HorizontalAlignment="Left" Panel.ZIndex="1" Background="{DynamicResource Ob.Sidebar}"
+                BorderBrush="{DynamicResource Ob.Border}" BorderThickness="0,0,1,0">
             <Border.RenderTransform>
                 <TranslateTransform x:Name="SidebarSlide"/>
             </Border.RenderTransform>
             <DockPanel Margin="14,18,14,14" LastChildFill="True">
                 <!-- The logo, to the right of the menu and back buttons (which stay put when the sidebar slides away) -->
-                <DockPanel x:Name="Header" DockPanel.Dock="Top" Margin="42,3,0,21">
-                    <StackPanel Orientation="Horizontal">
-                        <Border Width="30" Height="30" CornerRadius="8" Background="{DynamicResource Ob.Mark}">
-                            <Ellipse Width="9" Height="9" Fill="{DynamicResource Ob.Record}"/>
+                <DockPanel x:Name="Header" DockPanel.Dock="Top" Margin="42,6,0,24">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <Border Width="24" Height="24" CornerRadius="4" Background="{DynamicResource Ob.Mark}">
+                            <!-- Paper-colored while idle; red while the microphone is open -->
+                            <Ellipse x:Name="MarkDot" Width="8" Height="8" Fill="{DynamicResource Ob.MarkDot}"/>
                         </Border>
-                        <TextBlock Text="Oberton" FontSize="18" FontWeight="SemiBold" Margin="11,0,0,0" VerticalAlignment="Center"/>
+                        <TextBlock Text="OBERTON" FontFamily="{StaticResource Ob.Mono}" FontSize="14" FontWeight="Bold" Margin="10,0,0,0"
+                                   VerticalAlignment="Center"/>
                     </StackPanel>
                 </DockPanel>
 
-                <Border DockPanel.Dock="Bottom" Margin="0,12,0,0" Padding="12,10" CornerRadius="10"
-                        Background="{DynamicResource Ob.Subtle}">
+                <!-- Engine status, as a readout -->
+                <Border DockPanel.Dock="Bottom" Margin="0,12,0,0" Padding="2,12,2,0" BorderThickness="0,1,0,0"
+                        BorderBrush="{DynamicResource Ob.Divider}">
                     <StackPanel>
+                        <DockPanel Margin="0,0,0,6">
+                            <local:DecorText DockPanel.Dock="Right" Text="倍音" FontSize="10.5"/>
+                            <TextBlock Text="ENGINE // STATUS" Style="{StaticResource MonoLabel}"/>
+                        </DockPanel>
                         <StackPanel Orientation="Horizontal" Margin="0,2">
                             <Ellipse x:Name="SpeechDot" Style="{StaticResource StatusDot}"/>
-                            <TextBlock Text="{Binding Speech}" FontSize="12" TextTrimming="CharacterEllipsis" MaxWidth="190"
+                            <TextBlock Text="{Binding Speech}" FontSize="11.5" TextTrimming="CharacterEllipsis" MaxWidth="160"
                                        ToolTip="{Binding Speech}"/>
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" Margin="0,2">
                             <Ellipse x:Name="AiDot" Style="{StaticResource StatusDot}"/>
-                            <TextBlock Text="{Binding Ai}" FontSize="12" TextTrimming="CharacterEllipsis" MaxWidth="190"
+                            <TextBlock Text="{Binding Ai}" FontSize="11.5" TextTrimming="CharacterEllipsis" MaxWidth="160"
                                        ToolTip="{Binding Ai}"/>
                         </StackPanel>
-                        <TextBlock x:Name="PrivacyText" FontSize="11" Foreground="{DynamicResource Ob.Muted}" Margin="0,6,0,0"
-                                   TextWrapping="Wrap"/>
+                        <TextBlock x:Name="PrivacyText" Style="{StaticResource MonoLabel}" FontSize="10" Margin="0,8,0,0" TextWrapping="Wrap"/>
                     </StackPanel>
                 </Border>
 
                 <!-- The app's sections -->
-                <ListBox x:Name="NavList" Style="{StaticResource NavList}" ItemContainerStyle="{StaticResource BigNavItem}" SelectionChanged="NavList_SelectionChanged"
+                <ListBox x:Name="NavList" Style="{StaticResource NavList}" SelectionChanged="NavList_SelectionChanged"
                          AutomationProperties.Name="Sections">
-                    <ListBoxItem x:Name="DashboardItem" Tag="Dashboard" AutomationProperties.Name="Active dashboard">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE80F;" Style="{StaticResource NavIcon}"/>
-                            <TextBlock Text="Active dashboard"/>
-                        </StackPanel>
+                    <ListBoxItem x:Name="DashboardItem" Tag="Dashboard" AutomationProperties.Name="Dashboard">
+                        <DockPanel>
+                            <Path Style="{StaticResource NavIcon}" Data="M 8,1.5 A 6.5,6.5 0 1 1 7.99,1.5 M 8,8 L 11,5 M 8,7 A 1,1 0 1 1 7.99,7"/>
+                            <local:DecorText DockPanel.Dock="Right" Text="計器" Style="{StaticResource NavDecor}"/>
+                            <TextBlock Text="DASHBOARD" VerticalAlignment="Center"/>
+                        </DockPanel>
                     </ListBoxItem>
                     <ListBoxItem x:Name="SpeechItem" Tag="SpeechToText" AutomationProperties.Name="Speech to text">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE720;" Style="{StaticResource NavIcon}"/>
-                            <TextBlock Text="Speech to text"/>
-                        </StackPanel>
+                        <DockPanel>
+                            <Path Style="{StaticResource NavIcon}" Data="M 5.5,4 A 2.5,2.5 0 0 1 10.5,4 L 10.5,7.5 A 2.5,2.5 0 0 1 5.5,7.5 Z M 3,7.5 A 5,5 0 0 0 13,7.5 M 8,12.5 L 8,15"/>
+                            <local:DecorText DockPanel.Dock="Right" Text="口述" Style="{StaticResource NavDecor}"/>
+                            <TextBlock Text="SPEECH TO TEXT" VerticalAlignment="Center"/>
+                        </DockPanel>
                     </ListBoxItem>
                     <ListBoxItem x:Name="ReadItem" Tag="ReadAloud" AutomationProperties.Name="Read aloud">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE767;" Style="{StaticResource NavIcon}"/>
-                            <TextBlock Text="Read aloud"/>
-                        </StackPanel>
+                        <DockPanel>
+                            <Path Style="{StaticResource NavIcon}" Data="M 1.5,6 L 1.5,10 L 4.5,10 L 8.5,13 L 8.5,3 L 4.5,6 Z M 11,5.5 A 3.5,3.5 0 0 1 11,10.5 M 13,3.5 A 6,6 0 0 1 13,12.5"/>
+                            <local:DecorText DockPanel.Dock="Right" Text="読上" Style="{StaticResource NavDecor}"/>
+                            <TextBlock Text="READ ALOUD" VerticalAlignment="Center"/>
+                        </DockPanel>
                     </ListBoxItem>
                     <ListBoxItem x:Name="HistoryItem" Tag="History" AutomationProperties.Name="History">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE81C;" Style="{StaticResource NavIcon}"/>
-                            <TextBlock Text="History"/>
-                        </StackPanel>
+                        <DockPanel>
+                            <Path Style="{StaticResource NavIcon}" Data="M 2,4 L 14,4 M 2,8 L 14,8 M 2,12 L 9,12"/>
+                            <local:DecorText DockPanel.Dock="Right" Text="履歴" Style="{StaticResource NavDecor}"/>
+                            <TextBlock Text="HISTORY" VerticalAlignment="Center"/>
+                        </DockPanel>
                     </ListBoxItem>
                     <ListBoxItem x:Name="SettingsItem" Tag="Settings" AutomationProperties.Name="Settings">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE713;" Style="{StaticResource NavIcon}"/>
-                            <TextBlock Text="Settings"/>
-                        </StackPanel>
+                        <DockPanel>
+                            <Path Style="{StaticResource NavIcon}" Data="M 8,6 A 2,2 0 1 1 7.99,6 M 8,1 L 8,4 M 8,12 L 8,15 M 1,8 L 4,8 M 12,8 L 15,8 M 3,3 L 5,5 M 11,11 L 13,13 M 13,3 L 11,5 M 5,11 L 3,13"/>
+                            <local:DecorText DockPanel.Dock="Right" Text="設定" Style="{StaticResource NavDecor}"/>
+                            <TextBlock Text="SETTINGS" VerticalAlignment="Center"/>
+                        </DockPanel>
                     </ListBoxItem>
                 </ListBox>
             </DockPanel>
@@ -113,14 +136,14 @@
 
         <!-- While the sidebar is hidden: a solid bar across the top holding the menu and Back buttons, so pages start below
              it and nothing scrolls underneath them. -->
-        <Border x:Name="TopBar" Height="64" VerticalAlignment="Top" Panel.ZIndex="1" Visibility="Collapsed"
-                Background="{DynamicResource Ob.Sidebar}" BorderBrush="{DynamicResource Ob.Divider}" BorderThickness="0,0,0,1"/>
+        <Border x:Name="TopBar" Height="56" VerticalAlignment="Top" Panel.ZIndex="1" Visibility="Collapsed"
+                Background="{DynamicResource Ob.Sidebar}" BorderBrush="{DynamicResource Ob.Border}" BorderThickness="0,0,0,1"/>
 
         <!-- Always at the top left: the menu button (☰ that folds into ✕ while the sidebar is open) and Back -->
-        <StackPanel Orientation="Horizontal" Panel.ZIndex="2" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="12,16,0,0">
+        <StackPanel Orientation="Horizontal" Panel.ZIndex="2" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="12,12,0,0">
             <Button x:Name="MenuButton" Style="{StaticResource IconButton}" Click="Menu_Click" Padding="0">
-                <Grid Width="18" Height="14">
-                    <Rectangle x:Name="Bar1" Height="2" RadiusX="1" RadiusY="1" VerticalAlignment="Top" RenderTransformOrigin="0.5,0.5"
+                <Grid Width="16" Height="13.5">
+                    <Rectangle x:Name="Bar1" Height="1.5" VerticalAlignment="Top" RenderTransformOrigin="0.5,0.5"
                                Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}">
                         <Rectangle.RenderTransform>
                             <TransformGroup>
@@ -129,9 +152,9 @@
                             </TransformGroup>
                         </Rectangle.RenderTransform>
                     </Rectangle>
-                    <Rectangle x:Name="Bar2" Height="2" RadiusX="1" RadiusY="1" VerticalAlignment="Center"
+                    <Rectangle x:Name="Bar2" Height="1.5" VerticalAlignment="Center"
                                Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
-                    <Rectangle x:Name="Bar3" Height="2" RadiusX="1" RadiusY="1" VerticalAlignment="Bottom" RenderTransformOrigin="0.5,0.5"
+                    <Rectangle x:Name="Bar3" Height="1.5" VerticalAlignment="Bottom" RenderTransformOrigin="0.5,0.5"
                                Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}">
                         <Rectangle.RenderTransform>
                             <TransformGroup>
