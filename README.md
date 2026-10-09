@@ -60,7 +60,7 @@ The sidebar has five sections: **Active dashboard** (one screen, no scrolling: w
 words dictated and words read aloud today, turnaround, AI edits kept, history and the speech model's unload countdown, and charts of words per day (dictated and read aloud, side by side) and
 the apps you dictate into; the top tiles' text grows with the window. Every tile, dial and chart opens its page when
 clicked (History, the profiles, Models, Model unloading); the big number on the speech-model dial unloads that model
-right away. The figures come from daily counts in
+right away, and the big number on the History dial copies the last dictation (the text that was inserted) and says so. The figures come from daily counts in
 `data\usage.json` (dictations, words, seconds spoken, turnaround, AI edits kept, readings and dictations per app name; never
 any text, audio or window titles), so they survive History being trimmed, cleared or off), **Speech to text** (profiles), **Read aloud**, **History** and **Settings**. The menu button
 in the top-left corner (✕ while the sidebar is open, ☰ while it's hidden; or **Ctrl+B**) slides the sidebar away to give

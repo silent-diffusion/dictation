@@ -38,5 +38,11 @@
 
         <TextBlock x:Name="Footer" Grid.Row="4" FontSize="11.5" Foreground="{DynamicResource Ob.Muted}" Margin="6,8,6,0"
                    TextTrimming="CharacterEllipsis"/>
+
+        <!-- A short note, e.g. after the History number copies the last dictation -->
+        <Border x:Name="Toast" Grid.Row="0" Grid.RowSpan="5" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,34"
+                Padding="16,9" CornerRadius="10" Background="{DynamicResource Ob.Strong}" Opacity="0" IsHitTestVisible="False">
+            <TextBlock x:Name="ToastText" FontSize="13" Foreground="{DynamicResource Ob.Window}" TextWrapping="Wrap" MaxWidth="460"/>
+        </Border>
     </Grid>
 </UserControl>
