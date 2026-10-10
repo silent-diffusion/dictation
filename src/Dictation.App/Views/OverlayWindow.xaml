@@ -198,6 +198,14 @@
                     <ColumnDefinition Width="20"/>
                     <ColumnDefinition x:Name="InsertColumn" Width="*"/>
                 </Grid.ColumnDefinitions>
+                <!-- Rows are used only when the boxes are stacked (after a dictation went in) -->
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
                 <StackPanel x:Name="RawPanel" VerticalAlignment="Top">
                     <DockPanel Margin="0,0,0,4">
                         <Button DockPanel.Dock="Right" Style="{StaticResource CopyLink}" Tag="Raw" Click="Copy_Click"
@@ -206,7 +214,7 @@
                     </DockPanel>
                     <TextBox x:Name="CompareRaw" Style="{StaticResource SelectableText}" Foreground="#D9E8E7E3" MaxHeight="220" VerticalScrollBarVisibility="Auto"/>
                 </StackPanel>
-                <Border Grid.Column="1" Width="1" Background="#38E8E7E3" HorizontalAlignment="Center"/>
+                <Border x:Name="EditDivider" Grid.Column="1" Width="1" Background="#38E8E7E3" HorizontalAlignment="Center"/>
                 <StackPanel x:Name="EditPanel" Grid.Column="2" VerticalAlignment="Top">
                     <DockPanel Margin="0,0,0,4">
                         <Button DockPanel.Dock="Right" Style="{StaticResource CopyLink}" Tag="Edit" Click="Copy_Click"

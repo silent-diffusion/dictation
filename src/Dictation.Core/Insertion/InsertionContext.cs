@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using System.Windows.Automation;
 using System.Windows.Automation.Text;
@@ -80,13 +81,25 @@ public sealed record InsertionContext(string Before, string After)
     /// Used to replace (or remove) what live dictation typed; false whenever that can't be confirmed, so text the
     /// user wrote is never touched.
     /// </summary>
-    public static async Task<bool> SelectBeforeCaretAsync(string expected, TimeSpan timeout)
+    public static Task<bool> SelectBeforeCaretAsync(string expected, TimeSpan timeout) => RunBounded(expected, timeout, select: true);
+
+    /// <summary>Whether <paramref name="expected"/> is exactly the text right before the caret; reads only, so the
+    /// user sees nothing while this is checked (as often as needed).</summary>
+    public static Task<bool> IsBeforeCaretAsync(string expected, TimeSpan timeout) => RunBounded(expected, timeout, select: false);
+
+    static async Task<bool> RunBounded(string expected, TimeSpan timeout, bool select)
     {
-        var select = Task.Run(() => SelectBeforeCaret(expected));
-        return await Task.WhenAny(select, Task.Delay(timeout)) == select && select.Result;
+        // A check that times out keeps running in the background; it must not select anything after its caller has
+        // moved on (that showed up as the text flashing, and a later paste landing in the wrong place).
+        var abandoned = new StrongBox<bool>();
+        var work = Task.Run(() => SelectBeforeCaret(expected, select, abandoned));
+        if (await Task.WhenAny(work, Task.Delay(timeout)) == work) return work.Result;
+        abandoned.Value = true;
+        Log.Info("The app was too slow to show the live text through UI Automation");
+        return false;
     }
 
-    static bool SelectBeforeCaret(string expected)
+    static bool SelectBeforeCaret(string expected, bool select, StrongBox<bool> abandoned)
     {
         try
         {
@@ -99,6 +112,8 @@ public sealed record InsertionContext(string Before, string After)
             range.MoveEndpointByRange(TextPatternRangeEndpoint.Start, range, TextPatternRangeEndpoint.End); // collapse to the caret
             range.MoveEndpointByUnit(TextPatternRangeEndpoint.Start, TextUnit.Character, -expected.Length);
             if (!SameText(range.GetText(expected.Length + 16), expected)) return false;
+            if (!select) return true;
+            if (abandoned.Value) return false;
             range.Select();
             // Some apps accept the call without moving their selection; pasting then would add the text a second time.
             if (IsSelected(pattern, expected)) return true;
@@ -116,7 +131,7 @@ public sealed record InsertionContext(string Before, string After)
     static bool IsSelected(TextPattern pattern, string expected)
     {
         var now = pattern.GetSelection();
-        return now.Length > 0 && SameText(now[0].GetText(expected.Length + 16), expected);
+        return now.Length > 0 && SameText(now[0].GetText(expected.Length + 16).TrimEnd(), expected.TrimEnd());
     }
 
     /// <summary>Put the caret back at the end of <paramref name="range"/>, with nothing selected.</summary>
@@ -138,11 +153,14 @@ public sealed record InsertionContext(string Before, string After)
     /// </summary>
     public static async Task<bool> SelectDoubledAsync(string first, string second, TimeSpan timeout)
     {
-        var select = Task.Run(() => SelectDoubled(first, second));
-        return await Task.WhenAny(select, Task.Delay(timeout)) == select && select.Result;
+        var abandoned = new StrongBox<bool>();
+        var select = Task.Run(() => SelectDoubled(first, second, abandoned));
+        if (await Task.WhenAny(select, Task.Delay(timeout)) == select) return select.Result;
+        abandoned.Value = true;
+        return false;
     }
 
-    static bool SelectDoubled(string first, string second)
+    static bool SelectDoubled(string first, string second, StrongBox<bool> abandoned)
     {
         if (first.Trim().Length == 0 || second.Trim().Length == 0) return false;
         try
@@ -158,7 +176,7 @@ public sealed record InsertionContext(string Before, string After)
             range.MoveEndpointByUnit(TextPatternRangeEndpoint.Start, TextUnit.Character, -both.Length);
             if (!SameText(range.GetText(both.Length + 16), both)) return false;
             range.MoveEndpointByUnit(TextPatternRangeEndpoint.End, TextUnit.Character, -second.Length);
-            if (!SameText(range.GetText(first.Length + 16), first)) return false;
+            if (!SameText(range.GetText(first.Length + 16), first) || abandoned.Value) return false;
             range.Select();
             if (IsSelected(pattern, first)) return true;
             CollapseToEnd(selection[0]);

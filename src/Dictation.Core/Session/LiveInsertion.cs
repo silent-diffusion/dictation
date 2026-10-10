@@ -278,14 +278,18 @@ public sealed class LiveInsertion
     /// busy app can take a while to show its last paste.</summary>
     async Task<bool> SelectTypedAsync(CancellationToken ct)
     {
-        for (var attempt = 0; attempt < 4; attempt++)
+        // Long text takes a slow app (Electron ones especially) a while to report through UI Automation.
+        var timeout = UiaTimeout + TimeSpan.FromMilliseconds(Math.Min(2500, Typed.Length));
+        // Check (reading only, nothing visible) until the app shows the live text; then select it, once.
+        for (var attempt = 0; ; attempt++)
         {
             var wait = Settle - (DateTime.Now - _lastInsert);
             if (wait > TimeSpan.Zero) await Task.Delay(wait, ct);
-            if (await InsertionContext.SelectBeforeCaretAsync(Typed, UiaTimeout)) return true;
+            if (await InsertionContext.IsBeforeCaretAsync(Typed, timeout)) break;
+            if (attempt == 3) return false;
             _lastInsert = DateTime.Now; // wait a full settle before the next try
         }
-        return false;
+        return await InsertionContext.SelectBeforeCaretAsync(Typed, timeout);
     }
 
     /// <summary>A last check that the final pass replaced the live text instead of landing after it: if the document
@@ -295,7 +299,8 @@ public sealed class LiveInsertion
         try
         {
             await Task.Delay(Settle, ct);
-            if (!await InsertionContext.SelectDoubledAsync(typed, replacement, UiaTimeout)) return;
+            var timeout = UiaTimeout + TimeSpan.FromMilliseconds(Math.Min(2500, typed.Length + replacement.Length));
+            if (!await InsertionContext.SelectDoubledAsync(typed, replacement, timeout)) return;
             await _inserter.DeleteSelectionAsync(ct);
             Log.Info("Live dictation: the final pass landed after the live text instead of replacing it; removed the live text");
         }

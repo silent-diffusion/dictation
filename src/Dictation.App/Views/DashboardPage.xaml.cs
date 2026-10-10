@@ -49,11 +49,11 @@ public partial class DashboardPage : UserControl
         Build(); // the dial now reads "off"
     }
 
-    /// <summary>The History dial's number: copy the text of the last dictation (what was inserted, after any AI edit).</summary>
+    /// <summary>The History dial's number: copy the last dictation's AI edit (what the AI wanted to insert); without one, what went in.</summary>
     void CopyLastDictation()
     {
         var last = App.Services.History.Entries.OrderByDescending(x => x.Time).FirstOrDefault();
-        var text = last == null ? "" : last.Final.Length > 0 ? last.Final : last.AiOutput is { Length: > 0 } ai ? ai : last.Transcript;
+        var text = last == null ? "" : last.AiOutput is { Length: > 0 } ai ? ai : last.Final.Length > 0 ? last.Final : last.Transcript;
         if (text.Length == 0) { ShowToast("Nothing to copy yet: dictate something first."); return; }
         try { Clipboard.SetText(text); }
         catch (System.Runtime.InteropServices.ExternalException)
@@ -61,8 +61,8 @@ public partial class DashboardPage : UserControl
             ShowToast("The clipboard is busy; try again in a moment.");
             return;
         }
-        var words = last!.Words;
-        ShowToast($"Copied the last dictation ({words:N0} word{(words == 1 ? "" : "s")}, {last.When}) to the clipboard.");
+        var words = text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
+        ShowToast($"Copied the last dictation's {(last!.AiOutput is { Length: > 0 } ? "AI edit" : "text")} ({words:N0} word{(words == 1 ? "" : "s")}, {last.When}) to the clipboard.");
     }
 
     readonly DispatcherTimer _toastTimer = new() { Interval = TimeSpan.FromSeconds(2.5) };
@@ -186,7 +186,7 @@ public partial class DashboardPage : UserControl
 
         Dials.Children.Add(Dial(s.HistoryLimit > 0 ? entries.Count / (double)s.HistoryLimit : entries.Count > 0 ? 1 : 0,
             entries.Count.ToString(), "History", s.HistoryLimit > 0 ? $"of {s.HistoryLimit} kept" : "all kept, no limit",
-            entries.Count > 0 ? CopyLastDictation : null, "Click to copy the last dictation's inserted text"));
+            entries.Count > 0 ? CopyLastDictation : null, "Click to copy the last dictation's AI edit"));
 
         if (dictating) Dials.Children.Add(Dial(1, "busy", "Speech model", "dictating now", accent: true));
         else if (!sv.Speech.IsReady) Dials.Children.Add(Dial(0, "off", "Speech model", "loads when you dictate"));

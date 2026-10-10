@@ -20,7 +20,7 @@ namespace Dictation.App.Views;
 /// </summary>
 public partial class OverlayWindow : Window
 {
-    const double CompactWidth = 440, WideWidth = 470, NarrowWidth = 360, CompareWideWidth = 860;
+    const double CompactWidth = 440, WideWidth = 470, NarrowWidth = 360, CompareWideWidth = 860, CompareStackWidth = 560;
     /// <summary>The "Inserted" receipt is dimmed so it doesn't compete with the text; hovering brings it back.</summary>
     const double ReceiptDim = 0.55;
     /// <summary>Columns of the level meter (each a stack of <see cref="WaveDots"/> dots, lit from the bottom).</summary>
@@ -153,6 +153,7 @@ public partial class OverlayWindow : Window
         _compareOpen = false;
         StateDecor.Text = "";
         FocusInserted(false);
+        Stack(false);
         Card.Cursor = null;
         CancelButton.ToolTip = "Cancel this dictation";
         CancelLabel.Visibility = Visibility.Visible;
@@ -348,7 +349,34 @@ public partial class OverlayWindow : Window
         CancelLabel.Visibility = Visibility.Collapsed; // just ✕ here
         CancelButton.Padding = new Thickness(0);
         Card.Cursor = null;
-        Display(CompareWideWidth, expanded: true);
+        Stack(true);
+        Display(CompareStackWidth, expanded: true);
+    }
+
+    /// <summary>After a dictation went in, the three boxes read top to bottom; before it (the preview), side by side.</summary>
+    void Stack(bool on)
+    {
+        var boxes = new FrameworkElement[] { RawPanel, EditDivider, EditPanel, InsertDivider, InsertFrame };
+        for (var i = 0; i < boxes.Length; i++)
+        {
+            Grid.SetColumn(boxes[i], on ? 0 : i);
+            Grid.SetColumnSpan(boxes[i], on ? 5 : 1);
+            Grid.SetRow(boxes[i], on ? i : 0);
+        }
+        // Dividers turn from vertical lines between columns into horizontal rules between rows.
+        foreach (var d in new[] { EditDivider, InsertDivider })
+        {
+            d.Width = on ? double.NaN : 1;
+            d.Height = on ? 1 : double.NaN;
+            d.Margin = on ? new Thickness(0, 9, 0, 9) : new Thickness(0);
+            d.HorizontalAlignment = on ? HorizontalAlignment.Stretch : HorizontalAlignment.Center;
+        }
+        var cols = Compare.ColumnDefinitions;
+        cols[1].Width = new GridLength(on ? 0 : 20);
+        cols[2].Width = on ? new GridLength(0) : new GridLength(1, GridUnitType.Star);
+        cols[3].Width = new GridLength(on ? 0 : 20);
+        InsertColumn.Width = on ? new GridLength(0) : new GridLength(1, GridUnitType.Star);
+        foreach (var box in new Control[] { CompareRaw, CompareEdited, CompareInserted }) box.MaxHeight = on ? 130 : 220;
     }
 
     string _copyRaw = "", _copyEdit = "", _copyInserted = "";
