@@ -295,6 +295,7 @@ public partial class ReaderWindow : Window
     {
         var s = _session;
         if (s == null || _fullFor != s) return;
+        _userScrolledAt = DateTime.MinValue; // reading from a clicked word: follow it again right away
         var at = FullText.GetPositionFromPoint(e.GetPosition(FullText), snapToText: false);
         if (at == null) return;
         for (var i = 0; i < _fullSentences.Count && i < s.Sentences.Count; i++)
@@ -324,14 +325,29 @@ public partial class ReaderWindow : Window
     {
         Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
         {
-            if (!FullScroll.IsVisible) return;
+            if (!FullScroll.IsVisible || DateTime.Now - _userScrolledAt < FollowPause) return;
             var rect = anchor.ContentStart.GetCharacterRect(LogicalDirection.Forward);
             if (rect.IsEmpty) return;
             var y = FullText.TranslatePoint(rect.TopLeft, FullScroll).Y; // within the visible area
             var view = FullScroll.ViewportHeight;
             if (y >= 8 && y + rect.Height <= view - 28) return;
+            _selfScroll = true;
             FullScroll.ScrollToVerticalOffset(Math.Max(0, FullScroll.VerticalOffset + y - view / 3));
+            Dispatcher.BeginInvoke(DispatcherPriority.Background, () => _selfScroll = false);
         });
+    }
+
+    /// <summary>After the user scrolls the text themselves, it stays where they put it this long before following the
+    /// reading again.</summary>
+    static readonly TimeSpan FollowPause = TimeSpan.FromSeconds(5);
+    DateTime _userScrolledAt = DateTime.MinValue;
+    bool _selfScroll;
+
+    void FullScroll_ScrollChanged(object sender, System.Windows.Controls.ScrollChangedEventArgs e)
+    {
+        // Only the user's own scrolling (wheel, scroll bar, keys), not ours and not the text being rebuilt or resized.
+        if (_selfScroll || e.VerticalChange == 0 || e.ExtentHeightChange != 0 || e.ViewportHeightChange != 0) return;
+        _userScrolledAt = DateTime.Now;
     }
 
     /// <summary>The whole text, line by line with its formatting; each sentence is a span the highlight can colour.</summary>
