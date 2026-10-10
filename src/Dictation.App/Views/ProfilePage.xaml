@@ -72,7 +72,14 @@
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
                         <StackPanel Margin="16,12,16,16">
-                            <TextBlock Text="01 // TRANSCRIPTION" Style="{StaticResource MonoLabel}" Margin="0,0,0,6"/>
+                            <DockPanel Margin="0,0,0,6">
+                                <Button DockPanel.Dock="Right" Tag="Raw" Click="CopyTest_Click" Content="COPY" Cursor="Hand" Padding="0" Margin="10,0,0,0"
+                                        Background="Transparent" BorderThickness="0" FontFamily="{StaticResource Ob.Mono}" FontSize="10.5"
+                                        Foreground="{DynamicResource Ob.Muted}" ToolTip="Copy this box" AutomationProperties.Name="Copy Transcription">
+                                    <Button.Template><ControlTemplate TargetType="Button"><ContentPresenter/></ControlTemplate></Button.Template>
+                                </Button>
+                                <TextBlock Text="01 // TRANSCRIPTION" Style="{StaticResource MonoLabel}"/>
+                            </DockPanel>
                             <TextBox x:Name="TestInput" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="72" Padding="0"
                                      BorderThickness="0" Background="Transparent" FontFamily="{StaticResource Ob.Mono}" FontSize="13"
                                      Foreground="{DynamicResource Ob.Text}" AutomationProperties.Name="Sample transcript"
@@ -81,6 +88,11 @@
                         <Border Grid.Column="1" BorderBrush="{DynamicResource Ob.Divider}" BorderThickness="1,0,0,0">
                             <StackPanel Margin="16,12,16,16">
                                 <DockPanel Margin="0,0,0,6">
+                                    <Button DockPanel.Dock="Right" Tag="Edit" Click="CopyTest_Click" Content="COPY" Cursor="Hand" Padding="0" Margin="10,0,0,0"
+                                        Background="Transparent" BorderThickness="0" FontFamily="{StaticResource Ob.Mono}" FontSize="10.5"
+                                        Foreground="{DynamicResource Ob.Muted}" ToolTip="Copy this box" AutomationProperties.Name="Copy AI Edit">
+                                    <Button.Template><ControlTemplate TargetType="Button"><ContentPresenter/></ControlTemplate></Button.Template>
+                                </Button>
                                     <TextBlock x:Name="TestMeta" DockPanel.Dock="Right" Style="{StaticResource MonoLabel}"/>
                                     <TextBlock Text="02 // AI EDIT" Style="{StaticResource MonoLabel}"/>
                                 </DockPanel>
@@ -90,7 +102,14 @@
                         </Border>
                         <Border Grid.Column="2" BorderBrush="{DynamicResource Ob.Divider}" BorderThickness="1,0,0,0">
                             <StackPanel Margin="16,12,16,16">
-                                <TextBlock Text="03 // INSERTED" Style="{StaticResource MonoLabel}" Margin="0,0,0,6"/>
+                                <DockPanel Margin="0,0,0,6">
+                                    <Button DockPanel.Dock="Right" Tag="Inserted" Click="CopyTest_Click" Content="COPY" Cursor="Hand" Padding="0" Margin="10,0,0,0"
+                                        Background="Transparent" BorderThickness="0" FontFamily="{StaticResource Ob.Mono}" FontSize="10.5"
+                                        Foreground="{DynamicResource Ob.Muted}" ToolTip="Copy this box" AutomationProperties.Name="Copy Inserted">
+                                    <Button.Template><ControlTemplate TargetType="Button"><ContentPresenter/></ControlTemplate></Button.Template>
+                                </Button>
+                                    <TextBlock Text="03 // INSERTED" Style="{StaticResource MonoLabel}"/>
+                                </DockPanel>
                                 <TextBlock x:Name="TestOutput" TextWrapping="Wrap" FontSize="15" LineHeight="23" MinHeight="72"
                                            Foreground="{DynamicResource Ob.Muted}"/>
                             </StackPanel>
