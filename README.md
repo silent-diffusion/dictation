@@ -61,7 +61,7 @@ The sidebar has five sections: **Dashboard** (one screen, no scrolling: the sign
 AI edits kept, history and the speech model's unload countdown, and charts of words per day (dictated and read aloud, side by side) and
 the apps you dictate into; the signal path's text grows with the window. Every step, meter and chart opens its page when
 clicked (History, the profiles, Models, Model unloading); the big number on the speech-model meter unloads that model
-right away, and the big number on the History meter copies the last dictation (the text that was inserted) and says so. The figures come from daily counts in
+right away, and the big number on the History meter copies the last dictation's AI edit (or its text, without one) and says so. The figures come from daily counts in
 `data\usage.json` (dictations, words, seconds spoken, turnaround, AI edits kept, readings and dictations per app name; never
 any text, audio or window titles), so they survive History being trimmed, cleared or off), **Speech to text** (profiles), **Read aloud**, **History** and **Settings**. The menu button
 in the top-left corner (✕ while the sidebar is open, ☰ while it's hidden; or **Ctrl+B**) slides the sidebar away to give
@@ -132,7 +132,7 @@ window's edge.
   *read aloud after inserting* (Read aloud reads what went in), *preserve paragraphs*, *remove fillers*.
   *Rewrite the whole dictation* is for prompts that reshape what you say ("turn my thoughts into an email"): the AI gets the
   whole dictation in one go when you stop. With *Type as you speak*, your words are typed as spoken and the rewrite replaces them at the end.
-  The **Try it** panel runs a profile on sample text and shows what it changed, so you can tune prompts without dictating.
+  The **Try it** panel runs a profile on sample text and shows what it changed, so you can tune prompts without dictating; each of its three boxes has a COPY button.
   It follows the profile's switches: with *preview before inserting* the real preview appears, with *read aloud after
   inserting* the result is read to you.
 * **History**: the last 50 dictations (adjustable under *Settings › History*, up to *All of them*), kept in Oberton's data folder so they survive

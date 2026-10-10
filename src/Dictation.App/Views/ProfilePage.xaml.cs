@@ -134,9 +134,32 @@ public partial class ProfilePage : UserControl
         if (e.PropertyName == nameof(Profile.AutoProcess)) ShowAiColumn();
     }
 
+    string _testAi = "", _testInserted = "";
+
+    /// <summary>Each test box's COPY: the sample transcript, the AI's own text (without the struck-through words), or
+    /// what would be inserted.</summary>
+    void CopyTest_Click(object sender, RoutedEventArgs e)
+    {
+        var button = (System.Windows.Controls.Button)sender;
+        var text = button.Tag switch { "Raw" => TestInput.Text.Trim(), "Edit" => _testAi, _ => _testInserted };
+        if (text.Length == 0) { Flash(button, "NOTHING YET"); return; }
+        try { Clipboard.SetText(text); }
+        catch (System.Runtime.InteropServices.ExternalException) { Flash(button, "BUSY, TRY AGAIN"); return; }
+        Flash(button, "COPIED ✓");
+    }
+
+    static void Flash(System.Windows.Controls.Button button, string label)
+    {
+        button.Content = label;
+        var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1.5) };
+        timer.Tick += (_, _) => { timer.Stop(); button.Content = "COPY"; };
+        timer.Start();
+    }
+
     /// <summary>The AI Edit box is always there; without AI it says so.</summary>
     void ShowAiColumn()
     {
+        _testAi = _testInserted = "";
         TestDiff.Inlines.Clear();
         TestDiff.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Muted");
         TestDiff.Text = _profile.AutoProcess ? "Run the profile to see what it changes."
@@ -178,6 +201,7 @@ public partial class ProfilePage : UserControl
         TestMeta.Text = "";
         TestDiff.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Muted");
         TestDiff.Text = _profile.AutoProcess ? "Processing…" : "No AI edit: this profile doesn't use AI.";
+        _testAi = _testInserted = "";
         TestOutput.Text = "";
         var input = TestInput.Text;
         try
@@ -199,6 +223,7 @@ public partial class ProfilePage : UserControl
             if (!_profile.AutoProcess) TestMeta.Text = "";
             // Try it follows the profile's own switches: the preview decides what goes in, and Read aloud reads it.
             var final = result.Text;
+            _testAi = _profile.AutoProcess ? result.Text.Trim() : "";
             if (_profile.ShowPreview)
             {
                 TestOutput.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Muted");
@@ -213,6 +238,7 @@ public partial class ProfilePage : UserControl
             }
             TestOutput.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Text");
             TestOutput.Text = final;
+            _testInserted = final.Trim();
             if (_profile.ReadAloudAfterInsert && final.Trim().Length > 0) ((App)Application.Current).ReadAloud(final.Trim(), App.VoiceFor(_profile));
         }
         catch (UserFacingException ex) { ShowProblem(ex.Message); }
