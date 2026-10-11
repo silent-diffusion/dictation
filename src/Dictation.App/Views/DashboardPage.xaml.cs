@@ -7,6 +7,7 @@ using System.Windows.Shapes;
 using System.Windows.Threading;
 using Dictation.Core.Infrastructure;
 using Dictation.Core.Session;
+using Dictation.Core.Settings;
 using Dictation.Core.Setup;
 using Dictation.Core.Speech;
 using Dictation.Core.Text;
@@ -125,43 +126,46 @@ public partial class DashboardPage : UserControl
                       (s.Cloud.KeepOffline ? "everything stays on this PC" : "cloud AI allowed") +
                       $"  //  {s.CycleProfileHotkey} switches profile  //  models unload {(s.UnloadAfterMinutes < 0 ? unload : "after " + unload + " unused")}").ToUpper();
 
-        // ----- the signal path -----
-        Tiles.Children.Clear();
-        var traits = new List<string>();
-        if (p.AutoProcess && p.RewriteWhole) traits.Add("rewrites whole");
-        if (p.ShowPreview) traits.Add("previews");
-        else if (s.TypeWhileSpeaking) traits.Add("types as you speak");
-        if (p.ReadAloudAfterInsert) traits.Add("reads aloud");
-        Tiles.Children.Add(Tile(1, "PROFILE", p.Name,
-            p.AutoProcess ? Dot.Ok : Dot.Off, p.AutoProcess ? (cloud ? "AI · cloud" : "AI · on this PC") : "No AI · raw words",
-            traits.Count == 0 ? p.Description : string.Join(" · ", traits),
-            () => ((MainWindow)Window.GetWindow(this)!).ShowProfile(p)));
-
+        // ----- the signal path: microphone → speech recognition → AI cleanup → insert, with read aloud branching off -----
         var dictating = sv.Controller.State != DictationState.Idle;
         var speechModel = SpeechModels.For(p, s.Asr);
         var speechLoaded = string.Equals(sv.Speech.LoadedModel, speechModel, StringComparison.OrdinalIgnoreCase);
-        Tiles.Children.Add(Tile(2, "SPEECH", speechModel,
-            dictating || speechLoaded ? Dot.Ok : Dot.Busy,
-            dictating ? "Dictating…" : speechLoaded ? "Loaded" : "Not loaded · loads when you dictate",
-            (s.Asr.Device == "auto" ? "GPU if available" : s.Asr.Device.ToUpperInvariant()) + " · " +
-            (string.IsNullOrEmpty(s.Asr.Language) ? "any language" : s.Asr.Language),
-            () => TheApp.ShowPage("Models")));
-
-        Tiles.Children.Add(Tile(3, "AI CLEANUP", p.AutoProcess ? aiModel : s.Llm.DefaultModel,
-            cloud ? (s.Cloud.KeepOffline ? Dot.Busy : Dot.Ok) : aiLoaded ? Dot.Ok : Dot.Busy,
-            cloud ? (s.Cloud.KeepOffline ? "Cloud · blocked by offline mode" : "Cloud · ready")
-                  : aiLoaded ? "Loaded" : "Not loaded · loads when needed",
-            _loadedAi.Count == 0 ? "Nothing in memory" : "In memory: " + string.Join(", ", _loadedAi),
-            () => TheApp.ShowPage("Models")));
-
         var voiceId = App.VoiceFor(p);
         var windowsVoice = VoiceCatalog.IsWindowsVoice(voiceId);
         var installed = VoiceCatalog.IsInstalled(voiceId);
-        Tiles.Children.Add(Tile(4, "READ ALOUD", installed ? VoiceCatalog.ShortName(voiceId) : "Not installed",
-            windowsVoice || sv.Tts.IsRunning ? Dot.Ok : installed ? Dot.Busy : Dot.Off,
-            windowsVoice ? "Windows voice · ready" : sv.Tts.IsRunning ? "Voice loaded" : installed ? "Starts when you read" : "Downloads on first use",
-            $"{VoiceCatalog.Model(VoiceCatalog.ModelOf(voiceId)).Name} · {s.TtsBaseSpeed:0.0#}× · {s.SpeakHotkey}",
-            () => TheApp.ShowPage("ReadAloud")));
+        var lastApp = entries.OrderByDescending(x => x.Time).FirstOrDefault()?.AppName;
+        var nodes = new[]
+        {
+            new PathNode("MIC", string.IsNullOrWhiteSpace(s.MicrophoneName) ? "Default microphone" : s.MicrophoneName!,
+                dictating ? "Recording" : "Ready", dictating ? Dot.Busy : Dot.Ok, () => TheApp.ShowPage("Audio")),
+            new PathNode("SPEECH", speechModel,
+                (s.Asr.Device == "auto" ? "GPU if available" : s.Asr.Device) + " // " + (dictating ? "listening" : speechLoaded ? "loaded" : "not loaded"),
+                dictating ? Dot.Busy : speechLoaded ? Dot.Ok : Dot.Off, () => TheApp.ShowPage("Models")),
+            p.AutoProcess
+                ? new PathNode(cloud ? "AI // CLOUD" : "AI", aiModel,
+                    p.Name + " // " + (cloud ? (s.Cloud.KeepOffline ? "blocked offline" : "ready") : aiLoaded ? "loaded" : "not loaded"),
+                    cloud ? (s.Cloud.KeepOffline ? Dot.Busy : Dot.Ok) : aiLoaded ? Dot.Ok : Dot.Off,
+                    () => ((MainWindow)Window.GetWindow(this)!).ShowProfile(p))
+                : new PathNode("AI", "No AI", p.Name + " // raw words", Dot.Off, () => ((MainWindow)Window.GetWindow(this)!).ShowProfile(p)),
+            new PathNode("INSERT", s.Insertion switch { InsertionMode.Typing => "Type", InsertionMode.Clipboard => "Paste", _ => "Paste or type" }
+                    + (s.TypeWhileSpeaking && !p.ShowPreview ? " // live" : p.ShowPreview ? " // preview" : ""),
+                lastApp == null ? "at the cursor" : "last → " + lastApp, Dot.Ok, () => TheApp.ShowPage("General")),
+        };
+        var voice = new PathNode("READ ALOUD", installed ? VoiceCatalog.ShortName(voiceId) : "Not installed",
+            windowsVoice ? "ready" : sv.Tts.IsRunning ? "loaded" : installed ? "idle" : "downloads on first use",
+            windowsVoice || sv.Tts.IsRunning ? Dot.Ok : Dot.Off, () => TheApp.ShowPage("ReadAloud"));
+
+        string unloadNote;
+        if (s.UnloadAfterMinutes < 0) unloadNote = "Models unload right after use";
+        else if (s.UnloadAfterMinutes == 0) unloadNote = "Models stay loaded";
+        else if (!sv.Speech.IsReady && _loadedAi.Count == 0) unloadNote = "Nothing loaded";
+        else
+        {
+            var left = TimeSpan.FromMinutes(s.UnloadAfterMinutes) - (now - sv.Controller.LastActivity);
+            if (left < TimeSpan.Zero) left = TimeSpan.Zero;
+            unloadNote = $"Unload in {(int)left.TotalMinutes:00}:{left.Seconds:00}";
+        }
+        PathCell.Child = SignalPath(nodes, voice, p.ReadAloudAfterInsert, s.Hotkey, unloadNote);
 
         // ----- meters -----
         Dials.Children.Clear();
@@ -212,64 +216,171 @@ public partial class DashboardPage : UserControl
     FontFamily Mono => (FontFamily)FindResource("Ob.Mono");
     Style Readout => (Style)FindResource("MonoLabel");
 
-    const double TileDesignWidth = 230;
+    /// <summary>One step of the signal path: what it is, the model or device, and how it is doing.</summary>
+    sealed record PathNode(string Label, string Title, string Status, Dot State, Action Open);
 
-    /// <summary>One step of the signal path: a node (filled when ready, hollow when off, the accent while it starts),
-    /// its number and name, an arrow to the next step, and what it is and how it is doing.</summary>
-    FrameworkElement Tile(int step, string label, string title, Dot dot, string status, string detail, Action open)
+    const double PathWidth = 900, PathHeight = 200, PathY = 86, NodeRadius = 22;
+
+    /// <summary>
+    /// The signal path, drawn like an instrument diagram at a fixed design size and scaled to the cell: a line through
+    /// the four steps, each a node (core filled when ready, hollow when off, the accent while busy) in a ring of ticks,
+    /// with read aloud branching off the insert step (dashed: it only runs when the profile reads aloud, or on demand).
+    /// Every node opens its page.
+    /// </summary>
+    FrameworkElement SignalPath(PathNode[] nodes, PathNode voice, bool readsAloud, string hotkey, string unloadNote)
     {
-        var panel = new StackPanel();
-        var head = new DockPanel();
-        var node = Node(dot);
-        DockPanel.SetDock(node, Dock.Left);
-        head.Children.Add(node);
-        if (step < 4)
-        {
-            var arrow = new TextBlock { Text = "→", Style = Readout, FontSize = 13, VerticalAlignment = VerticalAlignment.Center };
-            DockPanel.SetDock(arrow, Dock.Right);
-            head.Children.Add(arrow);
-        }
-        head.Children.Add(new TextBlock
-        {
-            Text = $"{step:00} // {label}", Style = Readout, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0),
-        });
-        panel.Children.Add(head);
-        panel.Children.Add(new TextBlock
-        {
-            Text = title, FontSize = 16, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 9, 0, 0),
-            TextTrimming = TextTrimming.CharacterEllipsis, ToolTip = title,
-        });
-        var line = new TextBlock
-        {
-            Text = status.ToUpper(), FontFamily = Mono, FontSize = 10.5, Margin = new Thickness(0, 5, 0, 0),
-            TextTrimming = TextTrimming.CharacterEllipsis, ToolTip = status,
-        };
-        line.SetResourceReference(TextBlock.ForegroundProperty, dot == Dot.Busy ? "Ob.Accent" : "Ob.Text");
-        panel.Children.Add(line);
-        var sub = new TextBlock { Text = detail, FontSize = 12, Margin = new Thickness(0, 4, 0, 0), TextTrimming = TextTrimming.CharacterEllipsis, ToolTip = detail };
-        sub.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Muted");
-        panel.Children.Add(sub);
+        var root = new DockPanel();
 
-        // Laid out at a fixed design width, then scaled to the tile: the text grows with the window instead of staying
-        // small in a big tile (and still trims long names at that width).
-        panel.Width = TileDesignWidth;
-        var card = new Border
+        var head = new DockPanel { Margin = new Thickness(0, 0, 0, 4) };
+        var keys = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        var parts = hotkey.Split('+', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        for (var i = 0; i < parts.Length; i++)
         {
-            Style = (Style)FindResource("DashCell"), Padding = new Thickness(14, 10, 14, 10),
-            Child = new Viewbox
-            {
-                Stretch = Stretch.Uniform, Child = panel,
-                HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center,
-            },
-            Cursor = Cursors.Hand, ClipToBounds = true,
+            if (i > 0) keys.Children.Add(new TextBlock { Text = "+", Style = Readout, Margin = new Thickness(4, 0, 4, 0), VerticalAlignment = VerticalAlignment.Center });
+            var chip = new Border { BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(9), Padding = new Thickness(8, 1, 8, 1) };
+            chip.SetResourceReference(Border.BorderBrushProperty, "Ob.Text");
+            chip.Child = new TextBlock { Text = parts[i].ToUpper(), FontFamily = Mono, FontSize = 10.5 };
+            keys.Children.Add(chip);
+        }
+        keys.Children.Add(new TextBlock { Text = "→ START", Style = Readout, Margin = new Thickness(6, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center });
+        DockPanel.SetDock(keys, Dock.Right);
+        head.Children.Add(keys);
+        head.Children.Add(new TextBlock { Text = "SIGNAL PATH", Style = Readout, VerticalAlignment = VerticalAlignment.Center });
+        DockPanel.SetDock(head, Dock.Top);
+        root.Children.Add(head);
+
+        var foot = new DockPanel { Margin = new Thickness(0, 4, 0, 0) };
+        var unload = new TextBlock { Text = unloadNote.ToUpper(), FontFamily = Mono, FontSize = 10.5, FontWeight = FontWeights.Bold };
+        unload.SetResourceReference(TextBlock.ForegroundProperty, unloadNote.StartsWith("Unload in") ? "Ob.Accent" : "Ob.Muted");
+        DockPanel.SetDock(unload, Dock.Right);
+        foot.Children.Add(unload);
+        foot.Children.Add(new TextBlock { Text = "CLICK A NODE TO OPEN ITS SETTINGS", Style = Readout });
+        DockPanel.SetDock(foot, Dock.Bottom);
+        root.Children.Add(foot);
+
+        var c = new Canvas { Width = PathWidth, Height = PathHeight };
+        double X(int i) => 90 + i * (PathWidth - 180) / (nodes.Length - 1);
+
+        var line = new Line { X1 = X(0), Y1 = PathY, X2 = X(nodes.Length - 1), Y2 = PathY, StrokeThickness = 1 };
+        line.SetResourceReference(Shape.StrokeProperty, "Ob.Text");
+        c.Children.Add(line);
+        for (var i = 0; i < nodes.Length - 1; i++)
+        {
+            // An arrowhead halfway to the next node
+            var mid = (X(i) + X(i + 1)) / 2;
+            var arrow = new Polyline { Points = new PointCollection { new(mid - 3, PathY - 4), new(mid + 3, PathY), new(mid - 3, PathY + 4) }, StrokeThickness = 1 };
+            arrow.SetResourceReference(Shape.StrokeProperty, "Ob.Text");
+            c.Children.Add(arrow);
+        }
+
+        // Read aloud: a dashed branch from the insert node, down and back under the AI node
+        var last = X(nodes.Length - 1);
+        var pillX = X(nodes.Length - 2);
+        var branch = new Polyline
+        {
+            Points = new PointCollection { new(last, PathY + NodeRadius), new(last, 172), new(pillX + 80, 172) },
+            StrokeThickness = 1, StrokeDashArray = new DoubleCollection { 3, 3 },
         };
-        card.MouseLeftButtonUp += (_, _) => open();
-        return card;
+        branch.SetResourceReference(Shape.StrokeProperty, readsAloud ? "Ob.Text" : "Ob.Muted");
+        c.Children.Add(branch);
+        var pill = new Border
+        {
+            BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(11), Padding = new Thickness(12, 3, 12, 3),
+            Cursor = Cursors.Hand, ToolTip = $"Read aloud: {voice.Title} ({voice.Status})" + (readsAloud ? " — this profile reads each dictation aloud" : ""),
+        };
+        pill.SetResourceReference(Border.BorderBrushProperty, "Ob.Text");
+        pill.SetResourceReference(Border.BackgroundProperty, "Ob.Window");
+        var pillText = new StackPanel { Orientation = Orientation.Horizontal };
+        pillText.Children.Add(Node(voice.State, small: true));
+        pillText.Children.Add(new TextBlock
+        {
+            Text = $"{voice.Label} // {voice.Title} // {voice.Status}".ToUpper(), FontFamily = Mono, FontSize = 10,
+            Margin = new Thickness(7, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center,
+        });
+        pill.Child = pillText;
+        pill.MouseLeftButtonUp += (_, e) => { e.Handled = true; voice.Open(); };
+        pill.Loaded += (_, _) =>
+        {
+            Canvas.SetLeft(pill, pillX + 80 - pill.ActualWidth);
+            Canvas.SetTop(pill, 172 - pill.ActualHeight / 2);
+        };
+        Canvas.SetLeft(pill, pillX - 120);
+        Canvas.SetTop(pill, 161);
+        c.Children.Add(pill);
+
+        for (var i = 0; i < nodes.Length; i++) c.Children.Add(PathStep(nodes[i], X(i), first: i == 0));
+
+        root.Children.Add(new Viewbox { Stretch = Stretch.Uniform, Child = c });
+        return root;
     }
 
-    static FrameworkElement Node(Dot dot)
+    /// <summary>A node of the signal path with its label above and its model and status below; the whole column is the
+    /// click target.</summary>
+    FrameworkElement PathStep(PathNode n, double x, bool first)
     {
-        var g = new Grid { Width = 16, Height = 16, VerticalAlignment = VerticalAlignment.Center };
+        const double w = 190;
+        var col = new Grid { Width = w, Height = PathHeight - 16, Background = Brushes.Transparent, Cursor = Cursors.Hand, ToolTip = $"{n.Title}: {n.Status}" };
+        var label = new TextBlock
+        {
+            Text = n.Label, FontFamily = Mono, FontSize = 11, FontWeight = FontWeights.Bold, HorizontalAlignment = HorizontalAlignment.Center,
+            Margin = new Thickness(0, PathY - 50, 0, 0), VerticalAlignment = VerticalAlignment.Top,
+        };
+        col.Children.Add(label);
+
+        var dial = new Canvas { Width = 80, Height = 80, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, PathY - 40, 0, 0) };
+        for (var k = 0; k < 12; k++)
+        {
+            var a = k / 12.0 * Math.PI * 2;
+            var tick = new Ellipse { Width = 2, Height = 2, Opacity = 0.5 };
+            tick.SetResourceReference(Shape.FillProperty, "Ob.Text");
+            Canvas.SetLeft(tick, 40 + Math.Cos(a) * 30 - 1);
+            Canvas.SetTop(tick, 40 + Math.Sin(a) * 30 - 1);
+            dial.Children.Add(tick);
+        }
+        var ring = new Ellipse { Width = NodeRadius * 2, Height = NodeRadius * 2, StrokeThickness = 1 };
+        ring.SetResourceReference(Shape.StrokeProperty, n.State == Dot.Busy ? "Ob.Accent" : "Ob.Text");
+        ring.SetResourceReference(Shape.FillProperty, "Ob.Window");
+        Canvas.SetLeft(ring, 40 - NodeRadius);
+        Canvas.SetTop(ring, 40 - NodeRadius);
+        dial.Children.Add(ring);
+        var size = first ? 12 : 8;
+        var core = new Ellipse { Width = size, Height = size };
+        if (n.State == Dot.Off)
+        {
+            core.StrokeThickness = 1;
+            core.SetResourceReference(Shape.StrokeProperty, "Ob.Muted");
+        }
+        else core.SetResourceReference(Shape.FillProperty, n.State == Dot.Busy ? "Ob.Accent" : "Ob.Strong");
+        Canvas.SetLeft(core, 40 - size / 2.0);
+        Canvas.SetTop(core, 40 - size / 2.0);
+        dial.Children.Add(core);
+        col.Children.Add(dial);
+
+        var below = new StackPanel { VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, PathY + 36, 0, 0) };
+        var title = new TextBlock
+        {
+            Text = n.Title.ToUpper(), FontFamily = Mono, FontSize = 10.5, HorizontalAlignment = HorizontalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = w - 8,
+        };
+        below.Children.Add(title);
+        var status = new TextBlock
+        {
+            Text = n.Status.ToUpper(), FontFamily = Mono, FontSize = 9.5, HorizontalAlignment = HorizontalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = w - 8, Margin = new Thickness(0, 2, 0, 0),
+        };
+        status.SetResourceReference(TextBlock.ForegroundProperty, n.State == Dot.Busy ? "Ob.Accent" : "Ob.Muted");
+        below.Children.Add(status);
+        col.Children.Add(below);
+
+        col.MouseLeftButtonUp += (_, e) => { e.Handled = true; n.Open(); };
+        Canvas.SetLeft(col, x - w / 2);
+        Canvas.SetTop(col, 0);
+        return col;
+    }
+
+    static FrameworkElement Node(Dot dot, bool small = false)
+    {
+        var g = new Grid { Width = small ? 11 : 16, Height = small ? 11 : 16, VerticalAlignment = VerticalAlignment.Center };
         var ring = new Ellipse { StrokeThickness = 1 };
         ring.SetResourceReference(Shape.StrokeProperty, dot == Dot.Busy ? "Ob.Accent" : "Ob.Text");
         g.Children.Add(ring);
