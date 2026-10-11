@@ -1,16 +1,52 @@
-# Oberton
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/dashboard-dark.png">
+    <img src="docs/images/dashboard-light.png" alt="The Oberton dashboard: the signal path from microphone to speech model, AI model and insert, meters for today's words, and charts of words per day and per app" width="100%">
+  </picture>
+</p>
 
-A fully local, AI-assisted dictation app for Windows. (Formerly *Local Dictation*.)
+<h1 align="center"><code>OBERTON</code> &nbsp;倍音</h1>
 
-The name is German for *overtone*: the AI adds a layer of polish on top of your own voice.
+<p align="center">
+  <b>LOCAL DICTATION // READ ALOUD // WINDOWS</b><br>
+  <sub>The name is German for <i>overtone</i>: the AI adds a layer of polish on top of your own voice. (Formerly <i>Local Dictation</i>.)</sub>
+</p>
 
-**Press a hotkey → speak → press it again → cleaned-up text appears at your cursor, in any app.**
-**Select text → press `Ctrl+Shift+Space` → hear it read aloud by a natural local voice.**
+<p align="center">
+  <a href="https://github.com/silent-diffusion/dictation/releases/latest"><b>DOWNLOAD THE LATEST RELEASE →</b></a>
+</p>
 
-* Speech recognition: Whisper (via faster-whisper), GPU-accelerated on NVIDIA cards, CPU everywhere else.
-* Cleanup: a small local language model (default `qwen2.5:3b`) served by Ollama, driven by editable **profiles**.
-* Everything runs on your PC: *Keep everything offline* is on by default. Cloud models (Anthropic's Claude, OpenAI and
-  compatible services) are optional, per profile, with your own API key. No accounts, analytics or telemetry.
+| `01 // DICTATE` | `02 // READ ALOUD` | `03 // STAYS ON YOUR PC` |
+|---|---|---|
+| Press **`Ctrl+Space`**, speak, press it again: cleaned-up text appears at your cursor, in any app. | Select text, press **`Ctrl+Shift+Space`**: a natural local voice reads it, from 0.25× to 4×. | *Keep everything offline* is on by default. No accounts, analytics or telemetry. |
+
+```
+MIC ──→ SPEECH ──→ AI ──→ INSERT
+        Whisper    qwen2.5:3b    at the cursor
+                   (profiles)      ┆
+                                   └┄┄ READ ALOUD  Kokoro · Piper · Windows voices
+```
+
+* **Speech recognition:** Whisper (via faster-whisper), GPU-accelerated on NVIDIA cards, CPU everywhere else.
+* **Cleanup:** a small local language model (default `qwen2.5:3b`) served by Ollama, driven by editable **profiles**.
+* **Optional cloud:** cloud models (Anthropic's Claude, OpenAI and compatible services) can be chosen per profile, with
+  your own API key.
+
+### `DICTATING`
+
+<img src="docs/images/dictation.png" alt="Dictating into an email: the live words appear above the recording pill as you speak; clicking the pill after it inserts shows the transcription, the AI edit with removed words struck through and added words highlighted, and the inserted text, each with a Copy button" width="100%">
+
+<sub>While you talk, the overlay shows the live transcript under a red recording dot. Click it afterwards for the
+three boxes: what you said, what the AI changed (with the text around your cursor in grey-blue), and what went in.</sub>
+
+### `READING ALOUD`
+
+<img src="docs/images/read-aloud.png" alt="The read-aloud player over a Notepad window: the text being read with the current word highlighted, a progress line, back and forward 15 seconds, play and pause, speed controls and the speed menu from 0.25× to 4×" width="100%">
+
+<sub>The player follows along word by word. Click a word to read from there; click the speed for the menu.</sub>
+
+<sub><i>These pictures are drawn from the app's own colours, type and layout (<code>docs/images/screens.html</code>)
+with example figures; they are illustrations, not captures of a real session.</i></sub>
 
 ---
 
@@ -25,7 +61,7 @@ The name is German for *overtone*: the AI adds a layer of polish on top of your 
 |---|---|---|
 | Download | ~5.5 GB | ~3 GB |
 | Speech model | `large-v3-turbo` | `small.en` |
-| Typical wait after you stop talking (20 s of speech) | **~1-2.5 s** | **~8 s** (measured on a Ryzen 7 5800HS) |
+| Typical wait after you stop talking (20 s of speech) | **~1-2.5 s** | **~8 s** (on a recent 8-core laptop CPU) |
 
 Then click into any text field, press **Ctrl+Space**, talk, and press **Ctrl+Space** again.
 The app lives in the system tray; closing the window keeps it running.
