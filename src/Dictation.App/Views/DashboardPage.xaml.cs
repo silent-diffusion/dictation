@@ -219,7 +219,9 @@ public partial class DashboardPage : UserControl
     /// <summary>One step of the signal path: what it is, the model or device, and how it is doing.</summary>
     sealed record PathNode(string Label, string Title, string Status, Dot State, Action Open);
 
-    const double PathWidth = 900, PathHeight = 200, PathY = 86, NodeRadius = 22;
+    // Drawn at this height and as wide as the cell's shape asks for, then scaled to the cell: it always fills it.
+    double _pathWidth = 900;
+    const double PathHeight = 210, PathY = 92, NodeRadius = 22, BranchY = 188, StepWidth = 230;
 
     /// <summary>
     /// The signal path, drawn like an instrument diagram at a fixed design size and scaled to the cell: a line through
@@ -239,78 +241,95 @@ public partial class DashboardPage : UserControl
             if (i > 0) keys.Children.Add(new TextBlock { Text = "+", Style = Readout, Margin = new Thickness(4, 0, 4, 0), VerticalAlignment = VerticalAlignment.Center });
             var chip = new Border { BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(9), Padding = new Thickness(8, 1, 8, 1) };
             chip.SetResourceReference(Border.BorderBrushProperty, "Ob.Text");
-            chip.Child = new TextBlock { Text = parts[i].ToUpper(), FontFamily = Mono, FontSize = 10.5 };
+            chip.Child = new TextBlock { Text = parts[i].ToUpper(), FontFamily = Mono, FontSize = 12 };
             keys.Children.Add(chip);
         }
-        keys.Children.Add(new TextBlock { Text = "→ START", Style = Readout, Margin = new Thickness(6, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center });
+        keys.Children.Add(new TextBlock { Text = "→ START", Style = Readout, FontSize = 12, Margin = new Thickness(6, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center });
         DockPanel.SetDock(keys, Dock.Right);
         head.Children.Add(keys);
-        head.Children.Add(new TextBlock { Text = "SIGNAL PATH", Style = Readout, VerticalAlignment = VerticalAlignment.Center });
+        head.Children.Add(new TextBlock { Text = "SIGNAL PATH", Style = Readout, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
         DockPanel.SetDock(head, Dock.Top);
         root.Children.Add(head);
 
         var foot = new DockPanel { Margin = new Thickness(0, 4, 0, 0) };
-        var unload = new TextBlock { Text = unloadNote.ToUpper(), FontFamily = Mono, FontSize = 10.5, FontWeight = FontWeights.Bold };
+        var unload = new TextBlock { Text = unloadNote.ToUpper(), FontFamily = Mono, FontSize = 12, FontWeight = FontWeights.Bold };
         unload.SetResourceReference(TextBlock.ForegroundProperty, unloadNote.StartsWith("Unload in") ? "Ob.Accent" : "Ob.Muted");
         DockPanel.SetDock(unload, Dock.Right);
         foot.Children.Add(unload);
-        foot.Children.Add(new TextBlock { Text = "CLICK A NODE TO OPEN ITS SETTINGS", Style = Readout });
+        foot.Children.Add(new TextBlock { Text = "CLICK A NODE TO OPEN ITS SETTINGS", Style = Readout, FontSize = 12 });
         DockPanel.SetDock(foot, Dock.Bottom);
         root.Children.Add(foot);
 
-        var c = new Canvas { Width = PathWidth, Height = PathHeight };
-        double X(int i) => 90 + i * (PathWidth - 180) / (nodes.Length - 1);
-
-        var line = new Line { X1 = X(0), Y1 = PathY, X2 = X(nodes.Length - 1), Y2 = PathY, StrokeThickness = 1 };
-        line.SetResourceReference(Shape.StrokeProperty, "Ob.Text");
-        c.Children.Add(line);
-        for (var i = 0; i < nodes.Length - 1; i++)
+        Canvas Draw(double width)
         {
-            // An arrowhead halfway to the next node
-            var mid = (X(i) + X(i + 1)) / 2;
-            var arrow = new Polyline { Points = new PointCollection { new(mid - 3, PathY - 4), new(mid + 3, PathY), new(mid - 3, PathY + 4) }, StrokeThickness = 1 };
-            arrow.SetResourceReference(Shape.StrokeProperty, "Ob.Text");
-            c.Children.Add(arrow);
+            var c = new Canvas { Width = width, Height = PathHeight };
+            double X(int i) => StepWidth / 2 + i * (width - StepWidth / 2 - 150) / (nodes.Length - 1);
+
+            var line = new Line { X1 = X(0), Y1 = PathY, X2 = X(nodes.Length - 1), Y2 = PathY, StrokeThickness = 1 };
+            line.SetResourceReference(Shape.StrokeProperty, "Ob.Text");
+            c.Children.Add(line);
+            for (var i = 0; i < nodes.Length - 1; i++)
+            {
+                // An arrowhead halfway to the next node
+                var mid = (X(i) + X(i + 1)) / 2;
+                var arrow = new Polyline { Points = new PointCollection { new(mid - 3, PathY - 4), new(mid + 3, PathY), new(mid - 3, PathY + 4) }, StrokeThickness = 1 };
+                arrow.SetResourceReference(Shape.StrokeProperty, "Ob.Text");
+                c.Children.Add(arrow);
+            }
+
+            // Read aloud: a dashed branch from the insert node, down and back under the AI node
+            var last = X(nodes.Length - 1);
+            var pillX = X(nodes.Length - 2);
+            var branch = new Polyline
+            {
+                Points = new PointCollection { new(last + NodeRadius, PathY), new(last + 90, PathY), new(last + 90, BranchY), new(pillX + 80, BranchY) },
+                StrokeThickness = 1, StrokeDashArray = new DoubleCollection { 3, 3 },
+            };
+            branch.SetResourceReference(Shape.StrokeProperty, readsAloud ? "Ob.Text" : "Ob.Muted");
+            c.Children.Add(branch);
+            var pill = new Border
+            {
+                BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(11), Padding = new Thickness(14, 4, 14, 4),
+                Cursor = Cursors.Hand, ToolTip = $"Read aloud: {voice.Title} ({voice.Status})" + (readsAloud ? " — this profile reads each dictation aloud" : ""),
+            };
+            pill.SetResourceReference(Border.BorderBrushProperty, "Ob.Text");
+            pill.SetResourceReference(Border.BackgroundProperty, "Ob.Window");
+            var pillText = new StackPanel { Orientation = Orientation.Horizontal };
+            pillText.Children.Add(Node(voice.State, small: true));
+            pillText.Children.Add(new TextBlock
+            {
+                Text = $"{voice.Label} // {voice.Title} // {voice.Status}".ToUpper(), FontFamily = Mono, FontSize = 12.5,
+                Margin = new Thickness(7, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center,
+            });
+            pill.Child = pillText;
+            pill.MouseLeftButtonUp += (_, e) => { e.Handled = true; voice.Open(); };
+            pill.Loaded += (_, _) =>
+            {
+                Canvas.SetLeft(pill, pillX + 80 - pill.ActualWidth);
+                Canvas.SetTop(pill, BranchY - pill.ActualHeight / 2);
+            };
+            Canvas.SetLeft(pill, pillX - 120);
+            Canvas.SetTop(pill, BranchY - 13);
+            c.Children.Add(pill);
+
+            for (var i = 0; i < nodes.Length; i++) c.Children.Add(PathStep(nodes[i], X(i), first: i == 0));
+            return c;
         }
 
-        // Read aloud: a dashed branch from the insert node, down and back under the AI node
-        var last = X(nodes.Length - 1);
-        var pillX = X(nodes.Length - 2);
-        var branch = new Polyline
+        // Redrawn to the cell's own proportions whenever it resizes, so the scaled drawing fills it edge to edge instead
+        // of shrinking to fit a fixed shape (and its text with it).
+        var view = new Viewbox { Stretch = Stretch.Uniform, Child = Draw(_pathWidth) };
+        var host = new Border { Background = Brushes.Transparent, Child = view };
+        host.SizeChanged += (_, e) =>
         {
-            Points = new PointCollection { new(last, PathY + NodeRadius), new(last, 172), new(pillX + 80, 172) },
-            StrokeThickness = 1, StrokeDashArray = new DoubleCollection { 3, 3 },
+            if (e.NewSize.Width < 1 || e.NewSize.Height < 1) return;
+            var width = Math.Clamp(PathHeight * e.NewSize.Width / e.NewSize.Height, 4 * StepWidth, 2400);
+            if (view.Child is Canvas { Width: var drawn } && Math.Abs(drawn - width) < 1) return;
+            _pathWidth = width; // the next refresh starts at this shape, so it doesn't flicker
+            view.Child = Draw(width);
         };
-        branch.SetResourceReference(Shape.StrokeProperty, readsAloud ? "Ob.Text" : "Ob.Muted");
-        c.Children.Add(branch);
-        var pill = new Border
-        {
-            BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(11), Padding = new Thickness(12, 3, 12, 3),
-            Cursor = Cursors.Hand, ToolTip = $"Read aloud: {voice.Title} ({voice.Status})" + (readsAloud ? " — this profile reads each dictation aloud" : ""),
-        };
-        pill.SetResourceReference(Border.BorderBrushProperty, "Ob.Text");
-        pill.SetResourceReference(Border.BackgroundProperty, "Ob.Window");
-        var pillText = new StackPanel { Orientation = Orientation.Horizontal };
-        pillText.Children.Add(Node(voice.State, small: true));
-        pillText.Children.Add(new TextBlock
-        {
-            Text = $"{voice.Label} // {voice.Title} // {voice.Status}".ToUpper(), FontFamily = Mono, FontSize = 10,
-            Margin = new Thickness(7, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center,
-        });
-        pill.Child = pillText;
-        pill.MouseLeftButtonUp += (_, e) => { e.Handled = true; voice.Open(); };
-        pill.Loaded += (_, _) =>
-        {
-            Canvas.SetLeft(pill, pillX + 80 - pill.ActualWidth);
-            Canvas.SetTop(pill, 172 - pill.ActualHeight / 2);
-        };
-        Canvas.SetLeft(pill, pillX - 120);
-        Canvas.SetTop(pill, 161);
-        c.Children.Add(pill);
 
-        for (var i = 0; i < nodes.Length; i++) c.Children.Add(PathStep(nodes[i], X(i), first: i == 0));
-
-        root.Children.Add(new Viewbox { Stretch = Stretch.Uniform, Child = c });
+        root.Children.Add(host);
         return root;
     }
 
@@ -318,12 +337,12 @@ public partial class DashboardPage : UserControl
     /// click target.</summary>
     FrameworkElement PathStep(PathNode n, double x, bool first)
     {
-        const double w = 190;
+        const double w = StepWidth;
         var col = new Grid { Width = w, Height = PathHeight - 16, Background = Brushes.Transparent, Cursor = Cursors.Hand, ToolTip = $"{n.Title}: {n.Status}" };
         var label = new TextBlock
         {
-            Text = n.Label, FontFamily = Mono, FontSize = 11, FontWeight = FontWeights.Bold, HorizontalAlignment = HorizontalAlignment.Center,
-            Margin = new Thickness(0, PathY - 50, 0, 0), VerticalAlignment = VerticalAlignment.Top,
+            Text = n.Label, FontFamily = Mono, FontSize = 15, FontWeight = FontWeights.Bold, HorizontalAlignment = HorizontalAlignment.Center,
+            Margin = new Thickness(0, PathY - 64, 0, 0), VerticalAlignment = VerticalAlignment.Top,
         };
         col.Children.Add(label);
 
@@ -356,16 +375,16 @@ public partial class DashboardPage : UserControl
         dial.Children.Add(core);
         col.Children.Add(dial);
 
-        var below = new StackPanel { VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, PathY + 36, 0, 0) };
+        var below = new StackPanel { VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, PathY + 38, 0, 0) };
         var title = new TextBlock
         {
-            Text = n.Title.ToUpper(), FontFamily = Mono, FontSize = 10.5, HorizontalAlignment = HorizontalAlignment.Center,
+            Text = n.Title.ToUpper(), FontFamily = Mono, FontSize = 13.5, HorizontalAlignment = HorizontalAlignment.Center,
             TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = w - 8,
         };
         below.Children.Add(title);
         var status = new TextBlock
         {
-            Text = n.Status.ToUpper(), FontFamily = Mono, FontSize = 9.5, HorizontalAlignment = HorizontalAlignment.Center,
+            Text = n.Status.ToUpper(), FontFamily = Mono, FontSize = 12, HorizontalAlignment = HorizontalAlignment.Center,
             TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = w - 8, Margin = new Thickness(0, 2, 0, 0),
         };
         status.SetResourceReference(TextBlock.ForegroundProperty, n.State == Dot.Busy ? "Ob.Accent" : "Ob.Muted");
