@@ -87,6 +87,53 @@ public sealed record InsertionContext(string Before, string After)
     /// user sees nothing while this is checked (as often as needed).</summary>
     public static Task<bool> IsBeforeCaretAsync(string expected, TimeSpan timeout) => RunBounded(expected, timeout, select: false);
 
+    /// <summary>What the focused control shows right before the caret, compared with what live dictation typed.</summary>
+    public enum LiveText
+    {
+        /// <summary>Exactly the typed text: it can be selected and replaced.</summary>
+        Matches,
+        /// <summary>The app doesn't show its text through UI Automation (terminals, many Electron apps), is too slow to,
+        /// or shows the same words with different spacing or line breaks: nothing says the user changed it.</summary>
+        Unreadable,
+        /// <summary>Different words: the user (or the app) changed it, so it must not be touched.</summary>
+        Differs,
+    }
+
+    public static async Task<LiveText> CheckBeforeCaretAsync(string expected, TimeSpan timeout)
+    {
+        var read = Task.Run(() => CheckBeforeCaret(expected));
+        return await Task.WhenAny(read, Task.Delay(timeout)) == read ? read.Result : LiveText.Unreadable;
+    }
+
+    static LiveText CheckBeforeCaret(string expected)
+    {
+        try
+        {
+            var focused = AutomationElement.FocusedElement;
+            if (focused == null || !focused.TryGetCurrentPattern(TextPattern.Pattern, out var p)) return LiveText.Unreadable;
+            var selection = ((TextPattern)p).GetSelection();
+            if (selection.Length == 0) return LiveText.Unreadable;
+            var range = selection[0].Clone();
+            range.MoveEndpointByRange(TextPatternRangeEndpoint.Start, range, TextPatternRangeEndpoint.End); // collapse to the caret
+            range.MoveEndpointByUnit(TextPatternRangeEndpoint.Start, TextUnit.Character, -expected.Length);
+            var text = range.GetText(expected.Length + 16);
+            if (SameText(text, expected)) return LiveText.Matches;
+            if (Visible(text).Trim().Length == 0 || Letters(text) == Letters(expected)) return LiveText.Unreadable;
+            // Some apps count characters differently (line breaks, emoji); look a little further back for the words.
+            range.MoveEndpointByUnit(TextPatternRangeEndpoint.Start, TextUnit.Character, -16);
+            var wider = Letters(range.GetText(expected.Length + 48));
+            return wider.EndsWith(Letters(expected), StringComparison.Ordinal) ? LiveText.Unreadable : LiveText.Differs;
+        }
+        catch (Exception e)
+        {
+            Log.Info("Could not read the live text: " + e.GetType().Name);
+            return LiveText.Unreadable;
+        }
+    }
+
+    /// <summary>Only the letters and digits, lower-cased: the words, whatever the spacing and punctuation styles.</summary>
+    static string Letters(string s) => new(s.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
+
     static async Task<bool> RunBounded(string expected, TimeSpan timeout, bool select)
     {
         // A check that times out keeps running in the background; it must not select anything after its caller has
