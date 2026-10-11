@@ -56,11 +56,12 @@ The folder keeps its pre-rename name so updates from Local Dictation 1.x keep yo
 
 ## Using it
 
-The sidebar has five sections: **Dashboard** (one screen, no scrolling: the signal path of what's active and loaded
-(profile → speech recognition → AI cleanup → read aloud), meters for words dictated and words read aloud today, turnaround,
+The sidebar has five sections: **Dashboard** (one screen, no scrolling: the signal path, drawn as a diagram of what's active and loaded
+(microphone → speech model → AI model and profile → insert, with read aloud branching off; each node's status, the hotkey and
+the unload countdown), meters for words dictated and words read aloud today, turnaround,
 AI edits kept, history and the speech model's unload countdown, and charts of words per day (dictated and read aloud, side by side) and
-the apps you dictate into; the signal path's text grows with the window. Every step, meter and chart opens its page when
-clicked (History, the profiles, Models, Model unloading); the big number on the speech-model meter unloads that model
+the apps you dictate into; the signal path grows with the window. Every step, meter and chart opens its page when
+clicked (History, the profiles, Models, Microphone, Model unloading); the big number on the speech-model meter unloads that model
 right away, and the big number on the History meter copies the last dictation's AI edit (or its text, without one) and says so. The figures come from daily counts in
 `data\usage.json` (dictations, words, seconds spoken, turnaround, AI edits kept, readings and dictations per app name; never
 any text, audio or window titles), so they survive History being trimmed, cleared or off), **Speech to text** (profiles), **Read aloud**, **History** and **Settings**. The menu button
