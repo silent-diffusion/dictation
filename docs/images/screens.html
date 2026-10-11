@@ -1,0 +1,288 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Oberton screens</title>
+<style>
+/* Illustrations of Oberton's screens for the README, drawn with the app's own palette (Themes/Light.xaml, Dark.xaml),
+   type (Cascadia Mono for the interface, a sans for prose) and layout. Example figures only. */
+:root{--mono:"Cascadia Mono",Consolas,monospace;--sans:"Segoe UI","Liberation Sans","DejaVu Sans",sans-serif;--jp:"Yu Gothic UI","IPAGothic",sans-serif}
+.light{--paper:#E8E7E3;--ink:#0D0D0C;--muted:#5C5B57;--hair:rgba(13,13,12,.22);--hair2:rgba(13,13,12,.10);--acc:#2340FF;--rec:#E3261A}
+.dark{--paper:#0E0E0D;--ink:#E8E7E3;--muted:#8F8D87;--hair:rgba(232,231,227,.24);--hair2:rgba(232,231,227,.10);--acc:#7F8DFF;--rec:#FF4636}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:transparent}
+body{font:13px/1.45 var(--mono);-webkit-font-smoothing:antialiased}
+.shot{display:none}
+.shot.on{display:block}
+.lbl{font:500 10px/1.3 var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.jp{font-family:var(--jp);font-weight:700;color:var(--muted)}
+.acc{color:var(--acc)}
+
+/* ---------- main window ---------- */
+.win{width:1200px;height:740px;background:var(--paper);color:var(--ink);border:1px solid var(--ink);border-radius:8px;overflow:hidden;
+  display:grid;grid-template-columns:232px 1fr}
+.side{border-right:1px solid var(--ink);display:flex;flex-direction:column}
+.brand{display:flex;align-items:center;gap:10px;padding:16px 16px 14px;border-bottom:1px solid var(--hair)}
+.mark{width:26px;height:26px;background:var(--ink);border-radius:4px;display:grid;place-items:center}
+.mark i{width:8px;height:8px;border-radius:50%;background:var(--paper)}
+.mark.live i{background:var(--rec)}
+.brand b{font:700 14px var(--mono)}
+.brand .jp{margin-left:auto;font-size:10.5px;font-weight:400}
+.nav{display:grid;padding:12px 10px;gap:3px}
+.nav a{display:flex;align-items:center;gap:10px;height:36px;padding:0 14px;border-radius:999px;font:500 11.5px var(--mono);letter-spacing:.05em}
+.nav a.on{background:var(--ink);color:var(--paper)}
+.nav a .jp{margin-left:auto;font-size:10px;font-weight:400;opacity:.7;color:inherit}
+.grow{flex:1}
+.sys{border-top:1px solid var(--hair);padding:14px 16px;display:grid;gap:6px;font-size:11.5px}
+.sys .r{display:flex;align-items:center;gap:8px}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--ink);flex:none}
+.dot.busy{background:var(--acc)}
+.sys .priv{margin-top:6px;padding-top:10px;border-top:1px solid var(--hair2);font:500 9.5px/1.5 var(--mono);letter-spacing:.05em;color:var(--muted)}
+
+.main{padding:22px 30px 16px;display:grid;grid-template-rows:auto 1fr auto;min-width:0}
+.title{display:flex;align-items:flex-end;gap:12px}
+.title h1{font:800 30px/1 var(--mono);letter-spacing:-.02em}
+.title .jp{font-size:26px;color:var(--hair);line-height:1}
+.title .clock{margin-left:auto}
+.rule{height:1px;background:var(--ink);margin:8px 0 6px}
+.summary{font:12.5px var(--sans);color:var(--muted);margin-bottom:14px}
+.panel{border-top:1px solid var(--hair);border-left:1px solid var(--hair);display:grid;grid-template-rows:auto auto 1fr;min-height:0;overflow:hidden}
+.cell{border-right:1px solid var(--hair);border-bottom:1px solid var(--hair);padding:12px 16px;min-width:0;position:relative}
+.head{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.key{border:1px solid var(--ink);border-radius:999px;padding:1px 8px;font-size:10.5px}
+.foot{font-size:10.5px;letter-spacing:.05em}
+
+.pathsvg{width:100%;height:160px;display:block}
+.meters{display:grid;grid-template-columns:repeat(6,1fr)}
+.meter{display:grid;justify-items:center;align-content:center;gap:2px;padding:8px}
+.ringbox{position:relative;width:120px;height:100px}.meter .v{font:700 19px/1 var(--mono);position:absolute;left:0;right:0;top:41px;text-align:center}
+.meter .n{font:11px var(--sans);color:var(--muted);margin-top:4px}
+.meter .s{font:10px var(--sans);color:var(--muted)}
+.charts{display:grid;grid-template-columns:1.6fr 1fr}
+.bars{display:flex;align-items:flex-end;gap:6px;height:150px;margin-top:10px;border-bottom:1px solid var(--hair)}
+.bars div{flex:1;display:flex;gap:2px;align-items:flex-end;height:100%}
+.bars i{flex:1;background:var(--ink);border-radius:2px 2px 0 0;display:block}
+.bars i.r{opacity:.45}
+.bars div.today i:first-child{background:var(--acc)}
+.ticks{display:flex;gap:6px;margin-top:4px}
+.ticks span{flex:1;text-align:center;font-size:9.5px;color:var(--muted)}
+.ticks span.t{color:var(--ink);font-weight:700}
+.key2{display:flex;gap:16px;margin-top:4px;font:11px var(--sans);color:var(--muted)}
+.key2 i{display:inline-block;width:10px;height:10px;border-radius:2px;background:var(--ink);margin-right:6px;vertical-align:-1px}
+.apps{display:grid;gap:9px;margin-top:12px}
+.app{display:grid;grid-template-columns:92px 1fr 28px;gap:10px;align-items:center;font:12px var(--sans)}
+.app b{display:block;height:8px;border-radius:4px;background:var(--ink)}
+.app:first-child b{background:var(--acc)}
+.app em{font-style:normal;color:var(--muted);text-align:right;font-size:11.5px}
+.footer{margin-top:8px}
+
+/* ---------- overlay & reader (always dark) ---------- */
+.desk{width:1200px;height:640px;border-radius:8px;overflow:hidden;position:relative;
+  background:#C9C7C1;font-family:var(--sans)}
+.app-win{position:absolute;left:60px;top:44px;width:760px;height:430px;background:#fff;border-radius:8px;box-shadow:0 10px 40px rgba(0,0,0,.18);overflow:hidden}
+.app-win .bar{height:34px;background:#F3F3F3;border-bottom:1px solid #E2E2E2;display:flex;align-items:center;padding:0 14px;font:12px var(--sans);color:#555}
+.app-win .doc{padding:26px 34px;font:15px/1.7 var(--sans);color:#222}
+.caret{display:inline-block;width:1.5px;height:18px;background:#222;vertical-align:-3px}
+.pill{position:absolute;background:rgba(13,13,12,.88);color:#E8E7E3;border-radius:28px;padding:8px 8px 8px 18px;display:flex;align-items:center;gap:14px;
+  font:500 11px var(--mono);letter-spacing:.05em;box-shadow:0 8px 30px rgba(0,0,0,.25)}
+.pill .rec{width:10px;height:10px;border-radius:50%;background:#FF4636}
+.pill .ghost{border:1px solid rgba(232,231,227,.25);border-radius:999px;padding:5px 12px}
+.pill .jp{color:rgba(232,231,227,.55);font-weight:400;font-size:10px}
+.wave{display:flex;gap:2px;align-items:center;height:18px}
+.wave i{width:2.5px;border-radius:2px;background:#E8E7E3;display:block}
+.live{position:absolute;color:rgba(232,231,227,.6);background:rgba(13,13,12,.88);border-radius:14px;padding:10px 16px;font:12px/1.5 var(--mono);max-width:440px;letter-spacing:.02em}
+.live b{color:#E8E7E3;font-weight:400}
+
+.card{position:absolute;background:rgba(13,13,12,.94);color:#E8E7E3;border-radius:16px;padding:14px 16px;box-shadow:0 10px 40px rgba(0,0,0,.3)}
+.card .h{white-space:nowrap;display:flex;align-items:center;gap:10px;font:500 10.5px var(--mono);letter-spacing:.06em;color:rgba(232,231,227,.6)}
+.card .h b{color:#E8E7E3;font-weight:600}
+.card .h .x{margin-left:auto;border:1px solid rgba(232,231,227,.25);border-radius:999px;padding:2px 10px;color:#E8E7E3}
+.box .bh{display:flex;justify-content:space-between;font:500 10.5px var(--mono);letter-spacing:.06em;color:rgba(232,231,227,.6);margin-bottom:5px}
+.box .bh span:last-child{color:#E8E7E3}
+.box p{font:13.5px/1.55 var(--sans);color:rgba(232,231,227,.85)}
+.sep{height:1px;background:rgba(232,231,227,.22);margin:10px 0}
+.del{text-decoration:line-through;color:rgba(232,231,227,.45)}
+.add{color:#7F8DFF}
+.ctx{color:rgba(159,180,208,.65);font-style:italic}
+.ins{border:1px solid rgba(232,231,227,.25);border-radius:8px;padding:8px 10px;background:rgba(232,231,227,.05)}
+.ins p{color:#E8E7E3;font-size:14px}
+
+.reader{width:520px}
+.reader .text{font:15px/1.55 var(--sans);color:rgba(232,231,227,.45);margin:10px 0 12px;max-height:190px;overflow:hidden}
+.reader .text .done{color:#E8E7E3}
+.reader .text mark{background:none;color:#7F8DFF;font-weight:600}
+.prog{height:2px;background:rgba(232,231,227,.25);position:relative;margin-bottom:12px}
+.prog i{position:absolute;left:0;top:0;bottom:0;width:41%;background:#E8E7E3}
+.ctl{display:flex;align-items:center;gap:8px;font:500 11px var(--mono)}
+.rb{width:30px;height:30px;border-radius:50%;background:rgba(255,255,255,.1);display:grid;place-items:center;font-size:12px}
+.play{width:42px;height:42px;border-radius:50%;background:#E8E7E3;display:grid;place-items:center}
+.play i{width:11px;height:13px;border-left:3.5px solid #161618;border-right:3.5px solid #161618}
+.spd{padding:5px 10px;border-radius:15px;background:rgba(255,255,255,.1)}
+.menu{position:absolute;background:rgba(32,32,36,.96);border:1px solid rgba(255,255,255,.2);border-radius:12px;padding:8px;width:268px}
+.menu .t{font:11px var(--sans);color:rgba(255,255,255,.6);margin:0 0 6px 4px}
+.menu .g{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.menu .g span{height:30px;border-radius:15px;background:rgba(255,255,255,.1);display:grid;place-items:center;font:12px var(--mono)}
+.menu .g span.on{background:#fff;color:#161618}
+</style></head>
+<body>
+
+<!-- ================= 1. Dashboard ================= -->
+<div class="shot" id="dashboard">
+<div class="win">
+  <aside class="side">
+    <div class="brand"><span class="mark"><i></i></span><b>OBERTON</b><span class="jp">倍音</span></div>
+    <nav class="nav">
+      <a class="on">DASHBOARD<span class="jp">計器</span></a>
+      <a>SPEECH TO TEXT<span class="jp">口述</span></a>
+      <a>READ ALOUD<span class="jp">読上</span></a>
+      <a>HISTORY<span class="jp">履歴</span></a>
+      <a>SETTINGS<span class="jp">設定</span></a>
+    </nav>
+    <div class="grow"></div>
+    <div class="sys">
+      <div class="lbl" style="display:flex;justify-content:space-between">ENGINE // STATUS<span class="jp" style="font-weight:400">倍音</span></div>
+      <div class="r"><span class="dot"></span>Speech · large-v3-turbo</div>
+      <div class="r"><span class="dot"></span>AI · qwen2.5:3b</div>
+      <div class="priv">127.0.0.1 // OFFLINE<br>EVERYTHING STAYS ON THIS PC</div>
+    </div>
+  </aside>
+  <section class="main">
+    <div>
+      <div class="title"><h1>DASHBOARD</h1><span class="jp">計器</span><span class="lbl clock">THURSDAY 9 OCTOBER, 14:32</span></div>
+      <div class="rule"></div>
+      <p class="summary">Press Ctrl+Space to dictate with Light Cleanup. Select text and press Ctrl+Shift+Space to hear it.</p>
+    </div>
+    <div class="panel">
+      <div class="cell">
+        <div class="head"><span class="lbl">SIGNAL PATH</span><span class="lbl" style="color:var(--ink);display:flex;gap:4px;align-items:center"><span class="key">CTRL</span>+<span class="key">SPACE</span>&nbsp;→ START</span></div>
+        <svg class="pathsvg" viewBox="0 0 900 185" id="path"></svg>
+        <div class="head foot"><span class="lbl">CLICK A NODE TO OPEN ITS SETTINGS</span><span class="acc" style="font-weight:700">UNLOAD IN 24:12</span></div>
+      </div>
+      <div class="meters" id="meters"></div>
+      <div class="charts">
+        <div class="cell">
+          <div class="head"><span class="lbl">WORDS PER DAY · LAST 14 DAYS</span><span style="font:12px var(--sans);color:var(--muted)">15,912 dictated · 6,204 read aloud · 6-day streak</span></div>
+          <div class="key2"><span><i style="background:var(--ink)"></i>Words dictated</span><span><i style="opacity:.45"></i>Words read aloud</span></div>
+          <div class="bars" id="bars"></div>
+          <div class="ticks" id="ticks"></div>
+        </div>
+        <div class="cell">
+          <div class="head"><span class="lbl">WHERE YOUR WORDS GO</span><span style="font:12px var(--sans);color:var(--muted)">dictations per app · 30 days</span></div>
+          <div class="apps">
+            <div class="app">Outlook<b style="width:100%"></b><em>142</em></div>
+            <div class="app">Word<b style="width:71%"></b><em>101</em></div>
+            <div class="app">Slack<b style="width:52%"></b><em>74</em></div>
+            <div class="app">Chrome<b style="width:33%"></b><em>47</em></div>
+            <div class="app">Notepad<b style="width:12%"></b><em>17</em></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="lbl footer">OBERTON 4.1 // 48,210 WORDS DICTATED IN ALL // EVERYTHING STAYS ON THIS PC // CTRL+ALT+P SWITCHES PROFILE</div>
+  </section>
+</div>
+</div>
+
+<!-- ================= 2. Dictating: live words, then the receipt ================= -->
+<div class="shot" id="overlay">
+<div class="desk">
+  <div class="app-win">
+    <div class="bar">Re: Beta testing plan — Message</div>
+    <div class="doc">Hi all,<br><br>Thanks for the notes on the build. So the plan for Friday is we ship the beta to the first ten testers and<span class="caret"></span></div>
+  </div>
+  <div class="live" style="left:250px;top:500px">SO THE PLAN FOR FRIDAY IS <b>WE SHIP THE BETA TO THE FIRST TEN TESTERS AND</b>▍</div>
+  <div class="pill" style="left:290px;top:570px">
+    <span class="rec"></span><span>00:14</span>
+    <span class="wave" id="wave"></span>
+    <span class="ghost">LIGHT CLEANUP</span><span class="jp">録音</span><span class="ghost">✕ CANCEL</span>
+  </div>
+  <div class="card" style="left:840px;top:44px;width:340px">
+    <div class="h"><b>✓ INSERTED</b><span>OUTLOOK // 17 WORDS</span><span class="x">✕</span></div>
+    <div class="sep"></div>
+    <div class="box"><div class="bh"><span>01 // TRANSCRIPTION</span><span>COPY</span></div>
+      <p>um so the plan for friday is we ship the beta to the uh first ten testers and then we collect feedback</p></div>
+    <div class="sep"></div>
+    <div class="box"><div class="bh"><span>02 // AI EDIT</span><span>COPY</span></div>
+      <p><span class="ctx">Thanks for the notes on the build.</span> <span class="del">um so</span> <span class="add">The</span> plan for <span class="del">friday</span> <span class="add">Friday</span> is <span class="del">we ship</span> <span class="add">to ship</span> the beta to the <span class="del">uh</span> first ten testers<span class="add">,</span> and then <span class="del">we</span> collect feedback<span class="add">.</span></p></div>
+    <div class="sep"></div>
+    <div class="box ins"><div class="bh"><span>03 // INSERTED</span><span>COPY</span></div>
+      <p>The plan for Friday is to ship the beta to the first ten testers, and then collect feedback.</p></div>
+  </div>
+</div>
+</div>
+
+<!-- ================= 3. Read aloud ================= -->
+<div class="shot" id="reader">
+<div class="desk" style="height:560px">
+  <div class="app-win" style="width:700px;height:470px">
+    <div class="bar">Release notes — Notepad</div>
+    <div class="doc"><span style="background:#B4C6FF">The beta goes to the first ten testers on Friday, and we collect feedback through the end of next week. Each tester gets a short survey and a link to report bugs. We will review the results on Monday and decide whether the release is ready.</span></div>
+  </div>
+  <div class="card reader" style="left:640px;top:150px">
+    <div class="h"><b>READING</b><span>KOKORO // HEART</span><span class="x">⌄ ALL</span></div>
+    <div class="text"><span class="done">The beta goes to the first ten testers on Friday, and</span> <mark>we</mark> collect feedback through the end of next week. Each tester gets a short survey and a link to report bugs. We will review the results on Monday and decide whether the release is ready.</div>
+    <div class="prog"><i></i></div>
+    <div class="ctl">
+      <span class="rb">−15</span><span class="play"><i></i></span><span class="rb">+15</span>
+      <span style="margin-left:14px" class="rb">−</span><span class="spd">1.25×</span><span class="rb">+</span>
+      <span style="margin-left:auto;color:rgba(232,231,227,.6)">0:21 LEFT</span>
+    </div>
+  </div>
+  <div class="menu" style="left:745px;top:390px">
+    <div class="t">Speed</div>
+    <div class="g"><span>0.25×</span><span>0.5×</span><span>0.75×</span><span>1×</span><span class="on">1.25×</span><span>1.5×</span><span>1.75×</span><span>2×</span><span>2.5×</span><span>3×</span><span>3.5×</span><span>4×</span></div>
+  </div>
+</div>
+</div>
+
+<script>
+(function(){
+  var NS='http://www.w3.org/2000/svg';
+  function el(t,a,p){var e=document.createElementNS(NS,t);for(var k in a)e.setAttribute(k,a[k]);if(p)p.appendChild(e);return e}
+  var p=document.getElementById('path'), y=70;
+  var nodes=[['MIC','DEFAULT MICROPHONE','READY',0],['SPEECH','LARGE-V3-TURBO','GPU // LOADED',0],['AI','QWEN2.5:3B','LIGHT CLEANUP // LOADED',0],['INSERT','PASTE OR TYPE // LIVE','LAST → OUTLOOK',0]];
+  function X(i){return 80+i*(900-200)/3}
+  el('line',{x1:X(0),y1:y,x2:X(3),y2:y,stroke:'var(--ink)','stroke-width':1},p);
+  for(var i=0;i<3;i++){var m=(X(i)+X(i+1))/2; el('polyline',{points:(m-3)+','+(y-4)+' '+(m+3)+','+y+' '+(m-3)+','+(y+4),fill:'none',stroke:'var(--ink)','stroke-width':1},p);}
+  el('polyline',{points:(X(3)+22)+','+y+' '+(X(3)+90)+','+y+' '+(X(3)+90)+',166 '+(X(2)+80)+',166',fill:'none',stroke:'var(--ink)','stroke-width':1,'stroke-dasharray':'3 3'},p);
+  el('rect',{x:X(2)-150,y:155,width:230,height:22,rx:11,fill:'var(--paper)',stroke:'var(--ink)','stroke-width':1},p);
+  el('circle',{cx:X(2)-136,cy:166,r:4.5,fill:'none',stroke:'var(--ink)'},p);
+  var t=el('text',{x:X(2)-124,y:170,'font-family':'Cascadia Mono, monospace','font-size':10,fill:'var(--ink)'},p);t.textContent='READ ALOUD // HEART // IDLE';
+  nodes.forEach(function(n,i){
+    var x=X(i);
+    for(var k=0;k<12;k++){var a=k/12*Math.PI*2; el('circle',{cx:x+Math.cos(a)*30,cy:y+Math.sin(a)*30,r:1,fill:'var(--ink)',opacity:.5},p);}
+    el('circle',{cx:x,cy:y,r:22,fill:'var(--paper)',stroke:'var(--ink)','stroke-width':1},p);
+    el('circle',{cx:x,cy:y,r:i===0?6:4,fill:'var(--ink)'},p);
+    var l=el('text',{x:x,y:y-42,'text-anchor':'middle','font-family':'Cascadia Mono, monospace','font-size':11,'font-weight':700,fill:'var(--ink)'},p);l.textContent=n[0];
+    var a1=el('text',{x:x,y:y+50,'text-anchor':'middle','font-family':'Cascadia Mono, monospace','font-size':10.5,fill:'var(--ink)'},p);a1.textContent=n[1];
+    var a2=el('text',{x:x,y:y+64,'text-anchor':'middle','font-family':'Cascadia Mono, monospace','font-size':9.5,fill:'var(--muted)'},p);a2.textContent=n[2];
+  });
+
+  // meters: rings of 32 dots (a fan for turnaround)
+  var M=[[0.56,'1,284','Dictated today','words · best day 2,310',1],[0.4,'512','Read aloud today','words · best day 1,280',0],[0.18,'1.8 s','Turnaround','stop → text in place, 7 days',0,1],[0.86,'86%','AI edits kept','last 30 days',0],[0.72,'36','History','of 50 kept',0],[0.81,'24 min','Speech model','until it unloads',1]];
+  var box=document.getElementById('meters');
+  M.forEach(function(m,j){
+    var c=document.createElement('div');c.className='cell meter';if(j==5)c.style.borderRight='1px solid var(--hair)';
+    var s=document.createElementNS(NS,'svg');s.setAttribute('viewBox','0 0 120 100');s.style.width='120px';s.style.height='100px';
+    if(m[5]){ for(var i=0;i<19;i++){var a=Math.PI+i/18*Math.PI,on=i<=Math.round(m[0]*18);el('line',{x1:60+Math.cos(a)*42,y1:78+Math.sin(a)*42,x2:60+Math.cos(a)*(on?32:36),y2:78+Math.sin(a)*(on?32:36),stroke:on?'var(--ink)':'var(--muted)','stroke-width':on?1.6:1},s);}
+      var na=Math.PI+m[0]*Math.PI; el('line',{x1:60,y1:78,x2:60+Math.cos(na)*38,y2:78+Math.sin(na)*38,stroke:'var(--ink)','stroke-width':1.2},s);}
+    else for(var i=0;i<32;i++){var a=-Math.PI/2+i/32*Math.PI*2,on=i<Math.round(m[0]*32);
+      el('circle',{cx:60+Math.cos(a)*38,cy:50+Math.sin(a)*38,r:on?2.6:1.6,fill:on?(m[4]?'var(--acc)':'var(--ink)'):'none',stroke:on?'none':'var(--muted)','stroke-width':.8},s);}
+    var rb=document.createElement('div');rb.className='ringbox';rb.appendChild(s);c.appendChild(rb);
+    var v=document.createElement('div');v.className='v';v.textContent=m[1];if(m[4])v.style.color='var(--acc)';if(m[5])v.style.top='82px';rb.appendChild(v);
+    var n=document.createElement('div');n.className='n';n.textContent=m[2];c.appendChild(n);
+    var t=document.createElement('div');t.className='s';t.textContent=m[3];c.appendChild(t);
+    box.appendChild(c);
+  });
+
+  var d=[620,980,410,1120,1340,760,0,890,1230,1010,2310,940,1180,1284], r=[200,540,0,300,820,410,0,120,640,220,1280,380,610,512], days=['Fr','Sa','Su','Mo','Tu','We','Th','Fr','Sa','Su','Mo','Tu','We','today'];
+  var b=document.getElementById('bars'),tk=document.getElementById('ticks');
+  d.forEach(function(v,i){var g=document.createElement('div');if(i==13)g.className='today';
+    var a=document.createElement('i');a.style.height=(v/2310*100)+'%';var c=document.createElement('i');c.className='r';c.style.height=(r[i]/2310*100)+'%';
+    g.appendChild(a);g.appendChild(c);b.appendChild(g);var s=document.createElement('span');s.textContent=days[i];if(i==13)s.className='t';tk.appendChild(s);});
+
+  var w=document.getElementById('wave');[6,10,15,8,17,12,5,9,14,18,11,7,13,9,5].forEach(function(h){var i=document.createElement('i');i.style.height=h+'px';w.appendChild(i);});
+
+  var q=new URLSearchParams(location.search), id=q.get('s')||'dashboard';
+  document.body.className=q.get('theme')||'light';
+  document.getElementById(id).classList.add('on');
+})();
+</script>
+</body></html>
