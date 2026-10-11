@@ -31,6 +31,8 @@ public partial class OverlayWindow : Window
     static readonly Brush Muted = Freeze(new SolidColorBrush(Color.FromArgb(0xB3, 0xE8, 0xE7, 0xE3)));
     static readonly Brush DiffRemoved = Freeze(new SolidColorBrush(Color.FromArgb(0x70, 0xE8, 0xE7, 0xE3)));
     static readonly Brush WarnStroke = Paper;
+    /// <summary>The text around the cursor, shown either side of the AI edit: a cool grey-blue, apart from the edit.</summary>
+    static readonly Brush ContextInk = Freeze(new SolidColorBrush(Color.FromArgb(0xA6, 0x9F, 0xB4, 0xD0)));
     static readonly Brush RecordFill = Freeze(new SolidColorBrush(Color.FromRgb(0xFF, 0x46, 0x36)));
 
     /// <summary>The accent, in its dark-paper version (the overlay is dark in both themes): words the AI added, errors,
@@ -341,7 +343,7 @@ public partial class OverlayWindow : Window
     {
         _compareOpen = true;
         BodyText.Visibility = Visibility.Collapsed;
-        FillCompare(r.Raw, r.AiEdit, r.Inserted, r.SafetyNet
+        FillCompare(r.Raw, r.AiEdit, r.Inserted, r.Context, r.SafetyNet
             ? "The safety net rejected the AI's edit, so your words went in as spoken."
             : "No AI edit for this dictation.");
         CancelButton.Visibility = Visibility.Visible; // closes the receipt
@@ -381,7 +383,7 @@ public partial class OverlayWindow : Window
 
     string _copyRaw = "", _copyEdit = "", _copyInserted = "";
 
-    void FillCompare(string raw, string? aiEdit, string inserted, string noEdit)
+    void FillCompare(string raw, string? aiEdit, string inserted, InsertionContext? context, string noEdit)
     {
         _copyRaw = raw;
         _copyInserted = inserted.Trim();
@@ -392,7 +394,15 @@ public partial class OverlayWindow : Window
         if (aiEdit != null)
         {
             paragraph.Foreground = Paper;
+            // The text around the cursor, in its own colour either side of the edit, so it reads in place.
+            var before = Around(context?.Before, fromEnd: true);
+            var after = Around(context?.After, fromEnd: false);
+            if (before.Length > 0)
+                paragraph.Inlines.Add(new Run(before + (char.IsWhiteSpace(before[^1]) ? "" : " ")) { Foreground = ContextInk, FontStyle = FontStyles.Italic });
             DiffText.Render(paragraph.Inlines, WordDiff.Compute(raw, aiEdit.Trim()), DiffRemoved, Accent);
+            if (after.Length > 0)
+                paragraph.Inlines.Add(new Run((char.IsWhiteSpace(after[0]) || char.IsPunctuation(after[0]) ? "" : " ") + after)
+                    { Foreground = ContextInk, FontStyle = FontStyles.Italic });
         }
         else
         {
@@ -402,6 +412,24 @@ public partial class OverlayWindow : Window
         CompareEdited.Document = new FlowDocument(paragraph) { PagePadding = new Thickness(0) };
         foreach (var b in new[] { "Raw", "Edit", "Inserted" }) SetCopyLabel(b, "COPY");
         Compare.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>At most ~160 characters of the surrounding text, cut at a word, with "…" where it was cut.</summary>
+    static string Around(string? text, bool fromEnd)
+    {
+        text = (text ?? "").ReplaceLineEndings(" ");
+        if (text.Trim().Length == 0) return "";
+        const int max = 160;
+        if (text.Length <= max) return fromEnd ? text.TrimStart() : text.TrimEnd();
+        if (fromEnd)
+        {
+            var cut = text[^max..];
+            var space = cut.IndexOf(' ');
+            return "…" + (space >= 0 ? cut[(space + 1)..] : cut);
+        }
+        var head = text[..max];
+        var last = head.LastIndexOf(' ');
+        return (last > 0 ? head[..last] : head) + "…";
     }
 
     /// <summary>A box's Copy: the part selected in it, or the whole box. AI Edit copies the AI's own text (without the
@@ -446,7 +474,8 @@ public partial class OverlayWindow : Window
     /// <summary>Before inserting: the three boxes, with the one that will go in brought forward.</summary>
     void ShowPreviewBoxes(string raw, string toInsert, bool usesAi)
     {
-        FillCompare(raw, usesAi ? toInsert : null, toInsert, "No AI edit: this profile doesn't use AI.");
+        FillCompare(raw, usesAi ? toInsert : null, toInsert, _trial != null ? null : App.Services.Controller.Context,
+            "No AI edit: this profile doesn't use AI.");
         FocusInserted(true);
     }
 

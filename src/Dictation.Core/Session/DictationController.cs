@@ -18,8 +18,9 @@ public enum NoticeLevel { Info, Warning, Error }
 /// <param name="Note">What the safety net did, for the receipt.</param>
 /// <param name="AiEdit">What the AI made of <paramref name="Raw"/>, before it was fitted into the text around the cursor;
 /// null when no AI was used (a profile without AI, the AI failed, or the original words were chosen).</param>
+/// <param name="Context">The text around the cursor when the dictation started, if it could be read.</param>
 public sealed record InsertReceipt(string Raw, string Inserted, TimeSpan Elapsed, bool SafetyNet, string? Note = null,
-    string? AiEdit = null)
+    string? AiEdit = null, InsertionContext? Context = null)
 {
     public int Words => Inserted.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
     public bool Edited => Inserted != Raw;
@@ -74,6 +75,9 @@ public sealed class DictationController
     public bool IsLive => _live?.HasTyped == true;
     /// <summary>When a dictation last started or finished; for unloading idle models.</summary>
     public DateTime LastActivity { get; private set; } = DateTime.Now;
+    /// <summary>The text around the cursor for the current dictation (read when it started), once known; shown next to
+    /// the AI edit so the edit can be judged in place.</summary>
+    public InsertionContext? Context { get; private set; }
 
     public event Action<DictationState>? StateChanged;
     /// <summary>The transcript so far, while recording (UI thread). Empty at the start of a dictation.</summary>
@@ -207,6 +211,7 @@ public sealed class DictationController
         _context = _settings.Current.MatchSurroundingText
             ? InsertionContext.CaptureAsync(TimeSpan.FromMilliseconds(400))
             : Task.FromResult<InsertionContext?>(null);
+        Context = null;
         _pieces.Clear();
         _partial = "";
         _micWarned = false;
@@ -293,6 +298,7 @@ public sealed class DictationController
         await _engine; // if the model was still loading, it now catches up on the whole recording
         var raw = OutputSanitizer.CollapseDots(await _asr.StopAsync(ct));
         ct.ThrowIfCancellationRequested();
+        Context = await _context;
         if (_live != null) await _live.DrainAsync(); // let pieces already on their way finish typing
         if (_live?.HasTyped != true && SpeechGuard.ShouldDiscard(raw, _recordClock.Elapsed, _peakLevel))
         {
@@ -393,7 +399,7 @@ public sealed class DictationController
                 await _inserter.InsertAsync(text, _target, ct);
             }
             inserted = true;
-            receipt = new InsertReceipt(_pendingRaw, text, _finishClock.Elapsed, _pendingSafetyNet, _pendingNote, _pendingAiEdit);
+            receipt = new InsertReceipt(_pendingRaw, text, _finishClock.Elapsed, _pendingSafetyNet, _pendingNote, _pendingAiEdit, Context);
         }
         catch (UserFacingException e)
         {

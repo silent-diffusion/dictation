@@ -76,7 +76,7 @@ window's edge.
   **✕ Cancel**, which stays until the text is in: while starting, recording, transcribing and tidying up);
   while you speak, the words recognized so far run above it; it grows to show your transcript while the AI tidies it, then shows a small dimmed "Inserted" receipt. Hover it to see it clearly;
   click it to see the three boxes used everywhere in the app (the receipt, profile pages, History): **Transcription**,
-  **AI Edit** (removed words struck through, new ones highlighted) and **Inserted** (the clean text that went in).
+  **AI Edit** (removed words struck through, new ones highlighted, with the text around the cursor either side in grey-blue italics) and **Inserted** (the clean text that went in).
   The text in those boxes can be selected with the mouse, and each box has a **Copy** button (it copies what you selected,
   or the whole box; for AI Edit, the AI's own text without the struck-through words).
   If the safety net rejects the AI's edit, the receipt says so. Position (nine spots) and opacity are under *Settings › Appearance*.
