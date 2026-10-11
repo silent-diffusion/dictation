@@ -235,14 +235,35 @@ public sealed class LiveInsertion
             throw new UserFacingException("Couldn't switch back to the app you were typing in. Click into it and try again.");
 
         var rewrite = _profile.RewriteWhole && _profile.AutoProcess;
-        if (IsPlausibleReplacement(finalText, Typed, rewrite) && await SelectTypedAsync(ct))
+        if (IsPlausibleReplacement(finalText, Typed, rewrite))
         {
             var replacement = ContextFit.Fit(finalText, await _context, spacingOnly: rewrite);
             var typed = Typed;
-            await InsertLiveAsync(replacement, ct); // replaces the selection
-            Log.Info($"Live dictation: final pass replaced {typed.Length} typed chars with {replacement.Length}");
-            await RemoveDoubleAsync(typed, replacement, ct);
-            return (replacement, null);
+            var timeout = TimeoutFor(typed.Length);
+            var check = await CheckTypedAsync(timeout, ct);
+            if (check == InsertionContext.LiveText.Matches && await InsertionContext.SelectBeforeCaretAsync(typed, timeout))
+            {
+                await InsertLiveAsync(replacement, ct); // replaces the selection
+                Log.Info($"Live dictation: final pass replaced {typed.Length} typed chars with {replacement.Length}");
+                await RemoveDoubleAsync(typed, replacement, ct);
+                return (replacement, null);
+            }
+            // Apps that don't show their text to UI Automation (terminals such as Claude Code, many Electron apps), or
+            // won't take a selection: nothing says the live text was changed, and it is still right before the caret
+            // in the same window, so take it out the way live typing corrects itself, with Backspace, and paste the
+            // final text. Not when the app shows different words there: then the user has edited it.
+            if (check != InsertionContext.LiveText.Differs && Native.GetForegroundWindow() == _target.Hwnd)
+            {
+                try
+                {
+                    await _inserter.EraseAsync(typed.Replace("\r\n", "\n"), _target, ct);
+                    _lastInsert = DateTime.Now;
+                    await InsertLiveAsync(replacement, ct);
+                    Log.Info($"Live dictation: final pass erased {typed.Length} typed chars and pasted {replacement.Length} ({check})");
+                    return (replacement, null);
+                }
+                catch (UserFacingException e) { Log.Warn("Couldn't erase the live text: " + e.Message); throw; }
+            }
         }
 
         var rest = new List<string>(_held);
@@ -274,22 +295,31 @@ public sealed class LiveInsertion
     /// they are sent, and reading the document before then finds it out of date.</summary>
     static readonly TimeSpan Settle = TimeSpan.FromMilliseconds(450);
 
-    /// <summary>Select the text typed live, once the app has caught up with the last edit; tried a few times, since a
-    /// busy app can take a while to show its last paste.</summary>
-    async Task<bool> SelectTypedAsync(CancellationToken ct)
+    /// <summary>Wait until the app shows the text typed live (reading only, nothing visible); a few tries, since a busy
+    /// app can take a while to show its last paste. The last answer if it never matches.</summary>
+    async Task<InsertionContext.LiveText> CheckTypedAsync(TimeSpan timeout, CancellationToken ct)
     {
-        // Long text takes a slow app (Electron ones especially) a while to report through UI Automation.
-        var timeout = UiaTimeout + TimeSpan.FromMilliseconds(Math.Min(2500, Typed.Length));
-        // Check (reading only, nothing visible) until the app shows the live text; then select it, once.
-        for (var attempt = 0; ; attempt++)
+        var check = InsertionContext.LiveText.Unreadable;
+        for (var attempt = 0; attempt < 4; attempt++)
         {
             var wait = Settle - (DateTime.Now - _lastInsert);
             if (wait > TimeSpan.Zero) await Task.Delay(wait, ct);
-            if (await InsertionContext.IsBeforeCaretAsync(Typed, timeout)) break;
-            if (attempt == 3) return false;
+            check = await InsertionContext.CheckBeforeCaretAsync(Typed, timeout);
+            if (check != InsertionContext.LiveText.Differs) return check; // matches, or nothing more to learn by waiting
             _lastInsert = DateTime.Now; // wait a full settle before the next try
         }
-        return await InsertionContext.SelectBeforeCaretAsync(Typed, timeout);
+        return check;
+    }
+
+    /// <summary>Long text takes a slow app (Electron ones especially) a while to report through UI Automation.</summary>
+    TimeSpan TimeoutFor(int length) => UiaTimeout + TimeSpan.FromMilliseconds(Math.Min(2500, length));
+
+    /// <summary>Select the text typed live, once the app has caught up with the last edit.</summary>
+    async Task<bool> SelectTypedAsync(CancellationToken ct)
+    {
+        var timeout = TimeoutFor(Typed.Length);
+        return await CheckTypedAsync(timeout, ct) == InsertionContext.LiveText.Matches
+               && await InsertionContext.SelectBeforeCaretAsync(Typed, timeout);
     }
 
     /// <summary>A last check that the final pass replaced the live text instead of landing after it: if the document
