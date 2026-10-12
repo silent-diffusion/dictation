@@ -77,7 +77,7 @@ public partial class App : Application
 
         WireController();
         ApplyHotkeys();
-        var unloader = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
+        var unloader = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(15) };
         unloader.Tick += async (_, _) => await UnloadIdleModelsAsync();
         unloader.Start();
         _lastAsr = JsonSerializer.Serialize(s.Settings.Current.Asr);
