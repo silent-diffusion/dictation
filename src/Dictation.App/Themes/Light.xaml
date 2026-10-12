@@ -21,6 +21,7 @@
     <SolidColorBrush x:Key="Ob.MarkDot" Color="#E8E7E3"/> <!-- The logo's dot while idle (red while recording) -->
     <SolidColorBrush x:Key="Ob.Record" Color="#E3261A"/> <!-- Recording, and nothing else -->
     <SolidColorBrush x:Key="Ob.Accent" Color="#2340FF"/> <!-- What is live or matters most right now -->
+    <SolidColorBrush x:Key="Ob.AccentWash" Color="#1F2340FF"/> <!-- Hover tint on things that can be clicked (follows the accent) -->
     <SolidColorBrush x:Key="Ob.Ok" Color="#0D0D0C"/> <!-- Ready: a filled ink dot (the shape carries the state) -->
     <SolidColorBrush x:Key="Ob.Busy" Color="#2340FF"/> <!-- Starting or loading: live, so the accent -->
     <SolidColorBrush x:Key="Ob.Error" Color="#2340FF"/> <!-- Errors need attention first: the accent -->
