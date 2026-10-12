@@ -296,12 +296,17 @@ public partial class DashboardPage : UserControl
             pill.SetResourceReference(Border.BackgroundProperty, "Ob.Window");
             var pillText = new StackPanel { Orientation = Orientation.Horizontal };
             pillText.Children.Add(Node(voice.State, small: true));
-            pillText.Children.Add(new TextBlock
+            var pillLabel = new TextBlock
             {
                 Text = $"{voice.Label} // {voice.Title} // {voice.Status}".ToUpper(), FontFamily = Mono, FontSize = 12.5,
                 Margin = new Thickness(7, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center,
-            });
+            };
+            pillLabel.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Text");
+            pillText.Children.Add(pillLabel);
             pill.Child = pillText;
+            AccentOnHover(pill, wash: false,
+                (pill, Border.BorderBrushProperty, "Ob.Text"),
+                (pillLabel, TextBlock.ForegroundProperty, "Ob.Text"));
             pill.MouseLeftButtonUp += (_, e) => { e.Handled = true; voice.Open(); };
             pill.Loaded += (_, _) =>
             {
@@ -331,6 +336,30 @@ public partial class DashboardPage : UserControl
 
         root.Children.Add(host);
         return root;
+    }
+
+    /// <summary>While the pointer is over <paramref name="target"/> (something that can be clicked), the given parts take
+    /// the accent and the target a faint accent tint; they go back to their own colours when it leaves.</summary>
+    static void AccentOnHover(FrameworkElement target, bool wash, params (FrameworkElement Part, DependencyProperty Property, string Key)[] parts)
+    {
+        var background = (target as Panel)?.Background ?? (target as Border)?.Background;
+        target.MouseEnter += (_, _) =>
+        {
+            foreach (var (part, property, _) in parts) part.SetResourceReference(property, "Ob.Accent");
+            if (wash) SetBackground(target, null);
+        };
+        target.MouseLeave += (_, _) =>
+        {
+            foreach (var (part, property, key) in parts) part.SetResourceReference(property, key);
+            if (wash) SetBackground(target, background);
+        };
+    }
+
+    static void SetBackground(FrameworkElement target, Brush? restore)
+    {
+        var property = target is Panel ? Panel.BackgroundProperty : Border.BackgroundProperty;
+        if (restore == null) target.SetResourceReference(property, "Ob.AccentWash");
+        else target.SetValue(property, restore);
     }
 
     /// <summary>A node of the signal path with its label above and its model and status below; the whole column is the
@@ -391,6 +420,12 @@ public partial class DashboardPage : UserControl
         below.Children.Add(status);
         col.Children.Add(below);
 
+        label.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Text");
+        title.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Text");
+        AccentOnHover(col, wash: true,
+            (label, TextBlock.ForegroundProperty, "Ob.Text"),
+            (title, TextBlock.ForegroundProperty, "Ob.Text"),
+            (ring, Shape.StrokeProperty, n.State == Dot.Busy ? "Ob.Accent" : "Ob.Text"));
         col.MouseLeftButtonUp += (_, e) => { e.Handled = true; n.Open(); };
         Canvas.SetLeft(col, x - w / 2);
         Canvas.SetTop(col, 0);
@@ -437,6 +472,7 @@ public partial class DashboardPage : UserControl
             big.Background = Brushes.Transparent;
             big.ToolTip = valueTip;
             big.TextDecorations = TextDecorations.Underline;
+            AccentOnHover(big, wash: false, (big, TextBlock.ForegroundProperty, accent ? "Ob.Accent" : "Ob.Text"));
             big.MouseLeftButtonUp += (_, e) => { e.Handled = true; valueClick(); };
             big.Cursor = Cursors.Hand;
         }

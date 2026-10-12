@@ -111,6 +111,8 @@ public static class ColorSchemes
         var d = new ResourceDictionary();
         foreach (var key in Keys) d[key] = Brush(dark ? darkHex : light);
         d["Ob.AccentOnDark"] = Brush(darkHex);
+        // A faint tint of the accent behind whatever the pointer is over that can be clicked.
+        d["Ob.AccentWash"] = Brush((dark ? "#29" : "#1F") + (dark ? darkHex : light).TrimStart('#'));
         return d;
     }
 

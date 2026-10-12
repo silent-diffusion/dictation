@@ -10,9 +10,15 @@
             <Setter Property="BorderThickness" Value="0,0,1,1"/>
             <Style.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="{DynamicResource Ob.Hover}"/>
+                    <Setter Property="Background" Value="{DynamicResource Ob.AccentWash}"/>
                 </Trigger>
             </Style.Triggers>
+        </Style>
+        <!-- A cell that isn't itself a link (what's inside it may be): no hover tint -->
+        <Style x:Key="DashCellStatic" TargetType="Border">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource Ob.Divider}"/>
+            <Setter Property="BorderThickness" Value="0,0,1,1"/>
         </Style>
     </UserControl.Resources>
     <!-- At a glance: everything fits the window, nothing scrolls. Rows share the height; dials scale to their cells. -->
@@ -47,7 +53,7 @@
                 </Grid.RowDefinitions>
 
                 <!-- The signal path: profile → speech recognition → AI cleanup → read aloud -->
-                <Border x:Name="PathCell" Style="{StaticResource DashCell}" Padding="16,12,16,10"/>
+                <Border x:Name="PathCell" Style="{StaticResource DashCellStatic}" Padding="16,12,16,10"/>
 
                 <!-- Meters -->
                 <UniformGrid x:Name="Dials" Grid.Row="1" Columns="6" Rows="1"/>
