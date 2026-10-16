@@ -107,7 +107,8 @@
                     <TextBlock x:Name="NoAudioText" Style="{StaticResource Caption}" Margin="0,10,0,0" Visibility="Collapsed"
                                Text="No recording kept for this dictation."/>
 
-                    <!-- The three boxes used everywhere, side by side: Transcription · AI Edit (struck through / added) · Inserted -->
+                    <!-- The three boxes used everywhere, side by side: Transcription · AI Edit (struck through / added) · Inserted,
+                         each with its own COPY beside its name -->
                     <Border Style="{StaticResource Card}" Margin="0,16,0,0">
                         <Grid>
                             <Grid.ColumnDefinitions>
@@ -116,18 +117,39 @@
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
                             <StackPanel Margin="14,12,14,14">
-                                <TextBlock Text="01 // TRANSCRIPTION" Style="{StaticResource MonoLabel}" Margin="0,0,0,6"/>
+                                <DockPanel Margin="0,0,0,6">
+                                    <Button DockPanel.Dock="Right" Tag="Raw" Click="CopyRaw_Click" Content="COPY" Cursor="Hand" Padding="0" Margin="10,0,0,0"
+                                        Background="Transparent" BorderThickness="0" FontFamily="{StaticResource Ob.Mono}" FontSize="10.5"
+                                        Foreground="{DynamicResource Ob.Muted}" AutomationProperties.Name="Copy Transcription" ToolTip="Copy what you said">
+                                    <Button.Template><ControlTemplate TargetType="Button"><ContentPresenter/></ControlTemplate></Button.Template>
+                                </Button>
+                                    <TextBlock Text="01 // TRANSCRIPTION" Style="{StaticResource MonoLabel}"/>
+                                </DockPanel>
                                 <TextBlock x:Name="TranscriptBlock" TextWrapping="Wrap" FontSize="14" LineHeight="21"/>
                             </StackPanel>
                             <Border Grid.Column="1" BorderBrush="{DynamicResource Ob.Divider}" BorderThickness="1,0,0,0">
                                 <StackPanel Margin="14,12,14,14">
-                                    <TextBlock Text="02 // AI EDIT" Style="{StaticResource MonoLabel}" Margin="0,0,0,6"/>
+                                    <DockPanel Margin="0,0,0,6">
+                                    <Button x:Name="CopyAiButton" DockPanel.Dock="Right" Tag="Edit" Click="CopyAi_Click" Content="COPY" Cursor="Hand" Padding="0" Margin="10,0,0,0"
+                                        Background="Transparent" BorderThickness="0" FontFamily="{StaticResource Ob.Mono}" FontSize="10.5"
+                                        Foreground="{DynamicResource Ob.Muted}" AutomationProperties.Name="Copy AI Edit" ToolTip="Copy the AI's own output, before it was fitted into the surrounding text">
+                                    <Button.Template><ControlTemplate TargetType="Button"><ContentPresenter/></ControlTemplate></Button.Template>
+                                </Button>
+                                    <TextBlock Text="02 // AI EDIT" Style="{StaticResource MonoLabel}"/>
+                                </DockPanel>
                                     <TextBlock x:Name="DiffBlock" TextWrapping="Wrap" FontSize="14" LineHeight="21"/>
                                 </StackPanel>
                             </Border>
                             <Border Grid.Column="2" BorderBrush="{DynamicResource Ob.Divider}" BorderThickness="1,0,0,0">
                                 <StackPanel Margin="14,12,14,14">
-                                    <TextBlock Text="03 // INSERTED" Style="{StaticResource MonoLabel}" Margin="0,0,0,6"/>
+                                    <DockPanel Margin="0,0,0,6">
+                                    <Button DockPanel.Dock="Right" Tag="Inserted" Click="CopyFinal_Click" Content="COPY" Cursor="Hand" Padding="0" Margin="10,0,0,0"
+                                        Background="Transparent" BorderThickness="0" FontFamily="{StaticResource Ob.Mono}" FontSize="10.5"
+                                        Foreground="{DynamicResource Ob.Muted}" AutomationProperties.Name="Copy Inserted" ToolTip="Copy the text that went in">
+                                    <Button.Template><ControlTemplate TargetType="Button"><ContentPresenter/></ControlTemplate></Button.Template>
+                                </Button>
+                                    <TextBlock Text="03 // INSERTED" Style="{StaticResource MonoLabel}"/>
+                                </DockPanel>
                                     <TextBlock x:Name="FinalBlock" TextWrapping="Wrap" FontSize="14" LineHeight="21"/>
                                 </StackPanel>
                             </Border>
@@ -136,10 +158,6 @@
                     <TextBlock x:Name="NoteText" Style="{StaticResource Caption}" Margin="0,6,0,0"/>
 
                     <WrapPanel Margin="0,14,0,0">
-                        <Button Content="COPY INSERTED TEXT" Style="{StaticResource QuietButton}" Margin="0,0,8,8" Click="CopyFinal_Click"/>
-                        <Button Content="COPY TRANSCRIPTION" Style="{StaticResource QuietButton}" Margin="0,0,8,8" Click="CopyRaw_Click"/>
-                        <Button x:Name="CopyAiButton" Content="COPY AI EDIT" Style="{StaticResource QuietButton}" Margin="0,0,8,8"
-                                Click="CopyAi_Click" ToolTip="The AI's own output, before it was fitted into the surrounding text"/>
                         <Button Content="INSERT TRANSCRIPTION INTO THE LAST APP" Style="{StaticResource QuietButton}" Margin="0,0,8,8"
                                 Click="InsertRaw_Click"/>
                     </WrapPanel>

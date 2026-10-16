@@ -131,6 +131,7 @@ public partial class HistoryPage : UserControl
         }
         FinalBlock.Text = c.Final;
         CopyAiButton.IsEnabled = !string.IsNullOrEmpty(c.AiOutput); // nothing to copy when no AI edit was used
+        CopyAiButton.Opacity = CopyAiButton.IsEnabled ? 1 : 0.35;    // a bare text link doesn't grey out by itself
         NoteText.Text = c.Note ?? (c.SafetyNet ? "The safety net kept some of your original words." : "");
     }
 
@@ -200,9 +201,26 @@ public partial class HistoryPage : UserControl
         App.Services.History.Delete(c);
     }
 
-    void CopyFinal_Click(object sender, RoutedEventArgs e) { if (Current != null) Clipboard.SetText(Current.Final); }
-    void CopyRaw_Click(object sender, RoutedEventArgs e) { if (Current != null) Clipboard.SetText(Current.Transcript); }
-    void CopyAi_Click(object sender, RoutedEventArgs e) { if (Current?.AiOutput is { Length: > 0 } ai) Clipboard.SetText(ai); }
+    void CopyFinal_Click(object sender, RoutedEventArgs e) => Copy((Button)sender, Current?.Final);
+    void CopyRaw_Click(object sender, RoutedEventArgs e) => Copy((Button)sender, Current?.Transcript);
+    void CopyAi_Click(object sender, RoutedEventArgs e) => Copy((Button)sender, Current?.AiOutput);
+
+    /// <summary>Each box's COPY: copies that box and confirms in place, like the profile page's Try it.</summary>
+    static void Copy(Button button, string? text)
+    {
+        if (string.IsNullOrEmpty(text)) { Flash(button, "NOTHING YET"); return; }
+        try { Clipboard.SetText(text); }
+        catch (System.Runtime.InteropServices.ExternalException) { Flash(button, "BUSY, TRY AGAIN"); return; }
+        Flash(button, "COPIED ✓");
+    }
+
+    static void Flash(Button button, string label)
+    {
+        button.Content = label;
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.5) };
+        timer.Tick += (_, _) => { timer.Stop(); button.Content = "COPY"; };
+        timer.Start();
+    }
 
     async void InsertRaw_Click(object sender, RoutedEventArgs e)
     {
