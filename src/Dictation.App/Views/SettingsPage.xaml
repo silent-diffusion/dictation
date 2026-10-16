@@ -5,15 +5,14 @@
     <UserControl.Resources>
         <!-- Settings entries: capsules in the mono face, like the main menu -->
         <Style x:Key="SettingsNavItem" TargetType="ListBoxItem" BasedOn="{StaticResource NavItem}">
-            <Setter Property="Padding" Value="12,7"/>
+            <Setter Property="Padding" Value="12,6"/>
             <Setter Property="Margin" Value="0,1"/>
-            <Setter Property="FontSize" Value="13"/>
-            <Setter Property="FontWeight" Value="Medium"/>
+            <Setter Property="FontSize" Value="11.5"/>
         </Style>
         <!-- Group headings (A // DICTATION…): larger, bold and in ink, so the groups stand out at a glance.
              Set here rather than in NavGroup, which History's app groups share. -->
         <Style x:Key="SettingsGroupHeader" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="FontSize" Value="15"/>
             <Setter Property="FontWeight" Value="Bold"/>
             <Setter Property="Foreground" Value="{DynamicResource Ob.Text}"/>
         </Style>
