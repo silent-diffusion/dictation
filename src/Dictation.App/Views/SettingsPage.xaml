@@ -5,9 +5,17 @@
     <UserControl.Resources>
         <!-- Settings entries: capsules in the mono face, like the main menu -->
         <Style x:Key="SettingsNavItem" TargetType="ListBoxItem" BasedOn="{StaticResource NavItem}">
-            <Setter Property="Padding" Value="12,6"/>
+            <Setter Property="Padding" Value="12,7"/>
             <Setter Property="Margin" Value="0,1"/>
-            <Setter Property="FontSize" Value="11.5"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="Medium"/>
+        </Style>
+        <!-- Group headings (A // DICTATION…): larger, bold and in ink, so the groups stand out at a glance.
+             Set here rather than in NavGroup, which History's app groups share. -->
+        <Style x:Key="SettingsGroupHeader" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Foreground" Value="{DynamicResource Ob.Text}"/>
         </Style>
     </UserControl.Resources>
     <Grid>
@@ -26,7 +34,7 @@
                     </DockPanel>
                     <Expander x:Name="DictationGroup" Style="{StaticResource NavGroup}" IsExpanded="True" Margin="0,0,0,8" Expanded="Group_Toggled" Collapsed="Group_Toggled">
                         <Expander.Header>
-                            <TextBlock Text="A // DICTATION"/>
+                            <TextBlock Text="A // DICTATION" Style="{StaticResource SettingsGroupHeader}"/>
                         </Expander.Header>
                         <ListBox Style="{StaticResource NavList}" ItemContainerStyle="{StaticResource SettingsNavItem}" Margin="0,4,0,0"
                                  SelectionChanged="Nav_SelectionChanged" AutomationProperties.Name="Dictation settings">
@@ -38,7 +46,7 @@
                     </Expander>
                     <Expander x:Name="ModelsGroup" Style="{StaticResource NavGroup}" IsExpanded="True" Margin="0,0,0,8" Expanded="Group_Toggled" Collapsed="Group_Toggled">
                         <Expander.Header>
-                            <TextBlock Text="B // MODELS &amp; AI"/>
+                            <TextBlock Text="B // MODELS &amp; AI" Style="{StaticResource SettingsGroupHeader}"/>
                         </Expander.Header>
                         <ListBox Style="{StaticResource NavList}" ItemContainerStyle="{StaticResource SettingsNavItem}" Margin="0,4,0,0"
                                  SelectionChanged="Nav_SelectionChanged" AutomationProperties.Name="Models &amp; AI settings">
@@ -50,7 +58,7 @@
                     </Expander>
                     <Expander x:Name="LookGroup" Style="{StaticResource NavGroup}" IsExpanded="True" Margin="0,0,0,8" Expanded="Group_Toggled" Collapsed="Group_Toggled">
                         <Expander.Header>
-                            <TextBlock Text="C // LOOK &amp; FEEL"/>
+                            <TextBlock Text="C // LOOK &amp; FEEL" Style="{StaticResource SettingsGroupHeader}"/>
                         </Expander.Header>
                         <ListBox Style="{StaticResource NavList}" ItemContainerStyle="{StaticResource SettingsNavItem}" Margin="0,4,0,0"
                                  SelectionChanged="Nav_SelectionChanged" AutomationProperties.Name="Look &amp; feel settings">
@@ -59,7 +67,7 @@
                     </Expander>
                     <Expander x:Name="AppGroup" Style="{StaticResource NavGroup}" IsExpanded="True" Margin="0,0,0,8" Expanded="Group_Toggled" Collapsed="Group_Toggled">
                         <Expander.Header>
-                            <TextBlock Text="D // APP"/>
+                            <TextBlock Text="D // APP" Style="{StaticResource SettingsGroupHeader}"/>
                         </Expander.Header>
                         <ListBox Style="{StaticResource NavList}" ItemContainerStyle="{StaticResource SettingsNavItem}" Margin="0,4,0,0"
                                  SelectionChanged="Nav_SelectionChanged" AutomationProperties.Name="App settings">
