@@ -6,7 +6,8 @@
         <!-- Settings entries: capsules in the mono face, like the main menu -->
         <Style x:Key="SettingsNavItem" TargetType="ListBoxItem" BasedOn="{StaticResource NavItem}">
             <Setter Property="Padding" Value="12,6"/>
-            <Setter Property="Margin" Value="0,1"/>
+            <!-- Indented under their group heading, so the headings read as the outline -->
+            <Setter Property="Margin" Value="18,1,0,1"/>
             <Setter Property="FontSize" Value="11.5"/>
         </Style>
         <!-- Group headings (A // DICTATION…): larger, bold and in ink, so the groups stand out at a glance.
