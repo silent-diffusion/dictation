@@ -27,6 +27,18 @@ public sealed class UsageDay
     public Dictionary<string, int> Apps { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }
 
+/// <summary>One dictation's turnaround (stop to text in place) and the models behind it.</summary>
+public sealed class TurnaroundSample
+{
+    public DateTime Time { get; set; }
+    public string SpeechModel { get; set; } = "";
+    /// <summary>The AI model, or "" when the profile uses no AI.</summary>
+    public string AiModel { get; set; } = "";
+    public double Seconds { get; set; }
+    /// <summary>The speech model or the AI model wasn't loaded when the dictation started, so the time includes loading.</summary>
+    public bool ModelLoaded { get; set; }
+}
+
 /// <summary>Daily usage counts in data\usage.json (outside the program folder, so updates keep it).</summary>
 public sealed class UsageStore
 {
@@ -37,6 +49,31 @@ public sealed class UsageStore
     {
         public int Version { get; set; } = 1;
         public List<UsageDay> Days { get; set; } = new();
+        /// <summary>The latest turnarounds with the models that produced them (no text), newest last.</summary>
+        public List<TurnaroundSample> Turnarounds { get; set; } = new();
+    }
+
+    /// <summary>How many recent turnarounds are kept.</summary>
+    public const int KeepTurnarounds = 100;
+
+    /// <summary>Remember how long a dictation took from stop to text in place, and with which models.</summary>
+    public void RecordTurnaround(TurnaroundSample sample)
+    {
+        _data.Turnarounds.Add(sample);
+        if (_data.Turnarounds.Count > KeepTurnarounds) _data.Turnarounds.RemoveRange(0, _data.Turnarounds.Count - KeepTurnarounds);
+        Save();
+    }
+
+    /// <summary>The average of the last <paramref name="count"/> turnarounds with this speech model and AI model ("" =
+    /// no AI) where neither model had to load first; null when there are none yet. Also how many it averaged.</summary>
+    public (double? Seconds, int Count) RecentTurnaround(string speechModel, string aiModel, int count = 3)
+    {
+        var picked = _data.Turnarounds
+            .Where(t => !t.ModelLoaded && t.Seconds > 0
+                        && string.Equals(t.SpeechModel, speechModel, StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(t.AiModel, aiModel, StringComparison.OrdinalIgnoreCase))
+            .TakeLast(count).ToList();
+        return (picked.Count == 0 ? null : picked.Average(t => t.Seconds), picked.Count);
     }
 
     readonly string? _path;

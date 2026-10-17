@@ -242,7 +242,7 @@
 
             <DockPanel x:Name="Actions" Margin="0,4,0,6" LastChildFill="False" Visibility="Collapsed">
                 <Button x:Name="InsertButton" Style="{StaticResource AccentPill}" Click="Insert_Click"/>
-                <Button Style="{StaticResource OutlinePill}" Content="USE ORIGINAL" Margin="8,0,0,0" Click="Raw_Click"/>
+                <Button x:Name="UseOriginalButton" Style="{StaticResource OutlinePill}" Content="USE ORIGINAL" Margin="8,0,0,0" Click="Raw_Click"/>
                 <Button DockPanel.Dock="Right" Style="{StaticResource GhostPill}" Content="DISCARD   ESC" Margin="0,0,4,0"
                         Click="Cancel_Click"/>
             </DockPanel>

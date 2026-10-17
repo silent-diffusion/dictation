@@ -134,6 +134,11 @@ window's edge.
   is pasted; the profile can type it key by key instead (*Type the words in, instead of pasting them*).
   While you dictate, Oberton holds the clipboard and leaves at least 0.7 s between pastes; your own clipboard comes
   back once the dictation is done, so a paste the app reads late can never insert what you had copied before.
+* **Pastes where you started**: Oberton remembers where the cursor was when you pressed the hotkey. If you click
+  somewhere else while it works, in that app or another, the text still goes back to that spot (the window is brought
+  back and, where the app shows its caret to Windows, the caret put back where it was). If nothing to type into had the
+  cursor (the desktop, the taskbar, a button), the pill says **No place to paste**: click into any text field and the
+  text goes in there, or press **Copy to clipboard** (or the hotkey). After two minutes it is copied for you.
 * **No phantom text**: very short or silent recordings insert nothing, so Whisper's habit of hearing "Thank you." in silence never reaches your document.
 * **Long dictation** is cleaned up a few sentences at a time (small models stay faithful on short passages), and the safety net applies to each piece separately.
 * **Read aloud** (`Ctrl+Shift+Space`): reads the selected text in any app with a natural voice that runs on

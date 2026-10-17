@@ -153,6 +153,7 @@ public partial class OverlayWindow : Window
         BodyText.Visibility = Actions.Visibility = Compare.Visibility = LiveText.Visibility = Visibility.Collapsed;
         _receipt = null;
         _compareOpen = false;
+        UseOriginalButton.Visibility = Visibility.Visible;
         StateDecor.Text = "";
         FocusInserted(false);
         Stack(false);
@@ -267,6 +268,20 @@ public partial class OverlayWindow : Window
                 InsertButton.Content = string.IsNullOrEmpty(_hotkey) ? "INSERT" : $"INSERT   {_hotkey.ToUpper()}";
                 Actions.Visibility = Visibility.Visible;
                 width = CompareWideWidth;
+                expanded = true;
+                break;
+
+            case DictationState.Placing:
+                // Nothing had the cursor when the dictation started: click where it should go, or copy it.
+                WarnIcon.Stroke = WarnStroke;
+                WarnIcon.Visibility = Visibility.Visible;
+                TitleText.Text = "NO PLACE TO PASTE";
+                ShowChip(profileName);
+                ShowBody("Nothing to type into had the cursor when you started. Click into a text field and the text goes in there, or copy it to the clipboard.");
+                InsertButton.Content = string.IsNullOrEmpty(_hotkey) ? "COPY TO CLIPBOARD" : $"COPY TO CLIPBOARD   {_hotkey.ToUpper()}";
+                UseOriginalButton.Visibility = Visibility.Collapsed;
+                Actions.Visibility = Visibility.Visible;
+                width = WideWidth;
                 expanded = true;
                 break;
 

@@ -8,7 +8,9 @@ using Dictation.Core.Text;
 
 namespace Dictation.Core.Session;
 
-public enum DictationState { Idle, Starting, Recording, Transcribing, Processing, Confirming, Inserting }
+/// <summary><see cref="Placing"/>: the text is ready, but nothing to type into had the cursor when the dictation
+/// started; it waits for the user to click into a text field (or copy it).</summary>
+public enum DictationState { Idle, Starting, Recording, Transcribing, Processing, Confirming, Inserting, Placing }
 public enum NoticeLevel { Info, Warning, Error }
 
 /// <summary>What happened to a dictation that was inserted, for the overlay's receipt.</summary>
@@ -55,6 +57,14 @@ public sealed class DictationController
     bool _pendingSafetyNet;
     string? _pendingNote;
     string? _pendingAiEdit; // the AI's output for the pending dictation, if the AI ran
+    Task<PasteSpot> _spot = Task.FromResult(PasteSpot.Unknown); // where the cursor was when the dictation started
+    CancellationTokenSource? _placeCts; // while Placing: waiting for the user to click somewhere to type
+    string _placingText = "";
+    bool _placed; // the text went where the user clicked, not where the dictation started
+    // For the dashboard's turnaround: which models this dictation used, and whether they were loaded when it started.
+    string _speechModelUsed = "", _aiModelUsed = "";
+    bool _speechWarm;
+    Task<bool> _aiWarm = Task.FromResult(true);
     bool _micWarned;
     float _peakLevel; // loudest input level of the current recording, for SpeechGuard
     LiveInsertion? _live; // "type as you speak" for the current dictation, when enabled
@@ -167,6 +177,7 @@ public sealed class DictationController
                 case DictationState.Idle: await StartAsync(); break;
                 case DictationState.Recording: await StopCancellableAsync(); break;
                 case DictationState.Confirming: await ConfirmInsertAsync(); break;
+                case DictationState.Placing: CopyPlacingToClipboard(); break;
                 // Starting / Transcribing / Processing / Inserting: ignore presses until done
             }
         }
@@ -209,6 +220,9 @@ public sealed class DictationController
     async Task StartAsync()
     {
         _target = InsertionTarget.Capture(); // remember where the text should go
+        // ...down to the caret position, while the target app still has focus (or that there is nowhere to type).
+        _spot = PasteSpot.CaptureAsync(_target, TimeSpan.FromMilliseconds(400));
+        _placed = false;
         // Read the text around the caret now, while the target app still has focus; used only when inserting.
         _context = _settings.Current.MatchSurroundingText
             ? InsertionContext.CaptureAsync(TimeSpan.FromMilliseconds(400))
@@ -230,9 +244,16 @@ public sealed class DictationController
 
         var profile = _profiles.Active;
         // Live typing needs the text to go straight in, so it is off for profiles that preview before inserting.
-        _live = _settings.Current.TypeWhileSpeaking && !profile.ShowPreview
-            ? new LiveInsertion(_inserter, _llm, _target, profile, _context)
+        // Nor when there is nowhere to type (the desktop, the taskbar): the text then waits for a click at the end.
+        _live = _settings.Current.TypeWhileSpeaking && !profile.ShowPreview && !PasteSpot.IsNowhere(_target.Hwnd)
+            ? new LiveInsertion(_inserter, _llm, _target, profile, _context, _spot)
             : null;
+
+        // Were the models already loaded? A turnaround that includes loading one isn't a fair turnaround.
+        _speechModelUsed = SpeechModels.For(profile, _settings.Current.Asr);
+        _speechWarm = _asr.IsReady && string.Equals(_asr.LoadedModel, _speechModelUsed, StringComparison.OrdinalIgnoreCase);
+        _aiModelUsed = !profile.AutoProcess ? "" : string.IsNullOrWhiteSpace(profile.Model) ? _settings.Current.Llm.DefaultModel : profile.Model!;
+        _aiWarm = AiLoadedAsync(_aiModelUsed);
 
         // Start listening right away. If the speech model isn't loaded (first use, or unloaded after a while), it loads
         // meanwhile and catches up on what was said.
@@ -257,6 +278,19 @@ public sealed class DictationController
             });
         }, TaskScheduler.Default);
         await Task.CompletedTask;
+    }
+
+    /// <summary>Whether the AI model is in memory right now (no AI, or a cloud model: nothing to load).</summary>
+    async Task<bool> AiLoadedAsync(string model)
+    {
+        if (model.Length == 0 || CloudModels.IsCloud(model)) return true;
+        try
+        {
+            var loaded = await _llm.LoadedModelsAsync();
+            return loaded.Any(n => string.Equals(n, model, StringComparison.OrdinalIgnoreCase)
+                                   || string.Equals(n, model + ":latest", StringComparison.OrdinalIgnoreCase));
+        }
+        catch { return false; }
     }
 
     /// <summary>Load the speech engine if needed, then hand it the session and everything recorded so far.</summary>
@@ -379,6 +413,12 @@ public sealed class DictationController
 
     async Task InsertPendingAsync(string text)
     {
+        // Nothing had the cursor when the dictation started: ask where it should go instead of pasting into nowhere.
+        if (_live?.HasTyped != true && (await _spot).Kind == PasteSpotKind.None)
+        {
+            WaitForPlace(text);
+            return;
+        }
         SetState(DictationState.Inserting);
         InsertReceipt? receipt = null;
         var inserted = false;
@@ -398,7 +438,7 @@ public sealed class DictationController
                 // A rewrite was laid out on purpose: only fix the spacing around it.
                 var profile = _profiles.Active;
                 text = ContextFit.Fit(text, await _context, spacingOnly: profile.RewriteWhole && profile.AutoProcess && text != _pendingRaw);
-                await _inserter.InsertAsync(text, _target, ct);
+                await _inserter.InsertAsync(text, _target, ct, spot: await _spot);
             }
             inserted = true;
             receipt = new InsertReceipt(_pendingRaw, text, _finishClock.Elapsed, _pendingSafetyNet, _pendingNote, _pendingAiEdit, Context);
@@ -445,6 +485,81 @@ public sealed class DictationController
         _history.Add(entry, pcm);
         _usage?.Record(entry);
         _tally?.Record(entry);
+        // The dashboard's turnaround: only a dictation that went straight in counts (not one that waited for a click).
+        if (inserted && !_placed && entry.FinishSeconds > 0)
+            _usage?.RecordTurnaround(new TurnaroundSample
+            {
+                Time = DateTime.Now, SpeechModel = _speechModelUsed, AiModel = _aiModelUsed, Seconds = entry.FinishSeconds,
+                ModelLoaded = !_speechWarm || !(_aiWarm.IsCompletedSuccessfully && _aiWarm.Result),
+            });
+    }
+
+    // ===== nowhere to type: wait for a click, or copy =====
+
+    /// <summary>How long the text waits for a click before it is copied to the clipboard instead.</summary>
+    static readonly TimeSpan PlaceTimeout = TimeSpan.FromMinutes(2);
+
+    void WaitForPlace(string text)
+    {
+        _placingText = text.Trim();
+        _finishClock.Stop(); // waiting for the user isn't processing time
+        _live?.Stop();
+        _live = null;
+        _placeCts = new CancellationTokenSource();
+        SetState(DictationState.Placing);
+        _ = WatchForPlaceAsync(_placeCts.Token);
+    }
+
+    /// <summary>
+    /// Watch for the user clicking into somewhere to type: a window that isn't the desktop or taskbar, whose focused
+    /// control can take text, once the mouse is released and the focus has settled. Then the text goes in there.
+    /// </summary>
+    async Task WatchForPlaceAsync(CancellationToken ct)
+    {
+        var deadline = DateTime.Now + PlaceTimeout;
+        var seen = IntPtr.Zero;
+        var steady = 0;
+        try
+        {
+            while (DateTime.Now < deadline)
+            {
+                await Task.Delay(250, ct);
+                var fg = Native.GetForegroundWindow();
+                if (PasteSpot.IsNowhere(fg) || PasteSpot.MouseDown || fg != seen) { seen = fg; steady = 0; continue; }
+                if (++steady < 2) continue;
+                var target = InsertionTarget.Capture();
+                var spot = await PasteSpot.CaptureAsync(target, TimeSpan.FromMilliseconds(400));
+                ct.ThrowIfCancellationRequested();
+                if (spot.Kind == PasteSpotKind.None || State != DictationState.Placing) continue;
+                Log.Info($"Placing the dictation where the user clicked: {target.ProcessName}");
+                _target = target;
+                _spot = Task.FromResult(spot);
+                _placed = true;
+                _placeCts = null;
+                _finishClock.Start();
+                try { await InsertPendingAsync(_placingText); } catch (Exception e) { Fail(e); }
+                return;
+            }
+            CopyPlacingToClipboard(timedOut: true);
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    /// <summary>Placing: the overlay's Copy button or the hotkey (or the wait ran out): the text goes to the clipboard.</summary>
+    public void CopyPlacingToClipboard(bool timedOut = false)
+    {
+        if (State != DictationState.Placing) return;
+        _placeCts?.Cancel();
+        _placeCts = null;
+        try { System.Windows.Clipboard.SetText(_placingText); } catch (Exception e) { Log.Warn("Copying the dictation failed: " + e.Message); }
+        SaveToHistory(_placingText, false);
+        _pendingProcessed = _pendingRaw = "";
+        _pendingSafetyNet = false;
+        LastActivity = DateTime.Now;
+        SetState(DictationState.Idle);
+        Notice?.Invoke(timedOut
+            ? "No place to paste was chosen, so the text was copied to your clipboard."
+            : "Copied to your clipboard. Paste it wherever you like.", NoticeLevel.Info);
     }
 
     /// <summary>Esc / ✕: abandon whatever is in progress without inserting anything.</summary>
@@ -460,6 +575,11 @@ public sealed class DictationController
                 _asr.Cancel();
                 break;
             case DictationState.Confirming:
+                break;
+            case DictationState.Placing:
+                _placeCts?.Cancel();
+                _placeCts = null;
+                SaveToHistory(_placingText, false); // discarded, but kept in History in case
                 break;
             case DictationState.Transcribing:
             case DictationState.Processing:

@@ -175,9 +175,12 @@ public partial class DashboardPage : UserControl
         Dials.Children.Add(Dial(bestRead > 0 ? readToday / (double)bestRead : 0, readToday.ToString("N0"), "Read aloud today",
             bestRead > 0 ? $"words · best day {bestRead:N0}" : "nothing read yet"));
 
-        var finish = usage.AverageFinishSeconds(now);
-        Dials.Children.Add(Dial(finish is { } f ? Math.Clamp(f / 10.0, 0, 1) : 0, finish is { } f2 ? $"{f2:0.0} s" : "—",
-            "Turnaround", "stop → text in place, 7 days", fan: true));
+        // The last three dictations with the current speech and AI models, leaving out any that had to load a model first.
+        var aiUsed = p.AutoProcess ? aiModel : "";
+        var (turn, turnCount) = usage.RecentTurnaround(speechModel, aiUsed);
+        Dials.Children.Add(Dial(turn is { } f ? Math.Clamp(f / 10.0, 0, 1) : 0, turn is { } f2 ? $"{f2:0.0} s" : "—",
+            "Turnaround", turnCount == 0 ? "no runs yet with these models loaded"
+                : $"last {turnCount} · {speechModel}{(aiUsed.Length > 0 ? " + " + aiUsed : ", no AI")}, models already loaded", fan: true));
 
         var kept = usage.AiKeptShare(now);
         Dials.Children.Add(Dial(kept ?? 0, kept is { } k ? $"{k:P0}" : "—", "AI edits kept", "last 30 days"));

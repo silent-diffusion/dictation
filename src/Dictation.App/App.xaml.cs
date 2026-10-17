@@ -239,14 +239,14 @@ public partial class App : Application
         c.StateChanged += state =>
         {
             if (state == DictationState.Idle) UnloadSoonIfImmediate();
-            if (state == DictationState.Confirming)
+            if (state is DictationState.Confirming or DictationState.Placing)
             {
                 var err = Hotkeys.Register(HkEscape, "Escape", () => c.Cancel());
                 if (err != null) Log.Warn(err);
             }
             else Hotkeys.Unregister(HkEscape);
 
-            if (!Services.Settings.Current.ShowOverlay && state != DictationState.Confirming) return;
+            if (!Services.Settings.Current.ShowOverlay && state is not (DictationState.Confirming or DictationState.Placing)) return;
             var profile = Services.Profiles.Active;
             var model = string.IsNullOrWhiteSpace(profile.Model) ? Services.Settings.Current.Llm.DefaultModel : profile.Model;
             overlay.ShowState(state, profile.Name, c.PendingRaw, c.PreviewText, model, c.IsLive);

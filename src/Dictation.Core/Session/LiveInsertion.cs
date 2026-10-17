@@ -44,10 +44,16 @@ public sealed class LiveInsertion
     static readonly TimeSpan MinGap = TimeSpan.FromMilliseconds(700);
 
     public LiveInsertion(TextInserter inserter, ITextProcessor llm, InsertionTarget target, Profile profile,
-        Task<InsertionContext?> context)
+        Task<InsertionContext?> context, Task<PasteSpot>? spot = null)
     {
-        _inserter = inserter; _llm = llm; _target = target; _profile = profile; _context = context;
+        _inserter = inserter; _llm = llm; _target = target; _profile = profile; _context = context; _spot = spot;
     }
+
+    readonly Task<PasteSpot>? _spot;
+
+    /// <summary>Nothing to type into had the cursor when the dictation started (a button, a list): type nothing live;
+    /// the whole text waits for a click at the end.</summary>
+    async Task<bool> NowhereAsync() => _spot != null && (await _spot).Kind == PasteSpotKind.None;
 
     /// <summary>Exactly what has been typed so far, in order.</summary>
     public string Typed => _typed + _partialTyped;
@@ -77,7 +83,7 @@ public sealed class LiveInsertion
         {
             if (partial == null || _cts.IsCancellationRequested || SpeechGuard.IsStockPhrase(partial)) return;
             // Never pull focus back mid-dictation; the finished piece or the final pass catches up.
-            if (_held.Count > 0 || Native.GetForegroundWindow() != _target.Hwnd) return;
+            if (_held.Count > 0 || Native.GetForegroundWindow() != _target.Hwnd || await NowhereAsync()) return;
             await ReplacePartialAsync(await FitAsync(partial), _cts.Token);
         }
         catch (OperationCanceledException) { }
@@ -179,7 +185,7 @@ public sealed class LiveInsertion
             var cleaned = await CleanAsync(piece, _cts.Token);
             if (_cts.IsCancellationRequested) return;
             // Never pull focus back mid-dictation; whatever can't be typed now is handled when the user stops.
-            if (_held.Count > 0 || Native.GetForegroundWindow() != _target.Hwnd) { _held.Add(cleaned); return; }
+            if (_held.Count > 0 || Native.GetForegroundWindow() != _target.Hwnd || await NowhereAsync()) { _held.Add(cleaned); return; }
             var text = ContextFit.Apply(cleaned, await ContextAfterTypedAsync());
             try
             {

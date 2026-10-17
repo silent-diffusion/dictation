@@ -171,7 +171,10 @@ public sealed class TextInserter
 
     /// <param name="keepClipboard">Don't restore the clipboard after pasting (see <see cref="ClipboardPasteStrategy"/>);
     /// the caller restores it.</param>
-    public async Task InsertAsync(string text, InsertionTarget target, CancellationToken ct = default, bool keepClipboard = false)
+    /// <param name="spot">Where the cursor was when the dictation started: the caret is put back there before pasting,
+    /// even if the user clicked elsewhere meanwhile.</param>
+    public async Task InsertAsync(string text, InsertionTarget target, CancellationToken ct = default, bool keepClipboard = false,
+        PasteSpot? spot = null)
     {
         if (!target.IsAlive)
             throw new UserFacingException("The window you were dictating into was closed.");
@@ -180,6 +183,7 @@ public sealed class TextInserter
         if (!await EnsureForegroundAsync(target, ct))
             throw new UserFacingException("Couldn't switch back to the app you were typing in. Click into it and try again.");
         await Task.Delay(40, ct);
+        if (spot is { Kind: PasteSpotKind.Caret }) await spot.RestoreAsync(TimeSpan.FromMilliseconds(800));
 
         var s = _settings.Current;
         var mode = s.AppOverrides.TryGetValue(target.ProcessName, out var o) ? o : s.Insertion;
