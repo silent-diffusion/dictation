@@ -68,7 +68,7 @@
     </UserControl.Resources>
     <ScrollViewer VerticalScrollBarVisibility="Auto">
         <StackPanel Margin="40,32,40,40" MaxWidth="820" HorizontalAlignment="Left">
-            <local:PageHeader Title="Oberton" Decor="倍音" Readout="SECTION D.2&#x0a;ABOUT &amp; UPDATES"/>
+            <local:PageHeader Title="Oberton" Decor="倍音" Readout="SECTION D.2&#x0a;ABOUT"/>
             <TextBlock x:Name="VersionText" FontFamily="{StaticResource Ob.Mono}" FontSize="13" FontWeight="Bold" Margin="0,0,0,4"/>
             <TextBlock Style="{StaticResource Caption}" Margin="0,0,0,8">
                 <Run Text="Free and open source (MIT license). "/>
@@ -270,37 +270,6 @@
                 </StackPanel>
             </Grid>
 
-            <!-- D.2.4 Updates: unchanged behavior -->
-            <Border Style="{StaticResource Divider}"/>
-            <Grid Margin="0,16,0,0">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="64"/>
-                    <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
-                <TextBlock Text="D.2.4" Style="{StaticResource Address}"/>
-                <StackPanel Grid.Column="1">
-                    <TextBlock Text="UPDATES" Style="{StaticResource FieldLabel}" Margin="0,0,0,10"/>
-                    <StackPanel Orientation="Horizontal">
-                        <Button x:Name="CheckButton" Style="{StaticResource PrimaryButton}" Content="CHECK FOR UPDATES" Click="Check_Click"/>
-                        <Button x:Name="InstallButton" Style="{StaticResource QuietButton}" Content="DOWNLOAD AND INSTALL" Margin="10,0,0,0"
-                                Visibility="Collapsed" Click="Install_Click"/>
-                    </StackPanel>
-                    <ProgressBar x:Name="Bar" Height="4" Margin="0,12,0,0" Minimum="0" Maximum="1" Width="360"
-                                 HorizontalAlignment="Left" Visibility="Collapsed"/>
-                    <TextBlock x:Name="StatusText" Margin="0,10,0,0" TextWrapping="Wrap"/>
-                    <TextBlock x:Name="NotesText" Margin="0,8,0,0" TextWrapping="Wrap" Opacity="0.75" MaxHeight="220"/>
-
-                    <Border Style="{StaticResource Card}" Margin="0,16,0,0">
-                        <CheckBox Style="{StaticResource Switch}" IsChecked="{Binding CheckUpdatesOnStartup}" Margin="16,4">
-                            <StackPanel>
-                                <TextBlock Text="Check for updates when Oberton starts" TextWrapping="Wrap"/>
-                                <TextBlock FontSize="12" Foreground="{DynamicResource Ob.Muted}" TextWrapping="Wrap" Margin="0,2,0,0"
-                                           Text="Checking contacts github.com only to read the list of releases. Nothing about you or your dictation is sent. Updating keeps your settings, profiles and downloaded models."/>
-                            </StackPanel>
-                        </CheckBox>
-                    </Border>
-                </StackPanel>
-            </Grid>
         </StackPanel>
     </ScrollViewer>
 </UserControl>

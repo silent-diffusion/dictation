@@ -73,7 +73,8 @@
                         <ListBox Style="{StaticResource NavList}" ItemContainerStyle="{StaticResource SettingsNavItem}" Margin="0,4,0,0"
                                  SelectionChanged="Nav_SelectionChanged" AutomationProperties.Name="App settings">
                             <ListBoxItem Content="ADVANCED" Tag="Advanced" AutomationProperties.Name="Advanced"/>
-                            <ListBoxItem Content="ABOUT &amp; UPDATES" Tag="About" AutomationProperties.Name="About and updates"/>
+                            <ListBoxItem Content="ABOUT" Tag="About" AutomationProperties.Name="About"/>
+                            <ListBoxItem Content="UPDATES" Tag="Updates" AutomationProperties.Name="Updates"/>
                         </ListBox>
                     </Expander>
                 </StackPanel>

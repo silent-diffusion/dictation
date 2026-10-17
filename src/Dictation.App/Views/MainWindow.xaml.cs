@@ -198,7 +198,7 @@ public partial class MainWindow : Window
     }
 
     /// <summary>Open a section ("Dashboard", "SpeechToText", "ReadAloud", "History", "Analytics") or a settings section by its tag
-    /// (e.g. "About" from the tray's update check).</summary>
+    /// (e.g. "Updates" from the tray's update check).</summary>
     public void ShowPage(string tag)
     {
         var item = NavList.Items.OfType<ListBoxItem>().FirstOrDefault(i => i.Tag as string == tag);

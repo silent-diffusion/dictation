@@ -70,7 +70,7 @@ The app lives in the system tray; closing the window keeps it running.
 
 ### Updating
 
-*Settings → About & Updates → Check for updates* (or the tray menu). If there's a newer release it downloads the installer
+*Settings → Updates → Check for updates* (or the tray menu). If there's a newer release it downloads the installer
 and updates in place; your settings, profiles and downloaded models are kept. You can also turn on *Check for updates when Oberton starts*.
 
 ### Uninstalling
@@ -153,7 +153,7 @@ window's edge.
   **Appearance** follows the Windows light/dark setting, or pick Light or Dark, plus an accent color (Cobalt, Teal,
   Signal green, Violet, Amber), each with a version for light and for dark paper. **Layout** places the dictation overlay and the Read aloud player
   (nine positions each) and sets their opacity.
-  **About & updates** explains what Oberton is, how it works and its design language, with the meaning of every Japanese
+  **About** explains what Oberton is, how it works and its design language, with the meaning of every Japanese
   word in the interface.
 * **Design** (4.0): Oberton is drawn like a printed instrument panel: black ink on gray paper, 1px lines, capitalized
   monospaced labels and readouts, rings of dots and block bars for numbers; dark mode is the same sheet inverted. Color is
@@ -215,7 +215,7 @@ Or download models from **Settings › Models**, and pick the active one there (
 ```
 ┌──────────────────────── Dictation.App (WPF, UI only) ────────────────────────┐
 │ MainWindow + pages · OverlayWindow (WS_EX_NOACTIVATE) · TrayIcon · HotkeyManager │
-│ SetupWindow (first run) · AboutPage (updates)                                  │
+│ SetupWindow (first run) · AboutPage · UpdatesPage                                  │
 └───────────────┬───────────────────────────────────────────────────────────────┘
                 │ events / commands
 ┌───────────────▼──────────────── Dictation.Core (no UI) ───────────────────────┐

@@ -25,7 +25,7 @@ public partial class SettingsPage : UserControl
     static ListBox ListOf(Expander g) => (ListBox)g.Content;
 
     /// <summary>Open a section by its tag (General, Hotkeys, Audio, HistorySettings, Models, Speech, Cloud, Unloading,
-    /// Appearance, Layout, Advanced, About), expanding its group if it was collapsed.</summary>
+    /// Appearance, Layout, Advanced, About, Updates), expanding its group if it was collapsed.</summary>
     public void Show(string section)
     {
         foreach (var g in GroupList)
@@ -60,6 +60,7 @@ public partial class SettingsPage : UserControl
             "Layout" => new LayoutPage(),
             "Advanced" => new AdvancedPage(),
             "About" => new AboutPage(),
+            "Updates" => new UpdatesPage(),
             _ => (object)new GeneralPage(),
         };
     }
