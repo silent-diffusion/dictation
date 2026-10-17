@@ -215,7 +215,7 @@ public partial class App : Application
     /// <summary>Set when a startup check found a newer release.</summary>
     public static UpdateInfo? AvailableUpdate { get; set; }
 
-    /// <summary>Appearance page: show the overlay at its (new) position for a moment.</summary>
+    /// <summary>Layout page: show the overlay at its (new) position for a moment.</summary>
     public void PreviewOverlay()
     {
         _reader?.ResetPosition();

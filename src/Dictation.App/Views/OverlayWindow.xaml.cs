@@ -523,7 +523,7 @@ public partial class OverlayWindow : Window
         if (_receipt != null && !_compareOpen) OpenCompare(_receipt);
     }
 
-    /// <summary>Settings › Appearance changed the position: flash the pill where it will appear.</summary>
+    /// <summary>Settings › Layout changed the position: flash the pill where it will appear.</summary>
     public void ShowPositionPreview()
     {
         _drag.Reset(); // a new position setting wins over where it was dragged

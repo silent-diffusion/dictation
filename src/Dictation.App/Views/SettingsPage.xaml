@@ -63,6 +63,7 @@
                         <ListBox Style="{StaticResource NavList}" ItemContainerStyle="{StaticResource SettingsNavItem}" Margin="0,4,0,0"
                                  SelectionChanged="Nav_SelectionChanged" AutomationProperties.Name="Look &amp; feel settings">
                             <ListBoxItem Content="APPEARANCE" Tag="Appearance" AutomationProperties.Name="Appearance"/>
+                            <ListBoxItem Content="LAYOUT" Tag="Layout" AutomationProperties.Name="Layout"/>
                         </ListBox>
                     </Expander>
                     <Expander x:Name="AppGroup" Style="{StaticResource NavGroup}" IsExpanded="True" Margin="0,0,0,8" Expanded="Group_Toggled" Collapsed="Group_Toggled">

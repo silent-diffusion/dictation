@@ -68,7 +68,7 @@ public partial class ReadAloudPage : UserControl
         var s = App.Services.Settings.Current;
         foreach (var pos in Enum.GetValues<OverlayPosition>())
         {
-            var name = AppearancePage.Describe(pos);
+            var name = LayoutPage.Describe(pos);
             var cell = new RadioButton
             {
                 GroupName = "ReaderPosition", Style = (Style)FindResource("PositionCell"), Tag = pos, ToolTip = name,
@@ -95,7 +95,7 @@ public partial class ReadAloudPage : UserControl
         var same = SamePlaceBox.IsChecked == true;
         ReaderPositionPanel.IsEnabled = !same;
         ReaderPositionPanel.Opacity = same ? 0.45 : 1;
-        ReaderPositionName.Text = AppearancePage.Describe(s.ReaderPosition ?? s.OverlayPosition);
+        ReaderPositionName.Text = LayoutPage.Describe(s.ReaderPosition ?? s.OverlayPosition);
     }
 
     void SamePlace_Changed(object sender, RoutedEventArgs e)
