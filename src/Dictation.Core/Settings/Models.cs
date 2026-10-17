@@ -75,7 +75,10 @@ public sealed class AppSettings
     /// <summary>The player shows the whole text (scrolling along) instead of the current sentence only.</summary>
     public bool ReaderExpanded { get; set; }
     /// <summary>The main window's sidebar is folded away, so the page fills the window.</summary>
-    public bool SidebarCollapsed { get; set; }
+    public bool SidebarCollapsed { get; set; } = true;
+    /// <summary>Set once the sidebar has started closed after the 4.2.2 update, so existing installs (saved as open)
+    /// switch to the new default once; after that the user's own choice is kept.</summary>
+    public bool SidebarClosedByDefault { get; set; }
     /// <summary>Settings groups folded away on the Settings page (by name, e.g. "ModelsGroup").</summary>
     public List<string> CollapsedSettingsGroups { get; set; } = new();
     /// <summary>Ids of built-in profiles already offered, so one added in an update appears once and stays deleted

@@ -27,6 +27,13 @@ public partial class MainWindow : Window
         Icon = System.Windows.Interop.Imaging.CreateBitmapSourceFromHIcon(
             Services.TrayIcon.CreateIcon().Handle, Int32Rect.Empty, System.Windows.Media.Imaging.BitmapSizeOptions.FromEmptyOptions());
         NavList.SelectedItem = DashboardItem;
+        // The sidebar starts closed by default (4.2.2); installs from before then switch over once.
+        if (!s.Settings.Current.SidebarClosedByDefault)
+        {
+            s.Settings.Current.SidebarCollapsed = true;
+            s.Settings.Current.SidebarClosedByDefault = true;
+            s.Settings.Save();
+        }
         SetSidebar(!s.Settings.Current.SidebarCollapsed, animate: false, save: false);
         PreviewKeyDown += (_, e) =>
         {
