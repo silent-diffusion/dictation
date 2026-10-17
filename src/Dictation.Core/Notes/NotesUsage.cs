@@ -19,10 +19,14 @@ public sealed class NotesUsageDay
     public Dictionary<string, int> Sources { get; set; } = new();
 }
 
+/// <summary>The counts over a period, summed from its days; <see cref="AiRequests"/> is formatting and summary steps
+/// together. <see cref="Sources"/> is sessions per source ("Mic", "Computer", "Both"), only the ones used.</summary>
+public sealed record NotesUsageTotals(int Sessions, double Seconds, int WordsHeard, int WordsTyped, int AiRequests, IReadOnlyDictionary<string, int> Sources);
+
 /// <summary>
 /// Daily counts of Extended Notes, in data\notes\usage.json, kept apart from the dictation counts (data\usage.json): a
-/// lecture's hour and its ten thousand words are not dictation, so they never show in the dashboard or Analytics. They
-/// are kept so they can be looked at later.
+/// lecture's hour and its ten thousand words are not dictation, so they never show in the dashboard or Analytics. The
+/// Extended Notes landing page shows them summed (the USAGE strip).
 /// </summary>
 public sealed class NotesUsage
 {
@@ -73,5 +77,34 @@ public sealed class NotesUsage
             JsonStore.Save(_path, _data);
         }
         catch (Exception e) { Log.Warn("Extended notes: saving the counts failed: " + e.Message); }
+    }
+
+    /// <summary>The counts over the last <paramref name="days"/> days up to and including today (the date of
+    /// <paramref name="now"/>); 0 or less means all time.</summary>
+    public NotesUsageTotals Totals(DateTime now, int days)
+    {
+        var today = now.Date;
+        var first = days <= 0 ? DateTime.MinValue : today.AddDays(1 - days);
+        int sessions = 0, heard = 0, typed = 0, ai = 0;
+        double seconds = 0;
+        var sources = new Dictionary<string, int>();
+        foreach (var d in _data.Days)
+        {
+            if (d.Day < first || (days > 0 && d.Day > today)) continue;
+            sessions += d.Sessions;
+            seconds += d.Seconds;
+            heard += d.WordsHeard;
+            typed += d.WordsTyped;
+            ai += d.FormatRequests + d.SummaryRequests;
+            foreach (var (source, n) in d.Sources) sources[source] = sources.GetValueOrDefault(source) + n;
+        }
+        return new NotesUsageTotals(sessions, seconds, heard, typed, ai, sources);
+    }
+
+    /// <summary>Seconds as hours and whole minutes: 0:45, 12:03.</summary>
+    public static string HoursMinutes(double seconds)
+    {
+        var t = TimeSpan.FromSeconds(Math.Max(0, seconds));
+        return $"{(int)t.TotalHours}:{t.Minutes:00}";
     }
 }

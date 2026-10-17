@@ -19,6 +19,7 @@ public partial class HotkeysPage : UserControl
         ToggleBox.Text = s.Hotkey;
         CycleBox.Text = string.IsNullOrEmpty(s.CycleProfileHotkey) ? "(none)" : s.CycleProfileHotkey;
         SpeakBox.Text = string.IsNullOrEmpty(s.SpeakHotkey) ? "(none)" : s.SpeakHotkey;
+        MarkerBox.Text = string.IsNullOrEmpty(s.NotesMarkerHotkey) ? "(none)" : s.NotesMarkerHotkey;
         ShowStatus();
     }
 
@@ -66,6 +67,22 @@ public partial class HotkeysPage : UserControl
         var text = Capture(e);
         if (text == null) return;
         App.Services.Settings.Current.SpeakHotkey = text;
+        App.Services.Settings.Save();
+        Refresh();
+    }
+
+    void Marker_KeyDown(object sender, KeyEventArgs e)
+    {
+        var text = Capture(e);
+        if (text == null) return;
+        App.Services.Settings.Current.NotesMarkerHotkey = text;
+        App.Services.Settings.Save();
+        Refresh();
+    }
+
+    void ResetMarker_Click(object sender, RoutedEventArgs e)
+    {
+        App.Services.Settings.Current.NotesMarkerHotkey = "Ctrl+Alt+M";
         App.Services.Settings.Save();
         Refresh();
     }

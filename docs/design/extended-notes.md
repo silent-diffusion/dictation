@@ -1,4 +1,4 @@
-# Extended Notes (5.0.0)
+# Extended Notes (5.0.0, markers / Word export / usage in 5.2.0)
 
 Leave Oberton listening through a lecture or a meeting. It transcribes as it goes, tidies the text with the AI a
 minute at a time, keeps a running summary and the recording, and lets you type your own notes straight into the text.
@@ -35,7 +35,12 @@ Agreed with the user on 2026-10-17; design mockup: https://claude.ai/artifact/47
   silences**, 1× / 1.5× / 2×. ▶ plays from where the cursor is in the Transcript or Formatted text. The recording is
   played (and exported) with its level brought up, since mic recordings are quiet. **Right-click** in any tab: *Jump to
   this moment in the recording* (in the Summary tab, to the section the sentence is about).
-- **Export ▾**: Transcript, Formatted, Summary, or everything, as .txt or .md; and the recording as .wav.
+- **Export ▾**: Transcript, Formatted, Summary, or everything, as .txt or .md, or as Word (.docx, written by the app
+  itself, no library); and the recording as .wav. *Everything* lists the markers.
+- **Markers** (5.2): **⚑ Mark** in the session header, or the marker hotkey (Settings › Hotkeys, default `Ctrl+Alt+M`),
+  appends `⚑ h:mm:ss` on its own line to the Transcript at the moment of the recording, with a time anchor, and keeps
+  the marker in session.json. The formatting prompt tells the AI to keep marker lines exactly.
+- **Usage** (5.2): the landing page shows a strip from `data\notes\usage.json`: last 30 days and all time.
 - **Dashboard**: a cell to the right of the signal path holding only a title and a text box that can always be typed
   in: the live transcript while a session records (the user edits and adds to it), and between sessions a notepad
   (kept in `data\notes\draft.txt`) that the next session begins with, as the user's own notes. Before a session, the
@@ -76,4 +81,4 @@ user's edits.
 
 ## Later (not in 5.0.0)
 
-Markers, speaker labels, organized views (lecture notes, minutes, action items), Word export.
+Speaker labels, organized views (lecture notes, minutes, action items). Markers and Word export shipped in 5.2.0.

@@ -15,6 +15,15 @@ public sealed class NoteAnchor
     public double Seconds { get; set; }
 }
 
+/// <summary>A moment the listener marked (the marker hotkey or the Mark button) while the session recorded. The
+/// transcript has a line for it: <see cref="NoteSession.MarkerFlag"/> and <see cref="Label"/>.</summary>
+public sealed class NoteMarker
+{
+    public double Seconds { get; set; }
+    /// <summary>The time as its line shows it: 12:34, or 1:02:03 once there are hours.</summary>
+    public string Label { get; set; } = "";
+}
+
 /// <summary>One formatting step: what had been heard, what the transcript said (the user's edits included) when it was
 /// sent to the AI, and what the AI made of it. The Edited tab is built from these.</summary>
 public sealed class NoteChunk
@@ -79,6 +88,8 @@ public sealed class NoteSession
     public List<NoteChunk> Chunks { get; set; } = new();
     public List<NoteAnchor> TranscriptAnchors { get; set; } = new();
     public List<NoteAnchor> FormattedAnchors { get; set; } = new();
+    /// <summary>The moments the listener marked, in order (see <see cref="AddMarker"/>).</summary>
+    public List<NoteMarker> Markers { get; set; } = new();
 
     /// <summary>The session's folder (session.json and audio.wav).</summary>
     [JsonIgnore] public string Folder { get; set; } = "";
@@ -113,6 +124,30 @@ public sealed class NoteSession
     }
 
     static string Join(string a, string b) => a.Length == 0 ? b : a + " " + b;
+
+    /// <summary>Begins a marker's line in the transcript (the AI is told to keep such lines as they are).</summary>
+    public const string MarkerFlag = "⚑";
+
+    /// <summary>A marker's time as its line shows it: m:ss, with the hours once there are any (12:34; 1:02:03).</summary>
+    public static string MarkerLabel(double seconds)
+    {
+        var t = TimeSpan.FromSeconds(Math.Max(0, seconds));
+        return t.TotalHours >= 1 ? $"{(int)t.TotalHours}:{t.Minutes:00}:{t.Seconds:00}" : $"{t.Minutes}:{t.Seconds:00}";
+    }
+
+    /// <summary>The listener marked <paramref name="seconds"/> into the recording: a "⚑ h:mm:ss" line of its own goes
+    /// on the end of the transcript (the next piece heard begins a new line), with an anchor so a right-click on it jumps
+    /// there. Like <see cref="AppendHeard"/> it only appends, so how far formatting got, and the end of a request on its
+    /// way, stay where they are.</summary>
+    public void AddMarker(double seconds, object? source = null)
+    {
+        var label = MarkerLabel(seconds);
+        var sep = Transcript.Length == 0 || Transcript.EndsWith('\n') ? "" : "\n";
+        TranscriptAnchors.Add(new NoteAnchor { Offset = Transcript.Length + sep.Length, Seconds = seconds });
+        Transcript += sep + MarkerFlag + " " + label + "\n";
+        Markers.Add(new NoteMarker { Seconds = seconds, Label = label });
+        Changed?.Invoke(NoteDoc.Transcript, source);
+    }
 
     /// <summary>The user edited a text (in a text box): keep the anchors and the formatting marks in step.</summary>
     public void Set(NoteDoc doc, string text, object? source)

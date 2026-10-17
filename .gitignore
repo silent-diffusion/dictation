@@ -12,3 +12,5 @@ obj/
 __pycache__/
 *.log
 *.err
+# Claude Code worktrees and local state
+.claude/
