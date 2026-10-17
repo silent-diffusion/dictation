@@ -70,7 +70,9 @@ public class NotesDocxExportTests
         var raw = reader.ReadToEnd();
         Assert.Contains("&amp;", raw);
         Assert.Contains("&lt;c&gt;", raw);
-        Assert.DoesNotContain("\u0007", raw);
+        // Ordinal: a culture-sensitive search treats a control character as ignorable and "finds" it at position 0.
+        Assert.DoesNotContain("\u0007", raw, StringComparison.Ordinal);
+        Assert.DoesNotContain("\u0001", raw, StringComparison.Ordinal);
         var paragraphs = Paragraphs(XDocument.Parse(raw));
         Assert.Equal("A & B <c> \"d\"", paragraphs[0].Text);
         Assert.Equal("Smile \U0001F600 here and \"quoted\" <tag> & co\ttab", paragraphs[2].Text);
