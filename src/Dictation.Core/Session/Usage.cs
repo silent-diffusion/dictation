@@ -113,11 +113,15 @@ public sealed class UsageStore
         return d;
     }
 
+    /// <summary>Raised after every change (a dictation, a reading, a reset), for pages that show the counts live.</summary>
+    public event Action? Changed;
+
     void Save()
     {
-        if (_path == null) return;
-        try { JsonStore.Save(_path, _data); }
-        catch (Exception e) { Log.Warn("Saving usage counts failed: " + e.Message); }
+        if (_path != null)
+            try { JsonStore.Save(_path, _data); }
+            catch (Exception e) { Log.Warn("Saving usage counts failed: " + e.Message); }
+        Changed?.Invoke();
     }
 
     // ----- figures for the dashboard -----

@@ -89,6 +89,10 @@ public sealed class WordTally
 
     bool Enabled => _settings?.Current.KeepWordTally ?? true;
 
+    /// <summary>Raised (on a background thread) after a dictation was counted or the tally was reset, so Analytics can
+    /// show it right away.</summary>
+    public event Action? Changed;
+
     /// <summary>Count a finished dictation, off the UI thread (it diffs and writes a file).</summary>
     public void Record(HistoryEntry entry)
     {
@@ -103,6 +107,7 @@ public sealed class WordTally
                     Compact();
                     Save();
                 }
+                Changed?.Invoke();
             }
             catch (Exception e) { Log.Warn("Updating the word tally failed: " + e.Message); }
         });
@@ -116,6 +121,7 @@ public sealed class WordTally
             _data.Days.Clear();
             Save();
         }
+        Changed?.Invoke();
     }
 
     /// <summary>A copy of the days from <paramref name="from"/> on (all of them when null), oldest first.</summary>

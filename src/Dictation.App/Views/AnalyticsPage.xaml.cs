@@ -22,7 +22,33 @@ public partial class AnalyticsPage : UserControl
     public AnalyticsPage()
     {
         InitializeComponent();
-        Loaded += (_, _) => Build();
+        // Live: every dictation (word tally, daily counts) and every reading (daily counts) redraws the page.
+        Loaded += (_, _) =>
+        {
+            App.Services.Words.Changed += OnDataChanged;
+            App.Services.Usage.Changed += OnDataChanged;
+            Build();
+        };
+        Unloaded += (_, _) =>
+        {
+            App.Services.Words.Changed -= OnDataChanged;
+            App.Services.Usage.Changed -= OnDataChanged;
+        };
+    }
+
+    bool _rebuildQueued;
+
+    /// <summary>The stores changed (the word tally on a background thread): redraw once, on the UI thread, however
+    /// many changes arrive together (a dictation updates both stores).</summary>
+    void OnDataChanged()
+    {
+        if (_rebuildQueued) return;
+        _rebuildQueued = true;
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, () =>
+        {
+            _rebuildQueued = false;
+            if (IsLoaded) Build();
+        });
     }
 
     FontFamily Mono => (FontFamily)FindResource("Ob.Mono");

@@ -125,6 +125,31 @@ public class WordTallyTests
     }
 
     [Fact]
+    public void Each_dictation_is_announced_and_counted_again()
+    {
+        var tally = new WordTally(null);
+        var changed = new SemaphoreSlim(0);
+        tally.Changed += () => changed.Release();
+        HistoryEntry E() => new() { Time = DateTime.Now, Profile = "Raw", Transcript = "release notes", Final = "Release notes." };
+        tally.Record(E());
+        Assert.True(changed.Wait(TimeSpan.FromSeconds(10)));
+        tally.Record(E());
+        Assert.True(changed.Wait(TimeSpan.FromSeconds(10)));
+        Assert.Equal(2, tally.Days().Single().Words["release"]);
+    }
+
+    [Fact]
+    public void Usage_announces_every_change()
+    {
+        var u = new UsageStore(null);
+        var n = 0;
+        u.Changed += () => n++;
+        u.Record(new HistoryEntry { Time = DateTime.Now, Final = "one" });
+        u.RecordReading(5);
+        Assert.Equal(2, n);
+    }
+
+    [Fact]
     public void Usage_counts_can_be_read_for_a_period_or_all()
     {
         var u = new UsageStore(null);
