@@ -104,6 +104,7 @@ public class NotesMarkersTests
     static NoteSession Session() => new()
     {
         Title = "Product sync", Summary = "Ship Monday.", Formatted = "We ship on Monday.", Transcript = "we ship on monday", Seconds = 3725,
+        Started = new DateTime(2026, 10, 17, 9, 0, 0), // fixed: the export's date line must never read a marker's time
     };
 
     [Fact]

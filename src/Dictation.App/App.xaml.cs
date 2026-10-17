@@ -240,6 +240,7 @@ public partial class App : Application
         overlay.CancelRequested += () => c.Cancel();
         overlay.InsertRequested += () => c.Toggle(); // in preview, the hotkey and the Insert button do the same thing
         overlay.InsertRawRequested += () => c.InsertRawInstead();
+        Services.Notes.StateChanged += ApplyMarkerHotkey;
         c.StateChanged += state =>
         {
             if (state == DictationState.Idle) UnloadSoonIfImmediate();
@@ -271,6 +272,16 @@ public partial class App : Application
         c.Notice += (msg, level) => overlay.ShowMessage(msg, level);
     }
 
+    /// <summary>The marker hotkey is held only while an Extended Notes session records (paused or not); the rest of the
+    /// time the key stays with whatever app uses it (Ctrl+Alt+M inserts a comment in Word).</summary>
+    void ApplyMarkerHotkey()
+    {
+        Hotkeys.Unregister(HkMarker);
+        if (!Services.Notes.IsRecording) return;
+        var err = Hotkeys.Register(HkMarker, Services.Settings.Current.NotesMarkerHotkey, () => Services.Notes.AddMarker());
+        if (err != null) Log.Warn(err);
+    }
+
     void ApplyHotkeys()
     {
         var st = Services.Settings.Current;
@@ -288,9 +299,13 @@ public partial class App : Application
         if (e2 != null) errors.Add(e2);
         var e3 = Hotkeys.Register(HkSpeak, st.SpeakHotkey, OnSpeakHotkey);
         if (e3 != null) errors.Add(e3);
-        // A marker only means something while a session records (paused or not); otherwise the key does nothing.
-        var e4 = Hotkeys.Register(HkMarker, st.NotesMarkerHotkey, () => { if (Services.Notes.IsRecording) Services.Notes.AddMarker(); });
-        if (e4 != null) errors.Add(e4);
+        // The marker key is held only while a session records (see ApplyMarkerHotkey); re-register it if that is now.
+        if (Services.Notes.IsRecording)
+        {
+            Hotkeys.Unregister(HkMarker);
+            var e4 = Hotkeys.Register(HkMarker, st.NotesMarkerHotkey, () => Services.Notes.AddMarker());
+            if (e4 != null) errors.Add(e4);
+        }
         HotkeyError = errors.Count == 0 ? null : string.Join("\n", errors);
         if (HotkeyError != null)
         {
