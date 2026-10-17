@@ -12,16 +12,23 @@ namespace Dictation.Core.Notes;
 public sealed class NotesStore
 {
     public static string Dir => Path.Combine(AppPaths.DataDir, "notes");
+    static string DraftPath => Path.Combine(Dir, "draft.txt");
     public ObservableCollection<NoteSession> Sessions { get; } = new();
     readonly object _writeLock = new();
+    readonly bool _disk;
+    volatile string _draft = "";
+    Timer? _draftTimer;
 
     public NotesStore(bool load = true)
     {
+        _disk = load;
         if (load) Load();
     }
 
     void Load()
     {
+        try { if (File.Exists(DraftPath)) _draft = File.ReadAllText(DraftPath, Encoding.UTF8); }
+        catch (Exception e) { Log.Warn("Extended notes: couldn't read the draft: " + e.Message); }
         if (!Directory.Exists(Dir)) return;
         var loaded = new List<NoteSession>();
         foreach (var folder in Directory.GetDirectories(Dir))
@@ -86,6 +93,60 @@ public sealed class NotesStore
         Sessions.Remove(s);
         try { if (s.Folder.Length > 0 && Directory.Exists(s.Folder)) Directory.Delete(s.Folder, true); }
         catch (Exception e) { Log.Warn("Extended notes: couldn't delete a session: " + e.Message); }
+    }
+
+    // ===== the dashboard's notes box between sessions =====
+
+    /// <summary>What was typed in the dashboard's notes box while nothing recorded; the next session begins with it.</summary>
+    public string Draft => _draft;
+
+    /// <summary>The box changed: kept, and written to draft.txt a moment after the typing stops.</summary>
+    public void SetDraft(string text)
+    {
+        if (text == _draft) return;
+        _draft = text;
+        if (!_disk) return;
+        _draftTimer ??= new Timer(_ => WriteDraft());
+        _draftTimer.Change(800, Timeout.Infinite);
+    }
+
+    /// <summary>A session starts: it takes the draft, which is cleared.</summary>
+    public string TakeDraft()
+    {
+        var draft = _draft;
+        if (draft.Length == 0) return "";
+        _draft = "";
+        if (_disk)
+        {
+            _draftTimer?.Change(Timeout.Infinite, Timeout.Infinite);
+            _ = Task.Run(WriteDraft);
+        }
+        return draft;
+    }
+
+    /// <summary>Oberton is closing: write the draft now.</summary>
+    public void FlushDraft()
+    {
+        if (!_disk || _draftTimer == null) return;
+        _draftTimer.Change(Timeout.Infinite, Timeout.Infinite);
+        WriteDraft();
+    }
+
+    void WriteDraft()
+    {
+        lock (_writeLock)
+        {
+            var text = _draft; // read under the lock, so an older text never lands after a newer one
+            try
+            {
+                if (text.Length == 0) { if (File.Exists(DraftPath)) File.Delete(DraftPath); return; }
+                Directory.CreateDirectory(Dir);
+                var tmp = DraftPath + ".tmp";
+                File.WriteAllText(tmp, text, Encoding.UTF8);
+                File.Move(tmp, DraftPath, true);
+            }
+            catch (Exception e) { Log.Warn("Extended notes: saving the draft failed: " + e.Message); }
+        }
     }
 }
 

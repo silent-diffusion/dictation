@@ -32,8 +32,8 @@ public partial class DashboardPage : UserControl
     {
         InitializeComponent();
         _timer.Tick += async (_, _) => await RefreshAsync();
-        Loaded += async (_, _) => { _timer.Start(); await RefreshAsync(); };
-        Unloaded += (_, _) => { _timer.Stop(); UnbindNotes(); };
+        Loaded += async (_, _) => { AttachNotes(); _timer.Start(); await RefreshAsync(); };
+        Unloaded += (_, _) => { _timer.Stop(); DetachNotes(); };
         BuildNotesCell();
         Build();
     }

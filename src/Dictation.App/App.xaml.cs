@@ -358,7 +358,7 @@ public partial class App : Application
         Hotkeys.Dispose();
         _tray?.Dispose();
         Services.Mic.Dispose();
-        Services.Notes.Shutdown(); // keep a session that is recording, up to now
+        Services.Notes.Shutdown(); // keep a session that is recording, up to now, and the notes draft
         _reader?.Stop();
         _ = Services.Tts.DisposeAsync();
         _ = Services.Speech.DisposeAsync();

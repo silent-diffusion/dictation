@@ -32,9 +32,10 @@ Agreed with the user on 2026-10-17; design mockup: https://claude.ai/artifact/47
 - **Playback bar** at the bottom: play/pause, position, a seek bar, 1× / 1.5× / 2×. ▶ plays from where the cursor is in
   the Transcript or Formatted text.
 - **Export ▾**: Transcript, Formatted, Summary, or everything, as .txt or .md; and the recording as .wav.
-- **Dashboard**: a cell to the right of the signal path holding only a title and a text box (the live transcript, which
-  the user can edit and add to). Before a session, the title's spot is the **EXTENDED NOTES SESSION** button (hollow
-  red ring, solid red once recording; clicking the red dot stops). A **Full screen** button opens the live session if
+- **Dashboard**: a cell to the right of the signal path holding only a title and a text box that can always be typed
+  in: the live transcript while a session records (the user edits and adds to it), and between sessions a notepad
+  (kept in `data\notes\draft.txt`) that the next session begins with, as the user's own notes. Before a session, the
+  title's spot is the **EXTENDED NOTES SESSION** button (hollow red ring, solid red once recording; clicking the red dot stops). A **Full screen** button opens the live session if
   one is recording, otherwise the Extended Notes landing page.
 
 ## Behaviour

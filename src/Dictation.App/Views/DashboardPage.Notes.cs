@@ -11,8 +11,9 @@ namespace Dictation.App.Views;
 /// <summary>
 /// The dashboard's Extended Notes cell, beside the signal path: only a title and a text box. Before a session the
 /// title's spot is an "Extended notes session" button with a hollow red ring (it starts one); while recording, the ring
-/// is solid red (click it to stop) and the session's name is there (click to rename). The box is the live transcript,
-/// which the user can edit and add to. Full screen opens the live session, or Extended Notes when nothing records.
+/// is solid red (click it to stop) and the session's name is there (click to rename). The box can always be typed in:
+/// while a session records it is the live transcript; between sessions it is a notepad (kept in data\notes\draft.txt)
+/// that the next session begins with. Full screen opens the live session, or Extended Notes when nothing records.
 /// Built once (the 3-second refresh would lose the cursor), then only updated.
 /// </summary>
 public partial class DashboardPage
@@ -25,6 +26,10 @@ public partial class DashboardPage
     Ellipse _notesDotShape = null!;
     TextBlock _notesTitleText = null!;
     NotesTextBinder? _notesBinder;
+    /// <summary>The box shows the draft (nothing records), not a session.</summary>
+    bool _notesDraft;
+    /// <summary>The session that just finished here, for the hint.</summary>
+    string? _notesSaved;
 
     void BuildNotesCell()
     {
@@ -109,21 +114,37 @@ public partial class DashboardPage
         DockPanel.SetDock(head, Dock.Top);
         root.Children.Add(head);
 
-        // The text box: the live transcript, editable; a hint when nothing records
+        // The text box: always editable (the live transcript, or the draft between sessions); a hint while it's empty
         var boxArea = new Grid();
         _notesBox = new TextBox { AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             FontSize = 13, Padding = new Thickness(8, 6, 8, 6), VerticalContentAlignment = VerticalAlignment.Top };
-        System.Windows.Automation.AutomationProperties.SetName(_notesBox, "Extended notes transcript");
+        System.Windows.Automation.AutomationProperties.SetName(_notesBox, "Extended notes");
+        _notesBox.TextChanged += (_, _) =>
+        {
+            if (_notesDraft) App.Services.NotesStore.SetDraft(_notesBox.Text);
+            _notesHint.Visibility = _notesBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+        };
         boxArea.Children.Add(_notesBox);
-        _notesHint = new TextBlock { Text = "Start a session and the transcript appears here. You can type in it too.", TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(12, 9, 12, 0), FontSize = 12.5, IsHitTestVisible = false };
+        _notesHint = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(12, 9, 12, 0), FontSize = 12.5, IsHitTestVisible = false };
         _notesHint.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Muted");
         boxArea.Children.Add(_notesHint);
         root.Children.Add(boxArea);
 
         NotesCell.Child = root;
+    }
+
+    void AttachNotes()
+    {
+        _notes.StateChanged -= UpdateNotesCell;
         _notes.StateChanged += UpdateNotesCell;
         UpdateNotesCell();
+    }
+
+    void DetachNotes()
+    {
+        _notes.StateChanged -= UpdateNotesCell;
+        UnbindNotes();
+        _notesDraft = false;
     }
 
     static ControlTemplate PlainTemplate(bool withBorder = false)
@@ -158,7 +179,7 @@ public partial class DashboardPage
         finally { _notesStart.IsEnabled = true; UpdateNotesCell(); }
     }
 
-    /// <summary>Show the cell for the current state: idle (start button, read-only box) or recording (dot, title, live text).</summary>
+    /// <summary>Show the cell for the current state: idle (start button, the draft) or recording (dot, title, live text).</summary>
     void UpdateNotesCell()
     {
         if (_notesBox == null) return;
@@ -175,22 +196,29 @@ public partial class DashboardPage
 
         if (recording && _notesBinder?.Session != s)
         {
+            // A session started (it took the draft): the box is its transcript now.
             UnbindNotes();
+            _notesDraft = false;
             _notesBinder = new NotesTextBinder(_notesBox, s!, NoteDoc.Transcript);
         }
-        else if (!recording && _notesBinder != null)
+        else if (!recording && !_notesDraft)
         {
+            // Nothing records: the box is a notepad again, for the next session.
+            if (_notesBinder != null) _notesSaved = _notesBinder.Session.Title;
             UnbindNotes();
-            _notesBox.Text = "";
+            _notesBox.Text = App.Services.NotesStore.Draft;
+            _notesDraft = true;
         }
-        _notesBox.IsReadOnly = !recording;
-        _notesHint.Visibility = !recording && _notesBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+        _notesHint.Text = recording
+            ? (_notes.IsPaused ? "Paused. You can still type your own notes here." : "Listening. The transcript appears here, and you can type your own notes in it anytime.")
+            : (_notesSaved != null ? $"“{_notesSaved}” is saved in Extended Notes. " : "") +
+              "Type here anytime: what you type begins the next session, and its transcript follows.";
+        _notesHint.Visibility = _notesBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     void UnbindNotes()
     {
         _notesBinder?.Dispose();
         _notesBinder = null;
-        if (!IsLoaded) _notes.StateChanged -= UpdateNotesCell;
     }
 }

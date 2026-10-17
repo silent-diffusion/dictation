@@ -117,6 +117,13 @@ public sealed class NotesRecorder
             _store.Delete(s);
             throw;
         }
+        // What was typed in the dashboard's notes box beforehand begins the transcript, as the user's own notes.
+        var draft = _store.TakeDraft().Trim();
+        if (draft.Length > 0)
+        {
+            s.Set(NoteDoc.Transcript, draft + "\n", this);
+            _store.Save(s);
+        }
         Current = s;
         Log.Info($"Extended notes: started {s.Id} ({source})");
         _tick = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
@@ -348,9 +355,10 @@ public sealed class NotesRecorder
         }
     }
 
-    /// <summary>Oberton is closing: keep everything up to now (no last formatting pass), right away.</summary>
+    /// <summary>Oberton is closing: keep everything up to now (and the dashboard draft; no last formatting pass), right away.</summary>
     public void Shutdown()
     {
+        _store.FlushDraft();
         var s = Current;
         if (s == null) return;
         StopAudio();

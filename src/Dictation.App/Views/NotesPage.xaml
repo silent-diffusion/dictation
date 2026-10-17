@@ -35,8 +35,9 @@
                 </Setter.Value>
             </Setter>
         </Style>
-        <!-- The big text boxes: plain, in the text face -->
-        <Style x:Key="NotesBox" TargetType="TextBox">
+        <!-- The big text boxes: plain, in the text face. Based on the app's own (Fluent) text box, which follows light and
+             dark; a style that isn't would fall back to the old white Windows box. -->
+        <Style x:Key="NotesBox" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
             <Setter Property="AcceptsReturn" Value="True"/>
             <Setter Property="AcceptsTab" Value="False"/>
             <Setter Property="TextWrapping" Value="Wrap"/>

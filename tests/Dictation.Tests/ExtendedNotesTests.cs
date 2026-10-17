@@ -245,6 +245,37 @@ public class NotesEditsTests
         s.Set(NoteDoc.Formatted, "We said this.", null);
         Assert.Equal("We said this u-and u-that.", Show(NotesEdits.Build(s)));
     }
+
+    [Fact]
+    public void Notes_typed_before_the_session_are_the_users_own()
+    {
+        var s = new NoteSession();
+        s.Set(NoteDoc.Transcript, "Agenda: budget\n", null); // the dashboard draft, as a new session takes it
+        s.AppendHeard("so the budget is final", 2.0);
+        Assert.Equal("Agenda: budget\nso the budget is final", s.Transcript);
+        Assert.Equal(0.0, s.SecondsAt(NoteDoc.Transcript, 3));
+        Assert.Equal(2.0, s.SecondsAt(NoteDoc.Transcript, s.Transcript.Length - 1));
+        Assert.Equal("u+Agenda: u+budget | so the budget is final", Show(NotesEdits.Build(s)));
+
+        var t = s.BeginFormat()!.Value;
+        Assert.Equal("so the budget is final", t.Heard);
+        s.EndFormat(t.Heard, t.Sent, t.Sent, t.Seconds, false);
+        Assert.Equal("u+Agenda: u+budget | so the budget is final", Show(NotesEdits.Build(s)));
+    }
+}
+
+public class NotesDraftTests
+{
+    [Fact]
+    public void The_draft_goes_to_the_next_session_once()
+    {
+        var store = new NotesStore(load: false);
+        store.SetDraft("Agenda: budget");
+        Assert.Equal("Agenda: budget", store.Draft);
+        Assert.Equal("Agenda: budget", store.TakeDraft());
+        Assert.Equal("", store.Draft);
+        Assert.Equal("", store.TakeDraft());
+    }
 }
 
 public class NotesExportTests

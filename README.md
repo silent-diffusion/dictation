@@ -100,7 +100,8 @@ clicked (History, Analytics, the profiles, Microphone, Model unloading); the big
 right away, and the big number on the History meter copies the last dictation's AI edit (or its text, without one) and says so. The figures come from daily counts in
 `data\usage.json` (dictations, words, seconds spoken, turnaround, AI edits kept, readings and dictations per app name; never
 any text, audio or window titles), so they survive History being trimmed, cleared or off), **Extended Notes**, **Speech to text** (profiles), **Read aloud**, **History**, **Analytics** and **Settings**. Beside the
-signal path, the dashboard has an **Extended Notes** cell: a title and the live transcript, which you can type into; before a
+signal path, the dashboard has an **Extended Notes** cell: a title and a text box you can always type in (the live
+transcript while a session records; between sessions a notepad, which the next session begins with); before a
 session its title's spot is an *Extended notes session* button (its red ring fills once it records; click the dot to stop),
 and *Full screen* opens the live session (or Extended Notes when nothing records). The menu button
 in the top-left corner (✕ while the sidebar is open, ☰ while it's hidden; or **Ctrl+B**) slides the sidebar away to give
@@ -194,8 +195,7 @@ window's edge.
   and notes typed by you in amber). The titles are click-to-rename. The bar at the bottom plays the recording from where
   your cursor is in the text (1×, 1.5×, 2×); **Export** saves the transcript, the formatted text, the summary or everything
   as .txt or .md, and the recording as .wav. **Pause**, **Full screen** and **Stop** are in the header; dictating into an
-  app pauses the session for that moment. Everything is saved as it goes in `data
-otes\` (a session.json and the
+  app pauses the session for that moment. Everything is saved as it goes in `data\notes\` (a session.json and the
   audio.wav, about 115 MB an hour), so a crash keeps it; the landing page lists every session (search, open, delete).
   The speech engine is shared: notes open their own connection to the model already loaded, and no model unloads while a
   session records.
