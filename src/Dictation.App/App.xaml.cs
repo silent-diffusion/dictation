@@ -284,7 +284,7 @@ public partial class App : Application
 
     /// <summary>The marker key must differ from the other shortcuts; registering it second would only say "used by
     /// another application".</summary>
-    static string? MarkerClash(AppSettings st)
+    static string? MarkerClash(Dictation.Core.Settings.AppSettings st)
     {
         var key = st.NotesMarkerHotkey;
         if (string.IsNullOrWhiteSpace(key)) return null;
