@@ -21,7 +21,8 @@ public enum EditMark
     UserNote,
 }
 
-public readonly record struct EditPiece(string Text, EditMark Mark);
+/// <param name="Seconds">About when in the recording it was said (for the Edited tab's right-click jump).</param>
+public readonly record struct EditPiece(string Text, EditMark Mark, double Seconds = 0);
 
 /// <summary>
 /// The Edited tab: one text in which every change is marked, the AI's apart from the user's. For each formatting step it
@@ -38,17 +39,22 @@ public static class NotesEdits
         LongDiff.Split(Breaks.Replace(text.Trim(), " " + Para + " "));
 
     // One word on its way through the merge: its text, mark, and whether it is part of the AI's text (A).
-    record struct Item(string Text, EditMark Mark, bool InAi, bool UserOrigin);
+    record struct Item(string Text, EditMark Mark, bool InAi, bool UserOrigin, double Seconds = 0);
 
     public static IReadOnlyList<EditPiece> Build(NoteSession s)
     {
         var items = new List<Item>();
         var aiTokens = new List<string>();
-        foreach (var chunk in s.Chunks)
+        for (var c = 0; c < s.Chunks.Count; c++)
         {
-            if (items.Count > 0) { items.Add(new Item(Para, EditMark.Paragraph, true, false)); aiTokens.Add(Para); }
-            foreach (var it in MergeChunk(chunk))
+            var chunk = s.Chunks[c];
+            if (items.Count > 0) { items.Add(new Item(Para, EditMark.Paragraph, true, false, chunk.Seconds)); aiTokens.Add(Para); }
+            // A step covers a minute or so: its words are spread over that time, in proportion.
+            var merged = MergeChunk(chunk);
+            var end = c + 1 < s.Chunks.Count ? s.Chunks[c + 1].Seconds : s.FormattedEndSeconds();
+            for (var i = 0; i < merged.Count; i++)
             {
+                var it = merged[i] with { Seconds = chunk.Seconds + Math.Max(0, end - chunk.Seconds) * i / merged.Count };
                 items.Add(it);
                 if (it.InAi) aiTokens.Add(it.Text);
             }
@@ -60,21 +66,56 @@ public static class NotesEdits
 
         // The transcript not formatted yet: the user's edits of what was heard.
         var heardRest = Tokens(s.Heard[Math.Min(s.HeardFormattedThrough, s.Heard.Length)..]);
-        var transcriptRest = Tokens(s.Transcript[Math.Min(s.FormattedThrough, s.Transcript.Length)..]);
+        var tailFrom = Math.Min(s.FormattedThrough, s.Transcript.Length);
+        var tail = s.Transcript[tailFrom..];
+        var transcriptRest = Tokens(tail);
+        var offsets = Offsets(tail, transcriptRest);
         var rest = new List<Item>();
+        var j = 0;
+        var seconds = s.FormattedEndSeconds();
         foreach (var t in LongDiff.Compute(heardRest, transcriptRest))
+        {
+            // Words in the transcript have their moment; a word the user removed takes its neighbour's.
+            if (t.Kind != DiffKind.Removed && j < offsets.Length) seconds = s.SecondsAt(NoteDoc.Transcript, tailFrom + offsets[j++]);
             rest.Add(t.Kind switch
             {
-                DiffKind.Same => new Item(t.Word, t.Word == Para ? EditMark.Paragraph : EditMark.Plain, false, false),
-                DiffKind.Removed => new Item(t.Word, EditMark.UserRemoved, false, false),
-                _ => new Item(t.Word, t.Word == Para ? EditMark.Paragraph : EditMark.UserNote, false, true),
+                DiffKind.Same => new Item(t.Word, t.Word == Para ? EditMark.Paragraph : EditMark.Plain, false, false, seconds),
+                DiffKind.Removed => new Item(t.Word, EditMark.UserRemoved, false, false, seconds),
+                _ => new Item(t.Word, t.Word == Para ? EditMark.Paragraph : EditMark.UserNote, false, true, seconds),
             });
+        }
         Classify(rest);
-        if (withFormatted.Count > 0 && rest.Count > 0) withFormatted.Add(new Item(Para, EditMark.Paragraph, false, false));
+        if (withFormatted.Count > 0 && rest.Count > 0) withFormatted.Add(new Item(Para, EditMark.Paragraph, false, false, rest[0].Seconds));
         withFormatted.AddRange(rest);
 
         return withFormatted.Where(i => !(i.Text == Para && i.Mark is EditMark.UserRemoved or EditMark.AiRemoved))
-            .Select(i => new EditPiece(i.Text, i.Mark)).ToList();
+            .Select(i => new EditPiece(i.Text, i.Mark, i.Seconds)).ToList();
+    }
+
+    /// <summary>Where each token of <see cref="Tokens"/> begins in the text it came from.</summary>
+    static int[] Offsets(string text, string[] tokens)
+    {
+        var offsets = new int[tokens.Length];
+        var pos = text.Length - text.TrimStart().Length;
+        for (var i = 0; i < tokens.Length; i++)
+        {
+            var from = Math.Min(pos, text.Length);
+            int at;
+            if (tokens[i] == Para)
+            {
+                at = text.IndexOf('\n', from);
+                if (at < 0) at = from;
+                pos = at + 1;
+            }
+            else
+            {
+                at = text.IndexOf(tokens[i], from, StringComparison.Ordinal);
+                if (at < 0) at = from;
+                pos = at + tokens[i].Length;
+            }
+            offsets[i] = Math.Min(at, text.Length);
+        }
+        return offsets;
     }
 
     /// <summary>
@@ -130,7 +171,7 @@ public static class NotesEdits
             while (j < diff.Count && diff[j].Kind == DiffKind.Added)
             {
                 var w = diff[j++].Word;
-                output.Add(new Item(w, w == Para ? EditMark.Paragraph : EditMark.UserNote, false, true));
+                output.Add(new Item(w, w == Para ? EditMark.Paragraph : EditMark.UserNote, false, true, output.Count > 0 ? output[^1].Seconds : 0));
             }
         }
         foreach (var it in items)

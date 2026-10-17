@@ -18,6 +18,10 @@ public sealed record ProcessResult(string Text, bool Modified, string? Warning, 
 public interface ITextProcessor
 {
     Task<ProcessResult> ProcessAsync(string rawText, Profile profile, CancellationToken ct = default);
+    /// <summary>One plain request to the default AI model, outside the dictation profiles: the instructions, the text,
+    /// and a reply of at most <paramref name="maxTokens"/>. No safety net (the caller checks the reply). Extended Notes
+    /// uses it for its summaries.</summary>
+    Task<string> AskAsync(string instructions, string text, int maxTokens, CancellationToken ct = default);
     Task<IReadOnlyList<string>> ListModelsAsync(CancellationToken ct = default);
     /// <summary>Make sure the runtime is up and the model is resident in memory.</summary>
     Task WarmUpAsync(string? model, CancellationToken ct = default);
@@ -252,6 +256,8 @@ public sealed class OllamaTextProcessor : ITextProcessor
     readonly HttpClient _http = new() { Timeout = Timeout.InfiniteTimeSpan };
     /// <summary>Must be identical for warm-up and real requests, otherwise Ollama reloads the model.</summary>
     const int NumCtx = 4096;
+    /// <summary>How much a request can hold (instructions, text and reply together), in tokens.</summary>
+    public const int ContextTokens = NumCtx;
     /// <summary>Tiny before/after demonstrations sent as prior chat turns. They make small models far more reliable
     /// at the conservative-edit behaviour (capitalize names, drop fillers/stutters, keep self-corrections).</summary>
     static readonly (string In, string Out)[] Examples =
@@ -344,6 +350,24 @@ public sealed class OllamaTextProcessor : ITextProcessor
             "The AI's rewrite failed the safety net, so your original words were inserted unchanged.", SafetyNet: true);
     }
 
+    public async Task<string> AskAsync(string instructions, string text, int maxTokens, CancellationToken ct = default)
+    {
+        var model = _settings.Current.Llm.DefaultModel;
+        if (CloudModels.IsCloud(model))
+            return OutputSanitizer.Clean(await _cloud.CompleteAsync(model, instructions, Array.Empty<(string, string)>(), text, maxTokens, ct), text);
+        await _host.EnsureRunningAsync(ct);
+        var messages = new JsonArray
+        {
+            new JsonObject { ["role"] = "system", ["content"] = instructions },
+            new JsonObject { ["role"] = "user", ["content"] = text },
+        };
+        var sw = Stopwatch.StartNew();
+        // Background work on long text: more time than a dictation gets.
+        var reply = await ChatAsync(model, messages, maxTokens, Math.Max(180, _settings.Current.Llm.TimeoutSeconds), ct);
+        Log.Info($"llm {model}: asked {text.Length}->{reply.Length} chars in {sw.ElapsedMilliseconds} ms");
+        return OutputSanitizer.Clean(reply, text);
+    }
+
     async Task<string> CompleteAsync(string model, string system, string text, bool useExamples, CancellationToken ct)
     {
         if (CloudModels.IsCloud(model))
@@ -364,6 +388,12 @@ public sealed class OllamaTextProcessor : ITextProcessor
                 messages.Add(new JsonObject { ["role"] = "assistant", ["content"] = o });
             }
         messages.Add(new JsonObject { ["role"] = "user", ["content"] = $"<transcript>\n{text}\n</transcript>" });
+        var reply = await ChatAsync(model, messages, Math.Min(4096, text.Length / 2 + 256), Math.Max(10, llm.TimeoutSeconds), ct);
+        return OutputSanitizer.Clean(reply, text);
+    }
+
+    async Task<string> ChatAsync(string model, JsonArray messages, int numPredict, int timeoutSeconds, CancellationToken ct)
+    {
         var body = new JsonObject
         {
             ["model"] = model,
@@ -374,12 +404,12 @@ public sealed class OllamaTextProcessor : ITextProcessor
             {
                 ["temperature"] = 0,
                 ["num_ctx"] = NumCtx,
-                ["num_predict"] = Math.Min(4096, text.Length / 2 + 256),
+                ["num_predict"] = numPredict,
             },
             ["messages"] = messages,
         };
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(TimeSpan.FromSeconds(Math.Max(10, llm.TimeoutSeconds)));
+        cts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
         try
         {
             using var resp = await _http.PostAsJsonAsync(Url("/api/chat"), body, cts.Token);
@@ -387,8 +417,7 @@ public sealed class OllamaTextProcessor : ITextProcessor
                 throw new UserFacingException($"The AI model '{model}' isn't installed. Install it with:  ollama pull {model}");
             resp.EnsureSuccessStatusCode();
             var json = await resp.Content.ReadFromJsonAsync<JsonObject>(cancellationToken: cts.Token);
-            var content = json?["message"]?["content"]?.GetValue<string>() ?? "";
-            return OutputSanitizer.Clean(content, text);
+            return json?["message"]?["content"]?.GetValue<string>() ?? "";
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {

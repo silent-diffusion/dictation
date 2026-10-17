@@ -25,8 +25,10 @@ public partial class NotesPage : UserControl
     readonly List<NotesTextBinder> _binders = new();
     NoteSession? _session;
     NoteDoc _tab = NoteDoc.Transcript;
-    bool _edited, _playing, _seeking, _playerOpen;
+    bool _edited, _playing, _seeking, _playerOpen, _preparing, _prepareFailed, _autoPlay;
     string? _playCopy;
+    PreparedAudio? _prepared;
+    readonly DispatcherTimer _skipTick = new() { Interval = TimeSpan.FromMilliseconds(120) };
     DateTime _editedBuilt = DateTime.MinValue;
     int _lastPlayCaret = -1;
     double? _pendingSeek;
@@ -45,8 +47,13 @@ public partial class NotesPage : UserControl
         _recorder.StateChanged += OnRecorder;
         _store.Sessions.CollectionChanged += OnSessions;
         _tick.Tick += (_, _) => Refresh();
+        _skipTick.Tick += (_, _) => SkipTick();
         _player.MediaOpened += (_, _) => OnPlayerOpened();
-        _player.MediaEnded += (_, _) => { _player.Pause(); _playing = false; ShowPlay(); };
+        _player.MediaEnded += (_, _) => PausePlayback();
+        AttachJump(TranscriptBox, NoteDoc.Transcript);
+        AttachJump(FormattedBox, NoteDoc.Formatted);
+        AttachJump(SummaryBox, NoteDoc.Summary);
+        AttachJumpEdited();
         Loaded += (_, _) => { _tick.Start(); ShowLanding(); };
         Unloaded += (_, _) =>
         {
@@ -283,7 +290,13 @@ public partial class NotesPage : UserControl
         if (live) TimerText.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Text");
         else TimerText.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Muted");
         FullButton.Content = Owner?.IsFullScreen == true ? "⤡ EXIT FULL SCREEN" : "⤢ FULL SCREEN";
-        UpdatePlayer(seconds);
+        // The recording can be played once the session has stopped.
+        PlayBar.Visibility = live ? Visibility.Collapsed : Visibility.Visible;
+        if (!live)
+        {
+            if (_prepared == null && !_preparing && !_playerOpen) PreparePlayback();
+            UpdatePlayer(seconds);
+        }
         if (_edited && live && DateTime.Now - _editedBuilt > TimeSpan.FromSeconds(4)) BuildEdited();
     }
 
@@ -356,7 +369,7 @@ public partial class NotesPage : UserControl
             : _tab switch
             {
                 NoteDoc.Formatted => "TIDIED BY THE AI ABOUT EVERY MINUTE // YOUR EDITS STAY",
-                NoteDoc.Summary => "UPDATED EVERY FEW MINUTES // EDIT FREELY",
+                NoteDoc.Summary => "MAIN IDEA, KEY POINTS, THREE PARAGRAPHS AT MOST // EVERY 5–10 MINUTES // EDIT FREELY",
                 _ => "WORD FOR WORD, AS IT IS HEARD // TYPE ANYWHERE TO ADD YOUR NOTES",
             };
         if (_edited && _session != null) BuildEdited();
@@ -383,12 +396,15 @@ public partial class NotesPage : UserControl
         var wash = UserWash;
         // Neighbouring words with the same mark become one run (an hour of notes stays quick to show).
         EditMark? mark = null;
+        double at = 0; // when the run's first word was said (the right-click jump)
         var run = new System.Text.StringBuilder();
         void Flush()
         {
             if (mark == null || run.Length == 0) { run.Clear(); return; }
-            para.Inlines.Add(Styled(run.ToString(), mark.Value, user, wash));
-            para.Inlines.Add(new Run(" "));
+            var r = Styled(run.ToString(), mark.Value, user, wash);
+            r.Tag = at;
+            para.Inlines.Add(r);
+            para.Inlines.Add(new Run(" ") { Tag = at });
             run.Clear();
         }
         foreach (var p in pieces)
@@ -398,7 +414,7 @@ public partial class NotesPage : UserControl
                 Flush();
                 if (p.Mark == EditMark.AiParagraph)
                 {
-                    var pilcrow = new Run("¶") { FontWeight = FontWeights.Bold };
+                    var pilcrow = new Run("¶") { FontWeight = FontWeights.Bold, Tag = p.Seconds };
                     pilcrow.SetResourceReference(TextElement.ForegroundProperty, "Ob.Accent");
                     para.Inlines.Add(pilcrow);
                 }
@@ -406,7 +422,7 @@ public partial class NotesPage : UserControl
                 mark = null;
                 continue;
             }
-            if (mark != p.Mark) { Flush(); mark = p.Mark; }
+            if (mark != p.Mark) { Flush(); mark = p.Mark; at = p.Seconds; }
             if (run.Length > 0) run.Append(' ');
             run.Append(p.Text);
         }
@@ -513,7 +529,9 @@ public partial class NotesPage : UserControl
         if (_session == null || !File.Exists(_session.AudioPath)) return;
         var dlg = new Microsoft.Win32.SaveFileDialog { FileName = SafeName, DefaultExt = ".wav", Filter = "WAV audio (*.wav)|*.wav" };
         if (dlg.ShowDialog(Window.GetWindow(this)) != true) return;
-        try { CopyRecording(_session.AudioPath, dlg.FileName); }
+        // As played: with its level brought up, once the recording has been prepared.
+        var source = _prepared != null && File.Exists(_prepared.Path) ? _prepared.Path : _session.AudioPath;
+        try { CopyRecording(source, dlg.FileName); }
         catch (Exception ex) { MessageBox.Show("Saving failed: " + ex.Message, AppInfo.Name, MessageBoxButton.OK, MessageBoxImage.Warning); }
     }
 
@@ -525,40 +543,79 @@ public partial class NotesPage : UserControl
         src.CopyTo(dst);
     }
 
-    // ----- playback: from where the cursor is -----
+    // ----- playback: once the session has stopped; from where the cursor is -----
 
     TextBox? ActiveBox => _edited ? null : _tab switch { NoteDoc.Formatted => FormattedBox, NoteDoc.Summary => null, _ => TranscriptBox };
 
+    /// <summary>Make the recording ready to play (its level brought up, its pauses found) in the background, and open
+    /// the player on the result. Mic recordings are often very quiet, so this comes before the first play.</summary>
+    async void PreparePlayback()
+    {
+        if (_session == null || Live || _preparing || _prepared != null || _prepareFailed || !File.Exists(_session.AudioPath)) return;
+        var session = _session;
+        var target = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"oberton-notes-{Guid.NewGuid():N}.wav");
+        _preparing = true;
+        UpdatePlayer(session.Seconds);
+        try
+        {
+            var prepared = await Task.Run(() => NotesAudio.Prepare(session.AudioPath, target));
+            if (!ReferenceEquals(session, _session) || !SessionView.IsVisible || _prepared != null) { TryDelete(target); return; }
+            _prepared = prepared;
+            _playCopy = target;
+            _player.Open(new Uri(target));
+            _playerOpen = true;
+        }
+        catch (Exception ex)
+        {
+            Log.Warn("Extended notes: couldn't prepare the recording: " + ex.Message);
+            _prepareFailed = true;
+            TryDelete(target);
+        }
+        finally
+        {
+            _preparing = false;
+            UpdatePlayer(_session?.Seconds ?? 0);
+        }
+    }
+
     void Play_Click(object sender, RoutedEventArgs e)
     {
-        if (_session == null || !File.Exists(_session.AudioPath)) return;
-        if (_playing) { _player.Pause(); _playing = false; ShowPlay(); return; }
+        if (_session == null || Live) return;
+        if (_playing) { PausePlayback(); return; }
+        if (!_playerOpen) { _autoPlay = true; PreparePlayback(); return; }
         // Where to start: the moment the text at the cursor was said, if the cursor moved since the last play.
-        double? from = null;
         if (ActiveBox is { } box && box.CaretIndex != _lastPlayCaret)
         {
             _lastPlayCaret = box.CaretIndex;
-            from = _session.SecondsAt(_tab, box.CaretIndex);
+            _player.Position = TimeSpan.FromSeconds(_session.SecondsAt(_tab, box.CaretIndex));
         }
-        if (!_playerOpen || Live)
-        {
-            // Play a copy: the recording may still be being written, and the copy is never locked.
-            var position = from ?? (_playerOpen ? _player.Position.TotalSeconds : Seek.Value);
-            ClosePlayer();
-            try
-            {
-                _playCopy = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"oberton-notes-{Guid.NewGuid():N}.wav");
-                CopyRecording(_session.AudioPath, _playCopy);
-                _pendingSeek = position;
-                _player.Open(new Uri(_playCopy));
-                _playerOpen = true;
-            }
-            catch (Exception ex) { Log.Warn("Extended notes: couldn't open the recording: " + ex.Message); return; }
-        }
-        else if (from is { } f) _player.Position = TimeSpan.FromSeconds(f);
+        StartPlayback();
+    }
+
+    /// <summary>Jump to a moment in the recording and play from there (the right-click menus).</summary>
+    void PlayFrom(double seconds)
+    {
+        if (_session == null || Live) return;
+        _lastPlayCaret = ActiveBox?.CaretIndex ?? -1;
+        if (!_playerOpen) { _pendingSeek = seconds; _autoPlay = true; PreparePlayback(); return; }
+        _player.Position = TimeSpan.FromSeconds(seconds);
+        StartPlayback();
+    }
+
+    void StartPlayback()
+    {
         _player.SpeedRatio = Speed;
         _player.Play();
         _playing = true;
+        if (SkipSilences.IsChecked == true) _skipTick.Start();
+        ShowPlay();
+    }
+
+    void PausePlayback()
+    {
+        _player.Pause();
+        _playing = false;
+        _skipTick.Stop();
         ShowPlay();
     }
 
@@ -567,6 +624,23 @@ public partial class NotesPage : UserControl
         if (_pendingSeek is { } s) _player.Position = TimeSpan.FromSeconds(s);
         _pendingSeek = null;
         _player.SpeedRatio = Speed;
+        if (_autoPlay) { _autoPlay = false; StartPlayback(); }
+        UpdatePlayer(_session?.Seconds ?? 0);
+    }
+
+    /// <summary>While "skip silences" is on: over a pause, jump to just before its end.</summary>
+    void SkipTick()
+    {
+        if (!_playing || _prepared == null) return;
+        var pos = _player.Position.TotalSeconds;
+        if (_prepared.SilenceAt(pos) is { } gap && gap.End - pos > NotesAudio.KeepGap)
+            _player.Position = TimeSpan.FromSeconds(gap.End - NotesAudio.KeepGap);
+    }
+
+    void Skip_Changed(object sender, RoutedEventArgs e)
+    {
+        if (!IsLoaded) return;
+        if (_playing && SkipSilences.IsChecked == true) _skipTick.Start(); else _skipTick.Stop();
     }
 
     double Speed => Speed2.IsChecked == true ? 2.0 : Speed15.IsChecked == true ? 1.5 : 1.0;
@@ -580,14 +654,15 @@ public partial class NotesPage : UserControl
 
     void UpdatePlayer(double recorded)
     {
-        var total = Math.Max(recorded, _player.NaturalDuration.HasTimeSpan ? _player.NaturalDuration.TimeSpan.TotalSeconds : 0);
-        var pos = _playerOpen ? _player.Position.TotalSeconds : Seek.Value;
+        var total = Math.Max(recorded, _playerOpen && _player.NaturalDuration.HasTimeSpan ? _player.NaturalDuration.TimeSpan.TotalSeconds : 0);
+        var pos = _playerOpen ? _player.Position.TotalSeconds : _pendingSeek ?? Seek.Value;
         _seeking = true;
         Seek.Maximum = Math.Max(1, total);
         Seek.Value = Math.Clamp(pos, 0, Seek.Maximum);
         _seeking = false;
-        PlayTime.Text = $"{Length(pos)} / {Length(total)}";
-        PlayButton.IsEnabled = _session != null && File.Exists(_session.AudioPath);
+        PlayTime.Text = _preparing ? "PREPARING…" : $"{Length(pos)} / {Length(total)}";
+        PlayButton.IsEnabled = !_preparing && _session != null && File.Exists(_session.AudioPath);
+        PlayButton.ToolTip = _prepared is { GainDb: > 0.5 } p ? $"Play from the cursor (level brought up {p.GainDb:0} dB)" : "Play from the cursor";
     }
 
     void Seek_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -599,15 +674,105 @@ public partial class NotesPage : UserControl
 
     void ClosePlayer()
     {
+        _skipTick.Stop();
         _player.Stop();
         _player.Close();
-        _playing = _playerOpen = false;
+        _playing = _playerOpen = _autoPlay = _prepareFailed = false;
+        _prepared = null;
+        _pendingSeek = null;
         if (IsInitialized) ShowPlay();
         var copy = _playCopy;
         _playCopy = null;
-        if (copy == null) return;
-        void TryDelete() { try { if (File.Exists(copy)) File.Delete(copy); } catch { } }
-        TryDelete();
-        Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, (Action)TryDelete);
+        if (copy != null) TryDelete(copy);
     }
+
+    /// <summary>Delete a temporary copy; once more when idle, in case the player still held it.</summary>
+    void TryDelete(string path)
+    {
+        void Attempt() { try { if (File.Exists(path)) File.Delete(path); } catch { } }
+        Attempt();
+        Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, (Action)Attempt);
+    }
+
+    // ----- right-click: jump to this moment in the recording -----
+
+    void AttachJump(TextBox box, NoteDoc doc)
+    {
+        var jump = new MenuItem();
+        jump.Click += (_, _) => { if (jump.Tag is double at) PlayFrom(at); };
+        var menu = new ContextMenu();
+        menu.Items.Add(jump);
+        menu.Items.Add(new Separator());
+        menu.Items.Add(new MenuItem { Command = ApplicationCommands.Cut });
+        menu.Items.Add(new MenuItem { Command = ApplicationCommands.Copy });
+        menu.Items.Add(new MenuItem { Command = ApplicationCommands.Paste });
+        box.ContextMenu = menu;
+        box.ContextMenuOpening += (_, e) =>
+        {
+            // The cursor goes where the right-click was, unless that was inside the selection.
+            if (e.CursorLeft >= 0)
+            {
+                var at = box.GetCharacterIndexFromPoint(Mouse.GetPosition(box), true);
+                if (at >= 0 && (box.SelectionLength == 0 || at < box.SelectionStart || at > box.SelectionStart + box.SelectionLength)) box.CaretIndex = at;
+            }
+            var seconds = doc == NoteDoc.Summary ? SummaryMoment(box) : _session?.SecondsAt(doc, box.CaretIndex);
+            ShowJump(jump, seconds);
+        };
+    }
+
+    void AttachJumpEdited()
+    {
+        var jump = new MenuItem();
+        jump.Click += (_, _) => { if (jump.Tag is double at) PlayFrom(at); };
+        var menu = new ContextMenu();
+        menu.Items.Add(jump);
+        menu.Items.Add(new Separator());
+        menu.Items.Add(new MenuItem { Command = ApplicationCommands.Copy });
+        EditedBox.ContextMenu = menu;
+        EditedBox.ContextMenuOpening += (_, e) =>
+        {
+            var pointer = e.CursorLeft >= 0 ? EditedBox.GetPositionFromPoint(Mouse.GetPosition(EditedBox), true) : EditedBox.CaretPosition;
+            var run = pointer?.Parent as Run
+                ?? pointer?.GetAdjacentElement(LogicalDirection.Backward) as Run
+                ?? pointer?.GetAdjacentElement(LogicalDirection.Forward) as Run;
+            ShowJump(jump, run?.Tag as double?);
+        };
+    }
+
+    void ShowJump(MenuItem jump, double? seconds)
+    {
+        jump.Tag = seconds;
+        jump.IsEnabled = seconds != null && _session != null && !Live && File.Exists(_session.AudioPath);
+        jump.Header = Live ? "Jump to this moment in the recording (once the session has stopped)"
+            : seconds is { } at ? $"Jump to this moment in the recording  ·  {Length(at)}"
+            : "Jump to this moment in the recording";
+    }
+
+    /// <summary>The summary doesn't follow the recording in order, so a sentence in it leads to the section whose own
+    /// summary shares the most words with it.</summary>
+    double? SummaryMoment(TextBox box)
+    {
+        if (_session == null || box.Text.Length == 0) return null;
+        var sections = _session.Digests.Where(d => d.Level == 0).ToList();
+        if (sections.Count == 0) return null;
+        var text = box.Text;
+        var caret = Math.Clamp(box.CaretIndex, 0, text.Length);
+        var ends = new[] { '\n', '.', '!', '?' };
+        var start = text.LastIndexOfAny(ends, Math.Max(0, caret - 1)) + 1;
+        var end = caret < text.Length ? text.IndexOfAny(ends, caret) : -1;
+        var words = Keywords(text[start..(end < 0 ? text.Length : end)]);
+        if (words.Count == 0) return null;
+        NoteDigest? best = null;
+        var bestScore = 0;
+        foreach (var d in sections)
+        {
+            var score = Keywords(d.Text).Count(words.Contains);
+            if (score > bestScore) { bestScore = score; best = d; }
+        }
+        return best?.Start;
+    }
+
+    static HashSet<string> Keywords(string s) => new(s.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+        .Select(w => w.Trim('.', ',', ';', ':', '!', '?', '"', '\'', '(', ')', '-', '–').ToLowerInvariant())
+        .Where(w => w.Length >= 4));
 }

@@ -10,8 +10,10 @@ Agreed with the user on 2026-10-17; design mockup: https://claude.ai/artifact/47
   edits and notes, and the timing of the words are all recorded, but only the Edited tab shows them.
 - **Same look as the rest of the app**: ink on paper, mono capitals, one accent, red only for recording.
 - **Nothing is lost**: the session is saved to disk after every piece; the raw transcript and the audio are kept.
-- **Never re-run the AI over the whole growing text**: each piece is formatted once; the summary is updated from the
-  previous summary plus what is new (rolling, layered).
+- **Never re-run the AI over the whole growing text**: each piece is formatted once. The summary is layered (5.1):
+  every 5 to 10 minutes the new formatted text (never more than one AI request can take; the context is 4096 tokens) is
+  summed up on its own; four summaries of a level are folded into one shorter one, and so on up, so what is left always
+  fits one request however long the session runs; the Summary tab is written from what is left.
 
 ## Where it lives
 
@@ -24,13 +26,15 @@ Agreed with the user on 2026-10-17; design mockup: https://claude.ai/artifact/47
   1. **Transcript**: word for word as it is heard. A plain, editable text box; the user types their own notes anywhere.
   2. **Formatted**: tidied by the AI about every minute (punctuation, capitals, fillers out, paragraphs). Editable; the
      AI only ever appends new text after what is there, never overwrites the user's edits.
-  3. **Summary**: updated every few minutes from the previous summary plus the newly formatted text. Editable; the
-     next update starts from the edited summary.
+  3. **Summary**: never more than the main idea, three key points and three paragraphs; rewritten every 5 to 10 minutes
+     from the section summaries. Editable; the user's version is handed to the next rewrite so their changes are kept.
   4. **Edited**: read-only, every change in colour: removed by the AI (grey, struck), added by the AI (accent), ¶ a
      paragraph break the AI made; removed by the user (amber, thick strike), changed by the user (amber bold on an
      amber wash), a note typed by the user (amber bold, underlined).
-- **Playback bar** at the bottom: play/pause, position, a seek bar, 1× / 1.5× / 2×. ▶ plays from where the cursor is in
-  the Transcript or Formatted text.
+- **Playback bar** at the bottom, shown once the session has stopped: play/pause, position, a seek bar, **Skip
+  silences**, 1× / 1.5× / 2×. ▶ plays from where the cursor is in the Transcript or Formatted text. The recording is
+  played (and exported) with its level brought up, since mic recordings are quiet. **Right-click** in any tab: *Jump to
+  this moment in the recording* (in the Summary tab, to the section the sentence is about).
 - **Export ▾**: Transcript, Formatted, Summary, or everything, as .txt or .md; and the recording as .wav.
 - **Dashboard**: a cell to the right of the signal path holding only a title and a text box that can always be typed
   in: the live transcript while a session records (the user edits and adds to it), and between sessions a notepad
@@ -49,7 +53,7 @@ Agreed with the user on 2026-10-17; design mockup: https://claude.ai/artifact/47
 - **Normal dictation during a session** pauses the session (audio and transcription), which resumes when the dictation
   is done. Model unloading never happens while a session records.
 - **AI**: formatting with the default AI model, about every minute of new speech; a failure keeps the text as heard.
-  The summary every ~5 minutes of new formatted text, and once more at Stop.
+  A section summary every 5 to 10 minutes of speech (then any merges, and the Summary tab rewritten), and once more at Stop.
 - **Storage**: `data\notes\<yyyyMMdd-HHmmss>\session.json` and `audio.wav` (16 kHz mono, about 115 MB an hour; the wav
   header is refreshed with every save, so a crash keeps everything up to the last save).
 

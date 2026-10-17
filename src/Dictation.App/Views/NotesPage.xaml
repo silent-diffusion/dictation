@@ -3,8 +3,8 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:Dictation.App.Views">
     <UserControl.Resources>
-        <!-- Capsule choices (source, tabs, speed): ink outline, filled when chosen -->
-        <Style x:Key="Pill" TargetType="RadioButton">
+        <!-- Capsule choices (source, tabs, speed) and switches (skip silences): ink outline, filled when chosen -->
+        <Style x:Key="Pill" TargetType="ToggleButton">
             <Setter Property="Foreground" Value="{DynamicResource Ob.Text}"/>
             <Setter Property="FontFamily" Value="{StaticResource Ob.Mono}"/>
             <Setter Property="FontSize" Value="11"/>
@@ -13,7 +13,7 @@
             <Setter Property="Margin" Value="0,0,4,0"/>
             <Setter Property="Template">
                 <Setter.Value>
-                    <ControlTemplate TargetType="RadioButton">
+                    <ControlTemplate TargetType="ToggleButton">
                         <Border x:Name="Bd" CornerRadius="17" BorderThickness="1" BorderBrush="{DynamicResource Ob.Border}"
                                 Background="Transparent" Padding="14,7">
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
@@ -146,16 +146,20 @@
                 </DockPanel>
             </StackPanel>
 
-            <!-- The recording: plays from where the cursor is in the text -->
-            <Border DockPanel.Dock="Bottom" BorderThickness="1" BorderBrush="{DynamicResource Ob.Divider}" Padding="12,8" Margin="0,10,0,0">
+            <!-- The recording, once the session has stopped: plays from where the cursor is in the text -->
+            <Border x:Name="PlayBar" DockPanel.Dock="Bottom" BorderThickness="1" BorderBrush="{DynamicResource Ob.Divider}" Padding="12,8" Margin="0,10,0,0"
+                    Visibility="Collapsed">
                 <DockPanel>
                     <Button x:Name="PlayButton" DockPanel.Dock="Left" Style="{StaticResource PrimaryButton}" Width="36" Height="36" Padding="0"
-                            Click="Play_Click" ToolTip="Play from the cursor" AutomationProperties.Name="Play the recording from the cursor">
+                            Click="Play_Click" ToolTip="Play from the cursor" AutomationProperties.Name="Play the recording from the cursor; right-click the text to jump to a moment">
                         <TextBlock x:Name="PlayGlyph" Text="&#xE768;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="13"/>
                     </Button>
                     <TextBlock x:Name="PlayTime" DockPanel.Dock="Left" FontFamily="{StaticResource Ob.Mono}" FontSize="11.5" VerticalAlignment="Center"
                                Margin="12,0,12,0" MinWidth="130"/>
                     <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0">
+                        <ToggleButton x:Name="SkipSilences" Style="{StaticResource Pill}" Content="SKIP SILENCES" Margin="0,0,14,0"
+                                      Checked="Skip_Changed" Unchecked="Skip_Changed" ToolTip="Jump over the pauses"
+                                      AutomationProperties.Name="Skip silences"/>
                         <RadioButton x:Name="Speed1" GroupName="Speed" Style="{StaticResource Pill}" Content="1×" IsChecked="True" Padding="0" Checked="Speed_Checked"/>
                         <RadioButton x:Name="Speed15" GroupName="Speed" Style="{StaticResource Pill}" Content="1.5×" Checked="Speed_Checked"/>
                         <RadioButton x:Name="Speed2" GroupName="Speed" Style="{StaticResource Pill}" Content="2×" Checked="Speed_Checked"/>

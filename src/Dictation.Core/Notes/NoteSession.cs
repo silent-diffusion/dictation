@@ -27,6 +27,23 @@ public sealed class NoteChunk
     public bool AiFailed { get; set; }
 }
 
+/// <summary>A summary of part of the session, kept in the background. Level 0 sums up a section of the formatted text
+/// (5 to 10 minutes of speech); a higher level sums up several consecutive summaries, each shorter than what it covers.
+/// The Summary tab is written from the ones not folded into a higher level.</summary>
+public sealed class NoteDigest
+{
+    public int Level { get; set; }
+    /// <summary>The sections it covers, numbered in order (a level 0 digest covers one).</summary>
+    public int First { get; set; }
+    public int Last { get; set; }
+    /// <summary>The part of the recording it covers, in seconds.</summary>
+    public double Start { get; set; }
+    public double End { get; set; }
+    public string Text { get; set; } = "";
+    /// <summary>Folded into a higher-level digest.</summary>
+    public bool Merged { get; set; }
+}
+
 /// <summary>
 /// One Extended Notes session: a lecture or meeting, transcribed as it goes. <see cref="Heard"/> is what the recognizer
 /// produced (never changed); <see cref="Transcript"/>, <see cref="Formatted"/> and <see cref="Summary"/> are the texts as
@@ -51,8 +68,13 @@ public sealed class NoteSession
     /// <summary>How much of <see cref="Transcript"/> (and of <see cref="Heard"/>) has been formatted.</summary>
     public int FormattedThrough { get; set; }
     public int HeardFormattedThrough { get; set; }
-    /// <summary>How much of <see cref="Formatted"/> the summary covers.</summary>
+    /// <summary>How much of <see cref="Formatted"/> the section summaries cover.</summary>
     public int SummarizedThrough { get; set; }
+    /// <summary>The summaries of the parts (see <see cref="NoteDigest"/>).</summary>
+    public List<NoteDigest> Digests { get; set; } = new();
+    /// <summary>The summary as the AI last wrote it: when <see cref="Summary"/> differs, the user edited it, and the
+    /// next summary keeps their changes.</summary>
+    public string SummaryByAi { get; set; } = "";
 
     public List<NoteChunk> Chunks { get; set; } = new();
     public List<NoteAnchor> TranscriptAnchors { get; set; } = new();
@@ -146,18 +168,38 @@ public sealed class NoteSession
         foreach (var a in anchors) a.Offset = MoveAnchor(a.Offset, offset, removed, added);
     }
 
-    /// <summary>The moment of the recording that the text at <paramref name="caret"/> was said: the anchor at or before it.</summary>
+    /// <summary>The moment of the recording that the text at <paramref name="caret"/> was said. In the transcript, the
+    /// start of the piece it is in (pieces are a few seconds long). In the formatted text, where each AI step covers a
+    /// minute or so, the position within that step, in proportion.</summary>
     public double SecondsAt(NoteDoc doc, int caret)
     {
-        var anchors = doc == NoteDoc.Formatted ? FormattedAnchors : TranscriptAnchors;
-        double seconds = 0;
-        foreach (var a in anchors)
+        if (doc != NoteDoc.Formatted)
         {
-            if (a.Offset > caret) break;
-            seconds = a.Seconds;
+            double seconds = 0;
+            foreach (var a in TranscriptAnchors)
+            {
+                if (a.Offset > caret) break;
+                seconds = a.Seconds;
+            }
+            return seconds;
         }
-        return seconds;
+        NoteAnchor? at = null, next = null;
+        foreach (var a in FormattedAnchors)
+        {
+            if (a.Offset <= caret) at = a;
+            else { next = a; break; }
+        }
+        if (at == null) return next?.Seconds ?? 0;
+        var endOffset = next?.Offset ?? Formatted.Length;
+        var endSeconds = next?.Seconds ?? FormattedEndSeconds();
+        if (endOffset <= at.Offset || endSeconds <= at.Seconds) return at.Seconds;
+        var f = Math.Clamp((caret - at.Offset) / (double)(endOffset - at.Offset), 0, 1);
+        return at.Seconds + f * (endSeconds - at.Seconds);
     }
+
+    /// <summary>Where the formatted text ends in the recording: where the transcript not formatted yet begins.</summary>
+    public double FormattedEndSeconds() =>
+        TranscriptAnchors.FirstOrDefault(a => a.Offset >= FormattedThrough)?.Seconds ?? Seconds;
 
     // ===== formatting and summary steps =====
 
@@ -191,29 +233,56 @@ public sealed class NoteSession
         Changed?.Invoke(NoteDoc.Formatted, source);
     }
 
-    /// <summary>Formatted text the summary doesn't cover yet; null when there is none.</summary>
-    public string? BeginSummary()
+    /// <summary>Formatted text no section summary covers yet.</summary>
+    public int UnsummarizedChars() => Formatted.Length - Math.Min(SummarizedThrough, Formatted.Length);
+
+    /// <summary>The next section to summarize: the formatted text not covered yet, at most <paramref name="maxChars"/>
+    /// (cut at a paragraph or sentence), with the part of the recording it covers; null when there is none.</summary>
+    public (string Text, double Start, double End)? BeginSection(int maxChars)
     {
         var from = Math.Min(SummarizedThrough, Formatted.Length);
-        var fresh = Formatted[from..];
-        if (fresh.Trim().Length == 0) return null;
-        _pendingSummaryEnd = Formatted.Length;
-        return fresh.Trim();
+        var end = NotesSummary.SectionEnd(Formatted, from, maxChars);
+        var text = Formatted[from..end];
+        if (text.Trim().Length == 0) return null;
+        _pendingSummaryEnd = end;
+        var start = SecondsAt(NoteDoc.Formatted, from);
+        var stop = end >= Formatted.Length ? FormattedEndSeconds() : SecondsAt(NoteDoc.Formatted, end);
+        return (text.Trim(), start, Math.Max(start, stop));
     }
 
-    /// <summary>The updated summary. Skipped (false) when the user changed the summary meanwhile; the next update starts
-    /// from their version.</summary>
-    public bool EndSummary(string? summary, string basedOn, object? source = null)
+    /// <summary>The summary of what <see cref="BeginSection"/> took; null when it failed (the same text is tried again
+    /// next time).</summary>
+    public void EndSection(string? digest, double start, double end)
     {
-        var end = _pendingSummaryEnd;
+        var through = _pendingSummaryEnd;
         _pendingSummaryEnd = -1;
-        if (summary == null || Summary != basedOn) return false;
-        SummarizedThrough = end >= 0 ? end : Formatted.Length;
-        Summary = summary.Trim();
+        if (digest == null || digest.Trim().Length == 0) return;
+        var number = Digests.Count(d => d.Level == 0);
+        Digests.Add(new NoteDigest { Level = 0, First = number, Last = number, Start = start, End = end, Text = digest.Trim() });
+        SummarizedThrough = through >= 0 ? through : Formatted.Length;
+    }
+
+    /// <summary>The digests not folded into a higher level, in order: together they cover everything summarized.</summary>
+    public List<NoteDigest> Frontier() => Digests.Where(d => !d.Merged).OrderBy(d => d.First).ToList();
+
+    /// <summary>Several consecutive digests summed up in one, a level up.</summary>
+    public void Merge(IReadOnlyList<NoteDigest> parts, string text)
+    {
+        foreach (var p in parts) p.Merged = true;
+        Digests.Add(new NoteDigest
+        {
+            Level = parts.Max(p => p.Level) + 1, First = parts.Min(p => p.First), Last = parts.Max(p => p.Last),
+            Start = parts.Min(p => p.Start), End = parts.Max(p => p.End), Text = text.Trim(),
+        });
+    }
+
+    /// <summary>The new summary for the Summary tab. Skipped (false) when the user changed the summary meanwhile; the
+    /// next one keeps their version.</summary>
+    public bool EndSummary(string summary, string basedOn, object? source = null)
+    {
+        if (Summary != basedOn || summary.Trim().Length == 0) return false;
+        Summary = SummaryByAi = summary.Trim();
         Changed?.Invoke(NoteDoc.Summary, source);
         return true;
     }
-
-    /// <summary>A request failed: nothing changes, and the same text is tried again next time.</summary>
-    public void CancelSummary() => _pendingSummaryEnd = -1;
 }

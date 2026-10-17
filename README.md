@@ -189,12 +189,13 @@ window's edge.
   session*. Four plain text tabs:
   **Transcript** (word for word, as it is heard; type anywhere to add your own notes), **Formatted** (tidied by the AI about
   every minute: punctuation, capitals, fillers out, paragraphs; the AI only ever adds new text after yours, so your edits
-  stay), **Summary** (updated every few minutes from the previous summary plus what is new; edit it freely, the next update
-  starts from your version) and **Edited** (read-only: every change in colour, the AI's apart from yours: removed by the
+  stay), **Summary** (the main idea, three key points and at most three paragraphs; rewritten every 5 to 10 minutes from
+  summaries of each part, which are folded together as the session grows; edit it freely, your version is kept) and **Edited** (read-only: every change in colour, the AI's apart from yours: removed by the
   AI struck through in grey, added by the AI in the accent, ¶ where the AI made a paragraph; removed by you, changed by you
-  and notes typed by you in amber). The titles are click-to-rename. The bar at the bottom plays the recording from where
-  your cursor is in the text (1×, 1.5×, 2×); **Export** saves the transcript, the formatted text, the summary or everything
-  as .txt or .md, and the recording as .wav. **Pause**, **Full screen** and **Stop** are in the header; dictating into an
+  and notes typed by you in amber). The titles are click-to-rename. Once the session has stopped, the bar at the bottom
+  plays the recording from where your cursor is in the text (1×, 1.5×, 2×, **Skip silences**) with its level brought up
+  (mic recordings are quiet), and a right-click in any tab jumps to that moment in the recording; **Export** saves the
+  transcript, the formatted text, the summary or everything as .txt or .md, and the recording (as played) as .wav. **Pause**, **Full screen** and **Stop** are in the header; dictating into an
   app pauses the session for that moment. Everything is saved as it goes in `data\notes\` (a session.json and the
   audio.wav, about 115 MB an hour), so a crash keeps it; the landing page lists every session (search, open, delete).
   The speech engine is shared: notes open their own connection to the model already loaded, and no model unloads while a

@@ -132,20 +132,57 @@ public class NoteSessionTests
     }
 
     [Fact]
-    public void The_summary_is_not_overwritten_if_the_user_edited_it_meanwhile()
+    public void Sections_are_taken_in_order_and_the_summary_keeps_the_users_edit()
     {
         var s = new NoteSession();
         s.AppendHeard("words", 0);
         var take = s.BeginFormat()!.Value;
         s.EndFormat(take.Heard, take.Sent, "Words.", 0, false);
-        Assert.Equal("Words.", s.BeginSummary());
+        var section = s.BeginSection(NotesSummary.InputBudget)!.Value;
+        Assert.Equal("Words.", section.Text);
+        s.EndSection(null, section.Start, section.End); // the AI failed: still to do
+        Assert.Equal("Words.", s.BeginSection(NotesSummary.InputBudget)!.Value.Text);
+        s.EndSection("One word.", section.Start, section.End);
+        Assert.Null(s.BeginSection(NotesSummary.InputBudget));
+        Assert.Single(s.Frontier());
+
         s.Set(NoteDoc.Summary, "Mine", null);
-        Assert.False(s.EndSummary("AI summary", basedOn: ""));
+        Assert.False(s.EndSummary("AI summary", basedOn: "")); // edited meanwhile
         Assert.Equal("Mine", s.Summary);
-        Assert.Equal("Words.", s.BeginSummary()); // still to do
         Assert.True(s.EndSummary("AI summary", basedOn: "Mine"));
-        Assert.Equal("AI summary", s.Summary);
-        Assert.Null(s.BeginSummary());
+        Assert.Equal("AI summary", s.SummaryByAi);
+    }
+
+    [Fact]
+    public void Merged_digests_leave_the_frontier_and_cover_their_parts()
+    {
+        var s = new NoteSession();
+        for (var i = 0; i < 4; i++)
+        {
+            s.Formatted += $"Part {i}. ";
+            Assert.NotNull(s.BeginSection(8));
+            s.EndSection($"D{i}", i * 60, (i + 1) * 60);
+        }
+        Assert.Equal(4, s.Frontier().Count);
+        var group = NotesSummary.MergeGroup(s.Frontier());
+        Assert.NotNull(group);
+        s.Merge(group!, "D0-3");
+        var left = s.Frontier();
+        Assert.Single(left);
+        Assert.Equal((1, 0, 3, 0.0, 240.0), (left[0].Level, left[0].First, left[0].Last, left[0].Start, left[0].End));
+    }
+
+    [Fact]
+    public void A_position_in_the_formatted_text_maps_to_its_share_of_the_step()
+    {
+        var s = new NoteSession();
+        s.AppendHeard("one two three four", 10);
+        s.AppendHeard("five six", 70);
+        var take = s.BeginFormat()!.Value;
+        s.EndFormat(take.Heard, take.Sent, "One two three four five six.", take.Seconds, false);
+        s.Seconds = 130;
+        Assert.Equal(10, s.SecondsAt(NoteDoc.Formatted, 0), 3);
+        Assert.InRange(s.SecondsAt(NoteDoc.Formatted, s.Formatted.Length / 2), 60, 80);
     }
 }
 
@@ -292,5 +329,127 @@ public class NotesExportTests
         var txt = NotesExport.Build(s, NotesExport.Part.Transcript, markdown: false);
         Assert.DoesNotContain("Ship Monday.", txt);
         Assert.Contains("we ship on monday", txt);
+    }
+}
+
+public class NotesSummaryTests
+{
+    [Fact]
+    public void A_section_ends_at_a_paragraph_or_sentence_within_the_budget()
+    {
+        var text = "First sentence here.\nSecond one here. Third one is longer than the rest of them.";
+        Assert.Equal(text.Length, NotesSummary.SectionEnd(text, 0, 500));
+        Assert.Equal(21, NotesSummary.SectionEnd(text, 0, 30)); // at the line break
+        Assert.Equal(37, NotesSummary.SectionEnd(text, 0, 45)); // at the end of a sentence
+    }
+
+    [Fact]
+    public void The_summary_is_shaped_into_main_idea_points_and_paragraphs()
+    {
+        var raw = "**Summary**\nMain idea: The launch moves to May.\n\n- Budget approved\n- Hiring paused\n- QA needs two weeks\n- Extra point\n\n" +
+                  "First para.\n\nSecond para.\n\nThird para.\n\nFourth para.";
+        var shaped = NotesSummary.Shape(raw)!;
+        Assert.StartsWith("Main idea: The launch moves to May.", shaped);
+        Assert.Equal(3, shaped.Split('\n').Count(l => l.StartsWith("- ")));
+        Assert.DoesNotContain("Extra point", shaped);
+        Assert.DoesNotContain("**", shaped);
+        Assert.DoesNotContain("Summary\n", shaped);
+        Assert.EndsWith("Third para. Fourth para.", shaped);
+        Assert.Equal(5, shaped.Split("\n\n").Length); // the main idea, the points, three paragraphs
+
+        var plain = NotesSummary.Shape("The team met about the launch. Dates were discussed at length.\n\nBudget is fine.")!;
+        Assert.StartsWith("Main idea: The team met about the launch.", plain);
+        Assert.Contains("Dates were discussed at length.", plain);
+        Assert.Null(NotesSummary.Shape("..."));
+    }
+
+    [Fact]
+    public void Four_digests_of_a_level_merge_and_an_oversized_frontier_merges_its_oldest()
+    {
+        static NoteDigest D(int n, int level, int chars) => new() { Level = level, First = n, Last = n, Text = new string('x', chars) };
+        Assert.Null(NotesSummary.MergeGroup(new[] { D(0, 0, 100), D(1, 0, 100), D(2, 0, 100) }));
+        var four = new[] { D(0, 0, 100), D(1, 0, 100), D(2, 0, 100), D(3, 0, 100) };
+        Assert.Equal(four, NotesSummary.MergeGroup(four)!);
+        var mixed = new[] { D(0, 1, 100), D(1, 0, 100), D(2, 0, 100), D(3, 0, 100), D(4, 0, 100) };
+        Assert.Equal(mixed.Skip(1), NotesSummary.MergeGroup(mixed)!);
+        var big = new[] { D(0, 1, NotesSummary.FrontierBudget / 2), D(1, 2, NotesSummary.FrontierBudget / 2), D(2, 0, 100) };
+        Assert.Equal(big.Take(2), NotesSummary.MergeGroup(big)!);
+    }
+
+    [Fact]
+    public void A_usable_digest_has_words_and_is_shorter_than_its_source()
+    {
+        var source = string.Join(" ", Enumerable.Repeat("word", 200));
+        Assert.True(NotesSummary.IsUsable(source, "A short summary of it all."));
+        Assert.False(NotesSummary.IsUsable(source, "..."));
+        Assert.False(NotesSummary.IsUsable(source, source + " and more"));
+        Assert.True(NotesSummary.InputBudget > 6000);
+    }
+}
+
+public class NotesPlaybackTests
+{
+    [Fact]
+    public void Quiet_speech_is_brought_up_and_its_pauses_found()
+    {
+        var dir = System.IO.Directory.CreateTempSubdirectory("oberton-notes-test");
+        try
+        {
+            var src = System.IO.Path.Combine(dir.FullName, "audio.wav");
+            const int rate = 16000;
+            using (var w = new WaveFileWriter(src, new WaveFormat(rate, 16, 1)))
+            {
+                // A second of quiet speech, two seconds of near-silence, a second of quiet speech.
+                var samples = new short[rate * 4];
+                for (var i = 0; i < samples.Length; i++)
+                {
+                    var t = i / (double)rate;
+                    var speaking = t < 1 || t >= 3;
+                    var v = speaking ? 0.02 * Math.Sin(2 * Math.PI * 220 * t) : 0.0002 * Math.Sin(2 * Math.PI * 50 * t);
+                    samples[i] = (short)(v * 32767);
+                }
+                w.WriteSamples(samples, 0, samples.Length);
+            }
+            var prepared = NotesAudio.Prepare(src, System.IO.Path.Combine(dir.FullName, "play.wav"));
+            Assert.InRange(prepared.GainDb, 30, 34); // 0.02 up to 0.89 is +33 dB
+            Assert.InRange(prepared.Seconds, 3.99, 4.01);
+            var gap = Assert.Single(prepared.Silences);
+            Assert.InRange(gap.Start, 0.9, 1.2);
+            Assert.InRange(gap.End, 2.8, 3.1);
+            Assert.NotNull(prepared.SilenceAt(2.0));
+            Assert.Null(prepared.SilenceAt(0.5));
+
+            using var r = new WaveFileReader(prepared.Path);
+            var sp = r.ToSampleProvider();
+            var buf = new float[rate];
+            var peak = 0f;
+            int n;
+            while ((n = sp.Read(buf, 0, buf.Length)) > 0)
+                for (var i = 0; i < n; i++) peak = Math.Max(peak, Math.Abs(buf[i]));
+            Assert.InRange(peak, 0.85f, 0.95f);
+        }
+        finally { dir.Delete(true); }
+    }
+
+    [Fact]
+    public void Gain_never_lowers_and_never_exceeds_the_cap()
+    {
+        Assert.Equal(1f, NotesAudio.Gain(new[] { 0.95f, 0.9f, 0.99f }));
+        Assert.Equal(100f, NotesAudio.Gain(new[] { 0.0001f, 0.0001f }), 1); // +40 dB
+        Assert.Equal(1f, NotesAudio.Gain(Array.Empty<float>()));
+    }
+
+    [Fact]
+    public void Edited_pieces_carry_the_moment_they_were_said()
+    {
+        var s = new NoteSession();
+        s.AppendHeard("hello there", 5);
+        var t = s.BeginFormat()!.Value;
+        s.EndFormat(t.Heard, t.Sent, "Hello there.", t.Seconds, false);
+        s.AppendHeard("later words", 40);
+        s.Seconds = 60;
+        var pieces = NotesEdits.Build(s);
+        Assert.Equal(5, pieces[0].Seconds, 3);
+        Assert.Equal(40, pieces[^1].Seconds, 3);
     }
 }

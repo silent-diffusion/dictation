@@ -12,16 +12,14 @@ namespace Dictation.Core.Notes;
 /// <summary>
 /// Runs an Extended Notes session: listens (mic, computer audio or both), writes the recording, sends it to the speech
 /// engine on a connection of its own, appends each finished piece to the transcript, formats the new text with the AI
-/// about every minute, keeps a running summary, and saves as it goes. Only one session records at a time. Normal
-/// dictation pauses it (<see cref="SetDictating"/>). Create and use on the UI thread.
+/// about every minute, sums it up every 5 to 10 minutes (<see cref="NotesSummary"/>), and saves as it goes. Only one
+/// session records at a time. Normal dictation pauses it (<see cref="SetDictating"/>). Create and use on the UI thread.
 /// </summary>
 public sealed class NotesRecorder
 {
     /// <summary>Format once this many new words have come in, or after <see cref="FormatEvery"/> with at least a few.</summary>
     const int FormatWords = 110;
     static readonly TimeSpan FormatEvery = TimeSpan.FromSeconds(90);
-    /// <summary>Update the summary once this much new formatted text (about five minutes of speech) has come in.</summary>
-    const int SummaryChars = 2500;
 
     public const string FormatPrompt =
         "You are formatting a live transcript of a lecture or meeting, one part at a time. Fix punctuation and " +
@@ -30,23 +28,10 @@ public sealed class NotesRecorder
         "shorten, add headings or add anything that was not said. Some lines are notes the listener typed: keep them " +
         "exactly as written, on their own line.";
 
-    public const string SummaryPrompt =
-        "You keep the running summary of a long lecture or meeting. The input has two parts: CURRENT SUMMARY and NEW " +
-        "PART. Reply with the updated summary only: everything the current summary says (keep its wording where it is " +
-        "still right, including anything the listener wrote in it), with the main points, decisions, names, numbers and " +
-        "open questions of the new part folded in. Plain text in short paragraphs or lines starting with \"- \"; no " +
-        "headings, no preface. Keep it concise.";
-
     static readonly Profile FormatProfile = new()
     {
         Name = "Extended notes: format", Prompt = FormatPrompt, AutoProcess = true, RewriteWhole = true,
         PreserveParagraphs = true, RemoveFillers = true,
-    };
-
-    static readonly Profile SummaryProfile = new()
-    {
-        Name = "Extended notes: summary", Prompt = SummaryPrompt, AutoProcess = true, RewriteWhole = true,
-        PreserveParagraphs = true, RemoveFillers = false,
     };
 
     readonly SettingsService _settings;
@@ -71,7 +56,7 @@ public sealed class NotesRecorder
     DispatcherTimer? _tick;
     double _lastPieceSeconds;
     bool _userPaused, _dictating, _formatting, _summarizing, _dirty;
-    DateTime _lastFormat = DateTime.Now, _lastSave = DateTime.Now;
+    DateTime _lastFormat = DateTime.Now, _lastSave = DateTime.Now, _lastSection = DateTime.Now;
 
     public NotesRecorder(SettingsService settings, ISpeechRecognizer asr, ITextProcessor llm, NotesStore store, Func<string> speechModel)
     {
@@ -104,7 +89,7 @@ public sealed class NotesRecorder
         Interlocked.Exchange(ref _samples, 0);
         _lastPieceSeconds = 0;
         _userPaused = _formatting = _summarizing = false;
-        _lastFormat = _lastSave = DateTime.Now;
+        _lastFormat = _lastSave = _lastSection = DateTime.Now;
         try
         {
             lock (_wavLock) _wav = new WaveFileWriter(s.AudioPath, new WaveFormat(MicCapture.SampleRate, 16, 1));
@@ -261,36 +246,64 @@ public sealed class NotesRecorder
         }
     }
 
+    /// <summary>Every 5 to 10 minutes of speech: sum up the new formatted text, fold summaries together when they pile up,
+    /// and write the Summary tab afresh. See <see cref="NotesSummary"/>.</summary>
     void MaybeSummarize(NoteSession s)
     {
         if (_summarizing || _formatting) return;
-        if (s.Formatted.Length - Math.Min(s.SummarizedThrough, s.Formatted.Length) >= SummaryChars) _ = SummarizeAsync(s);
+        var fresh = s.UnsummarizedChars();
+        if (fresh >= NotesSummary.SectionChars || fresh >= NotesSummary.SectionMinChars && DateTime.Now - _lastSection >= NotesSummary.SectionEvery)
+            _ = SummarizeAsync(s, final: false);
     }
 
-    async Task SummarizeAsync(NoteSession s)
+    /// <summary>Sum up what is new (at Stop: everything left, however little), merge, and rewrite the summary.</summary>
+    async Task SummarizeAsync(NoteSession s, bool final)
     {
         if (_summarizing) return;
-        var fresh = s.BeginSummary();
-        if (fresh == null) return;
         _summarizing = true;
-        var basedOn = s.Summary;
         try
         {
-            var input = "CURRENT SUMMARY:\n" + (basedOn.Trim().Length > 0 ? basedOn.Trim() : "(none yet)") + "\n\nNEW PART:\n" + fresh;
-            var r = await _llm.ProcessAsync(input, SummaryProfile);
-            if (r.SafetyNet || r.Text.Trim().Length == 0) { s.CancelSummary(); Log.Info("Extended notes: the summary update was rejected"); }
-            else if (!s.EndSummary(r.Text, basedOn, this)) Log.Info("Extended notes: the summary was edited meanwhile; updating it next time");
-        }
-        catch (Exception e)
-        {
-            s.CancelSummary();
-            Log.Warn("Extended notes: updating the summary failed: " + e.Message);
-        }
-        finally
-        {
-            _summarizing = false;
+            // 1. The new formatted text, a section at a time (never more than one request can take).
+            int sections = 0, added = 0;
+            while (sections < (final ? 50 : 1) && s.BeginSection(NotesSummary.InputBudget) is { } section)
+            {
+                sections++;
+                var reply = await _llm.AskAsync(NotesSummary.DigestPrompt(NotesSummary.DigestWords(section.Text)), section.Text, NotesSummary.DigestTokens);
+                if (!NotesSummary.IsUsable(section.Text, reply))
+                {
+                    s.EndSection(null, section.Start, section.End);
+                    Log.Info("Extended notes: a section's summary was unusable; trying again next time");
+                    break;
+                }
+                s.EndSection(reply, section.Start, section.End);
+                _lastSection = DateTime.Now; added++;
+                _dirty = true;
+            }
+            if (added == 0) return;
+
+            // 2. Four summaries of one level become one, shorter; and so on up, so what is left always fits one request.
+            for (var merges = 0; merges < 20 && NotesSummary.MergeGroup(s.Frontier()) is { } group; merges++)
+            {
+                var input = NotesSummary.MergeInput(group);
+                var reply = await _llm.AskAsync(NotesSummary.MergePrompt(NotesSummary.MergeWords(group)), input, NotesSummary.MergeTokens);
+                if (!NotesSummary.IsUsable(input, reply)) { Log.Info("Extended notes: merging summaries gave nothing usable; keeping them apart"); break; }
+                s.Merge(group, reply);
+                _dirty = true;
+            }
+
+            // 3. The Summary tab: the main idea, key points, at most three paragraphs; the listener's edits kept.
+            var frontier = s.Frontier();
+            if (frontier.Count == 0) return;
+            var basedOn = s.Summary;
+            var listener = basedOn.Trim() != s.SummaryByAi.Trim() ? basedOn : null;
+            var text = NotesSummary.FinalInput(frontier, listener);
+            var summary = NotesSummary.Shape(await _llm.AskAsync(NotesSummary.FinalPrompt, text, NotesSummary.FinalTokens));
+            if (summary == null || NoteSession.Words(summary) > NoteSession.Words(text) * 1.5 + 60) Log.Info("Extended notes: the summary was unusable; keeping the last one");
+            else if (!s.EndSummary(summary, basedOn, this)) Log.Info("Extended notes: the summary was edited meanwhile; keeping the edit");
             _dirty = true;
         }
+        catch (Exception e) { Log.Warn("Extended notes: summarizing failed: " + e.Message); }
+        finally { _summarizing = false; }
     }
 
     public void Pause()
@@ -340,7 +353,7 @@ public sealed class NotesRecorder
             s.Seconds = Seconds;
             while (_formatting || _summarizing) await Task.Delay(200);
             if (s.UnformattedWords() > 0) await FormatAsync(s);
-            await SummarizeAsync(s);
+            await SummarizeAsync(s, final: true);
         }
         catch (Exception e) { Log.Error("Extended notes: finishing the session failed", e); }
         finally
