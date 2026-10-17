@@ -103,6 +103,9 @@
                         Content="← EXTENDED NOTES" Click="BackToList_Click"/>
                 <DockPanel>
                     <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button x:Name="MarkButton" Style="{StaticResource QuietButton}" Margin="6,0,0,0" Content="⚑ MARK" Click="Mark_Click"
+                                Visibility="Collapsed" ToolTip="Drop a time marker into the transcript (hotkey in Settings › Hotkeys)"
+                                AutomationProperties.Name="Drop a time marker into the transcript"/>
                         <Button x:Name="PauseButton" Style="{StaticResource QuietButton}" Margin="6,0,0,0" Click="Pause_Click"/>
                         <Button x:Name="FullButton" Style="{StaticResource QuietButton}" Margin="6,0,0,0" Content="⤢ FULL SCREEN" Click="Full_Click"/>
                         <Button x:Name="ExportButton" Style="{StaticResource QuietButton}" Margin="6,0,0,0" Content="EXPORT ▾" Click="Export_Click"/>

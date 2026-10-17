@@ -26,7 +26,8 @@ public sealed class NotesRecorder
         "capitalization, remove filler words, false starts and words said twice, and split the text into paragraphs " +
         "where the topic changes. Keep every point, name and number and the speaker's own wording: do not summarize, " +
         "shorten, add headings or add anything that was not said. Some lines are notes the listener typed: keep them " +
-        "exactly as written, on their own line.";
+        "exactly as written, on their own line. Lines beginning with ⚑ are the listener's time markers: keep each one " +
+        "exactly as written, on its own line.";
 
     static readonly Profile FormatProfile = new()
     {
@@ -272,10 +273,15 @@ public sealed class NotesRecorder
         var failed = true;
         try
         {
-            _formatRequests++;
-            var r = await _llm.ProcessAsync(sent, FormatProfile);
-            if (!r.SafetyNet && r.Text.Trim().Length > 0) { ai = r.Text; failed = false; }
-            else Log.Info("Extended notes: the AI's formatting was rejected; keeping the text as heard");
+            // Nothing but markers since the last step (Stop right after one): nothing for the AI to tidy.
+            if (OnlyMarkers(sent)) failed = false;
+            else
+            {
+                _formatRequests++;
+                var r = await _llm.ProcessAsync(sent, FormatProfile);
+                if (!r.SafetyNet && r.Text.Trim().Length > 0) { ai = r.Text; failed = false; }
+                else Log.Info("Extended notes: the AI's formatting was rejected; keeping the text as heard");
+            }
         }
         catch (Exception e) { Log.Warn("Extended notes: formatting failed, keeping the text as heard: " + e.Message); }
         finally
@@ -286,6 +292,10 @@ public sealed class NotesRecorder
             _dirty = true;
         }
     }
+
+    /// <summary>Every line is a marker's (or blank).</summary>
+    static bool OnlyMarkers(string text) =>
+        text.Split('\n').All(l => l.Trim().Length == 0 || l.TrimStart().StartsWith(NoteSession.MarkerFlag, StringComparison.Ordinal));
 
     /// <summary>Every 5 to 10 minutes of speech: sum up the new formatted text, fold summaries together when they pile up,
     /// and write the Summary tab afresh. See <see cref="NotesSummary"/>.</summary>
@@ -367,6 +377,22 @@ public sealed class NotesRecorder
         _userPaused = false;
         Log.Info("Extended notes: resumed");
         StateChanged?.Invoke();
+    }
+
+    /// <summary>The listener marked this moment (the hotkey, or the Mark button): a "⚑ h:mm:ss" line goes into the
+    /// transcript, paused or not, and the session is saved. Nothing once Stop was pressed.</summary>
+    public void AddMarker()
+    {
+        if (Current == null || IsFinishing) return;
+        var at = Seconds;
+        OnUi(() =>
+        {
+            var s = Current;
+            if (s == null) return;
+            s.AddMarker(at, this);
+            Log.Info("Extended notes: marker at " + NoteSession.MarkerLabel(at));
+            Save(s);
+        });
     }
 
     /// <summary>A dictation started or ended: the session pauses while it runs (both would hear the same voice).</summary>

@@ -64,6 +64,8 @@ public sealed class AppSettings
     public string CycleProfileHotkey { get; set; } = "Ctrl+Alt+P";
     /// <summary>Read the selected text aloud (or offer the clipboard when nothing is selected).</summary>
     public string SpeakHotkey { get; set; } = "Ctrl+Shift+Space";
+    /// <summary>Drop a time marker into the Extended Notes transcript while a session records (paused or not).</summary>
+    public string NotesMarkerHotkey { get; set; } = "Ctrl+Alt+M";
     /// <summary>Read aloud's voice, which also picks the model: a Kokoro voice id (af_heart), a Piper voice
     /// ("piper:en_US-lessac-medium") or a Windows voice ("win:Microsoft Zira Desktop").
     /// A profile can pick its own (<see cref="Profile.Voice"/>).</summary>

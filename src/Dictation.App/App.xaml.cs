@@ -17,7 +17,7 @@ public partial class App : Application
     /// <summary>Set when a hotkey could not be registered; shown on the Hotkeys page.</summary>
     public static string? HotkeyError { get; private set; }
 
-    const int HkToggle = 1, HkCycle = 2, HkEscape = 3, HkSpeak = 4;
+    const int HkToggle = 1, HkCycle = 2, HkEscape = 3, HkSpeak = 4, HkMarker = 5;
     Mutex? _single;
     EventWaitHandle? _showEvent;
     TrayIcon? _tray;
@@ -288,6 +288,9 @@ public partial class App : Application
         if (e2 != null) errors.Add(e2);
         var e3 = Hotkeys.Register(HkSpeak, st.SpeakHotkey, OnSpeakHotkey);
         if (e3 != null) errors.Add(e3);
+        // A marker only means something while a session records (paused or not); otherwise the key does nothing.
+        var e4 = Hotkeys.Register(HkMarker, st.NotesMarkerHotkey, () => { if (Services.Notes.IsRecording) Services.Notes.AddMarker(); });
+        if (e4 != null) errors.Add(e4);
         HotkeyError = errors.Count == 0 ? null : string.Join("\n", errors);
         if (HotkeyError != null)
         {
@@ -305,7 +308,8 @@ public partial class App : Application
         Views.DecorText.Apply(st.ShowJapanese);
     }
 
-    static string HotkeysKey(Dictation.Core.Settings.AppSettings st) => st.Hotkey + "|" + st.CycleProfileHotkey + "|" + st.SpeakHotkey;
+    static string HotkeysKey(Dictation.Core.Settings.AppSettings st) =>
+        st.Hotkey + "|" + st.CycleProfileHotkey + "|" + st.SpeakHotkey + "|" + st.NotesMarkerHotkey;
 
     /// <summary>Read aloud hotkey: read the selection; with nothing selected, offer the clipboard. Pressed again, stops.</summary>
     async void OnSpeakHotkey()
