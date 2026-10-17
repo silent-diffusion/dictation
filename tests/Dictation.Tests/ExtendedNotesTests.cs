@@ -489,7 +489,7 @@ public class NotesUsageTests
         usage.Record(s, formatRequests: 12, summaryRequests: 4);
         usage.Record(new NoteSession { Started = new DateTime(2026, 10, 17, 14, 0, 0), Seconds = 60 }, 1, 0);
         var day = Assert.Single(usage.Days);
-        Assert.Equal((2, 3660.0, 3, 2, 12, 4), (day.Sessions, day.Seconds, day.WordsHeard, day.WordsTyped, day.FormatRequests, day.SummaryRequests));
+        Assert.Equal((2, 3660.0, 3, 2, 13, 4), (day.Sessions, day.Seconds, day.WordsHeard, day.WordsTyped, day.FormatRequests, day.SummaryRequests));
         Assert.Equal(1, day.Sources["Both"]);
         Assert.Equal(1, day.Sources["Mic"]);
     }
