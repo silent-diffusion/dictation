@@ -75,12 +75,13 @@ public partial class NotesPage : UserControl
         SessionView.Visibility = Visibility.Collapsed;
         Landing.Visibility = Visibility.Visible;
         ShowStart();
+        BuildUsage();
         BuildList();
     }
 
     void OnSessions(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
     {
-        if (Landing.IsVisible) BuildList();
+        if (Landing.IsVisible) { BuildUsage(); BuildList(); }
     }
 
     void ShowStart()
@@ -213,6 +214,73 @@ public partial class NotesPage : UserControl
 
     FontFamily Mono => (FontFamily)FindResource("Ob.Mono");
 
+    // ----- the USAGE strip: the counts so far -----
+
+    /// <summary>The counts in data\notes\usage.json (sessions, time, words, AI requests, by source; never any text) over
+    /// the last 30 days and all time. Hidden until a session has been counted: a page of zeros says nothing.</summary>
+    void BuildUsage()
+    {
+        UsageRows.Children.Clear();
+        var now = DateTime.Now;
+        var all = _store.Usage.Totals(now, 0);
+        if (all.Sessions == 0) { UsageStrip.Visibility = Visibility.Collapsed; return; }
+        UsageStrip.Visibility = Visibility.Visible;
+        UsageRows.Children.Add(UsageRow("USAGE // LAST 30 DAYS", _store.Usage.Totals(now, 30)));
+        UsageRows.Children.Add(new Border { Style = (Style)FindResource("Divider"), Margin = new Thickness(0, 8, 0, 8) });
+        UsageRows.Children.Add(UsageRow("ALL TIME", all));
+    }
+
+    FrameworkElement UsageRow(string label, NotesUsageTotals totals)
+    {
+        var row = new DockPanel();
+        var head = new TextBlock { Text = label, Style = (Style)FindResource("MonoLabel"), Width = 170, VerticalAlignment = VerticalAlignment.Center };
+        DockPanel.SetDock(head, Dock.Left);
+        row.Children.Add(head);
+        var readouts = new WrapPanel { VerticalAlignment = VerticalAlignment.Center };
+        readouts.Children.Add(UsageReadout(totals.Sessions.ToString("N0"), totals.Sessions == 1 ? "SESSION" : "SESSIONS"));
+        readouts.Children.Add(UsageReadout(NotesUsage.HoursMinutes(totals.Seconds), "RECORDED"));
+        readouts.Children.Add(UsageReadout(totals.WordsHeard.ToString("N0"), "WORDS HEARD"));
+        readouts.Children.Add(UsageReadout(totals.WordsTyped.ToString("N0"), "WORDS TYPED"));
+        readouts.Children.Add(UsageReadout(totals.AiRequests.ToString("N0"), "AI REQUESTS"));
+        // By source, in the order of the pills above, only the ones used: "MIC 3 · COMPUTER 1 · BOTH 2"
+        var by = UsageText();
+        foreach (var source in new[] { NotesSource.Mic, NotesSource.Computer, NotesSource.Both })
+        {
+            var n = totals.Sources.GetValueOrDefault(source.ToString());
+            if (n == 0) continue;
+            if (by.Inlines.Count > 0) by.Inlines.Add(new Run(" · "));
+            by.Inlines.Add(new Run(source.ToString().ToUpperInvariant() + " "));
+            by.Inlines.Add(UsageNumber(n.ToString("N0")));
+        }
+        readouts.Children.Add(by);
+        row.Children.Add(readouts);
+        return row;
+    }
+
+    /// <summary>One readout: the number in bold ink, its label small and muted, on one baseline.</summary>
+    TextBlock UsageReadout(string value, string label)
+    {
+        var t = UsageText();
+        t.Inlines.Add(UsageNumber(value));
+        t.Inlines.Add(new Run(" " + label));
+        return t;
+    }
+
+    /// <summary>The small muted mono text a readout is set in.</summary>
+    TextBlock UsageText()
+    {
+        var t = new TextBlock { FontFamily = Mono, FontSize = 10.5, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 22, 0) };
+        t.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Muted");
+        return t;
+    }
+
+    static Run UsageNumber(string value)
+    {
+        var r = new Run(value) { FontSize = 13, FontWeight = FontWeights.Bold };
+        r.SetResourceReference(TextElement.ForegroundProperty, "Ob.Text");
+        return r;
+    }
+
     void BackToList_Click(object sender, RoutedEventArgs e) => ShowLanding();
 
     // ===== a session =====
@@ -267,7 +335,7 @@ public partial class NotesPage : UserControl
 
     void OnRecorder()
     {
-        if (Landing.IsVisible) { ShowStart(); return; }
+        if (Landing.IsVisible) { ShowStart(); BuildUsage(); return; } // a session that just stopped is counted now
         Refresh();
     }
 

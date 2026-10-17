@@ -84,6 +84,13 @@
                     </StackPanel>
                 </Border>
 
+                <!-- The counts so far (data\notes\usage.json: never any text), over the last 30 days and all time. Filled in
+                     by BuildUsage; hidden until a session has been counted. -->
+                <Border x:Name="UsageStrip" BorderThickness="1" BorderBrush="{DynamicResource Ob.Divider}" Padding="14,9" Margin="0,10,0,0"
+                        Visibility="Collapsed">
+                    <StackPanel x:Name="UsageRows"/>
+                </Border>
+
                 <DockPanel Margin="0,22,0,8">
                     <TextBox x:Name="SearchBox" DockPanel.Dock="Right" Width="240" TextChanged="Search_Changed"
                              AutomationProperties.Name="Search the sessions"/>
