@@ -50,7 +50,7 @@
                            FontFamily="{StaticResource Ob.Mono}" VerticalAlignment="Center"/>
             </StackPanel>
             <TextBlock Style="{StaticResource Caption}" Margin="0,6,0,0"
-                       Text="How much of the player's dark background shows; the text stays solid. The dictation pill has its own setting under Appearance."/>
+                       Text="How much of the player's dark background shows; the text stays solid. The dictation pill has its own setting under Settings › Layout."/>
 
             <TextBlock Text="PLAYER POSITION" Style="{StaticResource FieldLabel}" Margin="0,20,0,6"/>
             <CheckBox x:Name="SamePlaceBox" Style="{StaticResource Switch}" Content="Same place as the dictation overlay"

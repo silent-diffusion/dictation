@@ -116,11 +116,11 @@ window's edge.
   **AI Edit** (removed words struck through, new ones highlighted, with the text around the cursor either side in grey-blue italics) and **Inserted** (the clean text that went in).
   The text in those boxes can be selected with the mouse, and each box has a **Copy** button (it copies what you selected,
   or the whole box; for AI Edit, the AI's own text without the struck-through words).
-  If the safety net rejects the AI's edit, the receipt says so. Position (nine spots) and opacity are under *Settings › Appearance*.
+  If the safety net rejects the AI's edit, the receipt says so. Position (nine spots) and opacity are under *Settings › Layout*.
   With *preview before inserting*, the preview shows the same three boxes, with **Inserted** (what *Insert* puts in) brought
   forward, larger and more solid, and the other two dimmed.
   Drag the pill (or the Read aloud player) anywhere; it stays there until Oberton restarts or you pick a position. The Read
-  aloud player has its own card under *Settings › Appearance* (opacity, and a position of its own or the pill's).
+  aloud player has its own card under *Settings › Layout* (opacity, and a position of its own or the pill's).
 * **Fits the surrounding text**: a sentence or two around the cursor is read (locally, via Windows accessibility) so a word or phrase
   dictated mid-sentence isn't capitalized or given a period, and missing spaces are added. Works in apps that expose their text
   (Word, browsers, most text boxes); turn it off under *Settings › General*. That text is never stored, logged or sent to the AI.
@@ -152,7 +152,8 @@ window's edge.
   view to have the voice jump there, forwards or backwards. The player's opacity is a setting under *Read aloud*.
 * **Settings**: grouped into Dictation, Models & AI, Look & feel and App; each group folds away (remembered).
   **Appearance** follows the Windows light/dark setting, or pick Light or Dark, plus an accent color (Cobalt, Teal,
-  Signal green, Violet, Amber), each with a version for light and for dark paper.
+  Signal green, Violet, Amber), each with a version for light and for dark paper. **Layout** places the dictation overlay and the Read aloud player
+  (nine positions each) and sets their opacity.
   **About & updates** explains what Oberton is, how it works and its design language, with the meaning of every Japanese
   word in the interface.
 * **Design** (4.0): Oberton is drawn like a printed instrument panel: black ink on gray paper, 1px lines, capitalized
