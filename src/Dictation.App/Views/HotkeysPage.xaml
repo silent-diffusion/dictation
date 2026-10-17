@@ -36,7 +36,7 @@
                 <Button Style="{StaticResource QuietButton}" Content="RESET" Margin="8,0,0,0" Padding="12,6" Click="ResetMarker_Click"/>
             </StackPanel>
             <TextBlock Style="{StaticResource Caption}" Margin="0,6,0,0"
-                       Text="Drops a time marker (⚑ h:mm:ss) into the transcript while an extended notes session records, from whatever application you are in. Does nothing otherwise."/>
+                       Text="Drops a time marker (⚑ h:mm:ss) into the transcript while an extended notes session records, from whatever application you are in. The key is only taken while a session records; the rest of the time it stays with the application that uses it."/>
 
             <TextBlock x:Name="StatusText" Margin="0,16,0,0" TextWrapping="Wrap"/>
             <TextBlock Style="{StaticResource Caption}" Margin="0,16,0,0"
