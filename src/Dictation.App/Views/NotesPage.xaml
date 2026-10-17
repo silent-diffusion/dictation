@@ -84,6 +84,13 @@
                     </StackPanel>
                 </Border>
 
+                <!-- The counts so far (data\notes\usage.json: never any text), over the last 30 days and all time. Filled in
+                     by BuildUsage; hidden until a session has been counted. -->
+                <Border x:Name="UsageStrip" BorderThickness="1" BorderBrush="{DynamicResource Ob.Divider}" Padding="14,9" Margin="0,10,0,0"
+                        Visibility="Collapsed">
+                    <StackPanel x:Name="UsageRows"/>
+                </Border>
+
                 <DockPanel Margin="0,22,0,8">
                     <TextBox x:Name="SearchBox" DockPanel.Dock="Right" Width="240" TextChanged="Search_Changed"
                              AutomationProperties.Name="Search the sessions"/>
@@ -103,6 +110,9 @@
                         Content="← EXTENDED NOTES" Click="BackToList_Click"/>
                 <DockPanel>
                     <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button x:Name="MarkButton" Style="{StaticResource QuietButton}" Margin="6,0,0,0" Content="⚑ MARK" Click="Mark_Click"
+                                Visibility="Collapsed" ToolTip="Drop a time marker into the transcript (hotkey in Settings › Hotkeys)"
+                                AutomationProperties.Name="Drop a time marker into the transcript"/>
                         <Button x:Name="PauseButton" Style="{StaticResource QuietButton}" Margin="6,0,0,0" Click="Pause_Click"/>
                         <Button x:Name="FullButton" Style="{StaticResource QuietButton}" Margin="6,0,0,0" Content="⤢ FULL SCREEN" Click="Full_Click"/>
                         <Button x:Name="ExportButton" Style="{StaticResource QuietButton}" Margin="6,0,0,0" Content="EXPORT ▾" Click="Export_Click"/>
