@@ -55,6 +55,7 @@ public partial class App : Application
         Services = new AppServices();
         var s = Services;
         ThemeManager.Apply(s.Settings.Current.Theme, s.Settings.Current.ColorScheme);
+        Views.DecorText.Apply(s.Settings.Current.ShowJapanese);
 
         // First run (or an interrupted setup): download the runtimes and models before anything else.
         if (!RuntimeInstaller.IsInstalled)
@@ -296,6 +297,7 @@ public partial class App : Application
         if (_lastHotkeys != HotkeysKey(st)) ApplyHotkeys();
         Autostart.Apply(st.StartWithWindows);
         ThemeManager.Apply(st.Theme, st.ColorScheme);
+        Views.DecorText.Apply(st.ShowJapanese);
     }
 
     static string HotkeysKey(Dictation.Core.Settings.AppSettings st) => st.Hotkey + "|" + st.CycleProfileHotkey + "|" + st.SpeakHotkey;

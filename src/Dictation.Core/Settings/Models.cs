@@ -93,6 +93,8 @@ public sealed class AppSettings
     public bool ShowOverlay { get; set; } = true;
     public AppTheme Theme { get; set; } = AppTheme.System;
     public ColorScheme ColorScheme { get; set; } = ColorScheme.Ember;
+    /// <summary>Show the small decorative Japanese words beside labels (倍音, 設定…). Off hides every one of them.</summary>
+    public bool ShowJapanese { get; set; } = true;
     /// <summary>Opacity of the overlay's background (its text stays fully opaque). 0.3 to 1.</summary>
     public double OverlayOpacity { get; set; } = 0.88;
     public OverlayPosition OverlayPosition { get; set; } = OverlayPosition.BottomCenter;

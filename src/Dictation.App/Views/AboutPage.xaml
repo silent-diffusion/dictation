@@ -175,12 +175,12 @@
                         <Run Text="Red means the microphone is open" Foreground="{DynamicResource Ob.Text}"/>
                         <Run Text="and appears nowhere else. You can choose the accent under Appearance."/>
                     </TextBlock>
-                    <TextBlock Style="{StaticResource Body}"
+                    <TextBlock x:Name="GlossaryIntro" Style="{StaticResource Body}"
                                Text="The small Japanese words beside labels are decoration. Each one matches what it sits next to, and none of them is needed to use the app:"/>
 
                     <!-- Every Japanese word in the interface, with its reading and meaning. The Japanese column is decoration
                          (screen readers skip it); the other columns carry the meaning. -->
-                    <Grid Margin="0,12,0,0" AutomationProperties.Name="The Japanese words in Oberton and what they mean">
+                    <Grid x:Name="Glossary" Margin="0,12,0,0" AutomationProperties.Name="The Japanese words in Oberton and what they mean">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" MinWidth="70"/>
                             <ColumnDefinition Width="Auto" MinWidth="110"/>

@@ -16,6 +16,8 @@ public partial class AboutPage : UserControl
         var s = App.Services.Settings.Current;
         if (!string.IsNullOrEmpty(s.Hotkey)) DictateKey.Text = s.Hotkey;
         if (!string.IsNullOrEmpty(s.SpeakHotkey)) SpeakKey.Text = s.SpeakHotkey;
+        // With the Japanese words turned off (Appearance) there is nothing for the glossary to explain.
+        if (!s.ShowJapanese) GlossaryIntro.Visibility = Glossary.Visibility = Visibility.Collapsed;
     }
 
     void Repo_Click(object sender, RoutedEventArgs e) =>

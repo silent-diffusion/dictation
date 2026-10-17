@@ -13,7 +13,15 @@ public class DecorText : TextBlock
     public DecorText()
     {
         SetResourceReference(StyleProperty, "Decor");
+        // One switch for all of them (Settings › Appearance): every decorative word follows this resource.
+        SetResourceReference(VisibilityProperty, VisibilityKey);
     }
+
+    const string VisibilityKey = "Ob.DecorVisibility";
+
+    /// <summary>Show or hide every decorative Japanese word in the app, at once (open windows included).</summary>
+    public static void Apply(bool show) =>
+        Application.Current.Resources[VisibilityKey] = show ? Visibility.Visible : Visibility.Collapsed;
 
     protected override AutomationPeer OnCreateAutomationPeer() => null!;
 }

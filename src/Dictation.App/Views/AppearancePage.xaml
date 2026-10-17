@@ -86,6 +86,17 @@
             <TextBlock Style="{StaticResource Caption}" Margin="0,6,0,0"
                        Text="Oberton is ink on paper. The accent marks what is live or matters most right now: today's word count, the unload countdown, the word being read, words the AI added, and errors. Each accent has a version for light and for dark paper. Red is not offered: it means the microphone is recording."/>
 
+            <TextBlock Text="JAPANESE WORDS" Style="{StaticResource FieldLabel}" Margin="0,28,0,6"/>
+            <Border Style="{StaticResource Card}">
+                <CheckBox Style="{StaticResource Switch}" IsChecked="{Binding ShowJapanese}" Margin="18,4">
+                    <StackPanel>
+                        <TextBlock Text="Show the Japanese words beside labels" TextWrapping="Wrap"/>
+                        <TextBlock FontSize="12" Foreground="{DynamicResource Ob.Muted}" TextWrapping="Wrap" Margin="0,2,0,0"
+                                   Text="Small decorative words such as 設定 (settings) next to page titles, the menu and the dictation pill. They are decoration only; turning them off changes nothing else."/>
+                    </StackPanel>
+                </CheckBox>
+            </Border>
+
         </StackPanel>
     </ScrollViewer>
 </UserControl>
