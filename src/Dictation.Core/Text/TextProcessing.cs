@@ -388,8 +388,8 @@ public sealed class OllamaTextProcessor : ITextProcessor
                 messages.Add(new JsonObject { ["role"] = "assistant", ["content"] = o });
             }
         messages.Add(new JsonObject { ["role"] = "user", ["content"] = $"<transcript>\n{text}\n</transcript>" });
-        var reply = await ChatAsync(model, messages, Math.Min(4096, text.Length / 2 + 256), Math.Max(10, llm.TimeoutSeconds), ct);
-        return OutputSanitizer.Clean(reply, text);
+        var content = await ChatAsync(model, messages, Math.Min(4096, text.Length / 2 + 256), Math.Max(10, llm.TimeoutSeconds), ct);
+        return OutputSanitizer.Clean(content, text);
     }
 
     async Task<string> ChatAsync(string model, JsonArray messages, int numPredict, int timeoutSeconds, CancellationToken ct)
