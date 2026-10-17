@@ -38,6 +38,8 @@ public sealed class AppServices
     public HistoryStore History { get; }
     /// <summary>Daily counts for the dashboard (no text), in data\usage.json.</summary>
     public UsageStore Usage { get; }
+    /// <summary>Word, phrase and correction counts for Analytics (no sentences), in data\words.json.</summary>
+    public WordTally Words { get; }
     /// <summary>Read aloud's voice (Kokoro); its process starts on first use.</summary>
     public KokoroSpeech Tts { get; }
     /// <summary>Every Read aloud voice: Kokoro's and the ones installed with Windows.</summary>
@@ -53,7 +55,8 @@ public sealed class AppServices
         Inserter = new TextInserter(Settings);
         History = new HistoryStore(Settings);
         Usage = new UsageStore(UsageStore.DefaultPath, History.Entries);
-        Controller = new DictationController(Mic, Speech, Llm, Inserter, Settings, Profiles, History, Usage);
+        Words = new WordTally(WordTally.DefaultPath, History.Entries, Settings);
+        Controller = new DictationController(Mic, Speech, Llm, Inserter, Settings, Profiles, History, Usage, Words);
         Tts = new KokoroSpeech(Settings);
         Voices = new SpeechVoices(Tts);
 

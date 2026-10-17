@@ -34,12 +34,6 @@ public partial class DashboardPage : UserControl
         _timer.Tick += async (_, _) => await RefreshAsync();
         Loaded += async (_, _) => { _timer.Start(); await RefreshAsync(); };
         Unloaded += (_, _) => _timer.Stop();
-        // The charts open History, where every dictation behind them is listed.
-        foreach (var card in new[] { DaysCard, AppsCard })
-        {
-            card.Cursor = Cursors.Hand;
-            card.MouseLeftButtonUp += (_, _) => TheApp.ShowPage("History");
-        }
         Build();
     }
 
@@ -87,10 +81,10 @@ public partial class DashboardPage : UserControl
     /// <summary>Where each dial leads when clicked: the page that explains or changes what it shows.</summary>
     static string DialPage(string label) => label switch
     {
-        "Dictated today" or "History" => "History",
+        "History" => "History",
+        "Dictated today" or "Turnaround" => "Analytics", // the same figures over time
         "Read aloud today" => "ReadAloud",
         "AI edits kept" => "SpeechToText", // the profiles, whose instructions and safety net decide what is kept
-        "Turnaround" => "Models",
         "Speech model" => "Unloading",
         _ => "Dashboard",
     };
@@ -206,9 +200,7 @@ public partial class DashboardPage : UserControl
                 "Speech model", "until it unloads", UnloadSpeechNow, "Click to unload the speech model now", accent: true));
         }
 
-        // ----- charts -----
-        DaysCard.Child = DaysChart(days, usage.Streak(now));
-        AppsCard.Child = AppsChart(usage.TopApps(now));
+        // The charts (words per day, output by app) moved to Analytics in 4.2.
     }
 
     // ===== pieces =====
@@ -556,165 +548,5 @@ public partial class DashboardPage : UserControl
         Canvas.SetLeft(hub, cx - 4);
         Canvas.SetTop(hub, cy - 4);
         c.Children.Add(hub);
-    }
-
-    FrameworkElement Header(string title, string right)
-    {
-        var header = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
-        var r = new TextBlock { Text = right.ToUpper(), Style = Readout, TextTrimming = TextTrimming.CharacterEllipsis };
-        DockPanel.SetDock(r, Dock.Right);
-        header.Children.Add(r);
-        var t = new TextBlock { Text = title, Style = Readout, Margin = new Thickness(0, 0, 12, 0) };
-        t.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Text");
-        header.Children.Add(t);
-        return header;
-    }
-
-    TextBlock Empty(string text)
-    {
-        var t = new TextBlock { Text = text, FontSize = 12.5, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center };
-        t.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Muted");
-        return t;
-    }
-
-    /// <summary>Words per day as columns: dictated in ink (today in the accent), read aloud faint beside them. Hover a
-    /// day for its numbers.</summary>
-    FrameworkElement DaysChart(IReadOnlyList<DayTotal> days, int streak)
-    {
-        var root = new DockPanel();
-        var dictated = days.Sum(d => d.Words);
-        var read = days.Sum(d => d.WordsRead);
-        var header = Header("WORDS PER DAY // 14 DAYS", $"{dictated:N0} dictated · {read:N0} read aloud" +
-                                                       (streak > 1 ? $" · {streak}-day streak" : ""));
-        DockPanel.SetDock(header, Dock.Top);
-        root.Children.Add(header);
-
-        // The key: which bar is which
-        var key = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, -2, 0, 8) };
-        void Key(string resource, double opacity, string label)
-        {
-            var swatch = new Border { Width = 9, Height = 9, Opacity = opacity, Margin = new Thickness(0, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center };
-            swatch.SetResourceReference(Border.BackgroundProperty, resource);
-            key.Children.Add(swatch);
-            key.Children.Add(new TextBlock { Text = label, Style = Readout, Margin = new Thickness(0, 0, 16, 0), VerticalAlignment = VerticalAlignment.Center });
-        }
-        Key("Ob.Strong", 1, "DICTATED");
-        Key("Ob.Strong", ReadOpacity, "READ ALOUD");
-        Key("Ob.Accent", 1, "TODAY");
-        DockPanel.SetDock(key, Dock.Top);
-        root.Children.Add(key);
-        if (dictated + read == 0) { root.Children.Add(Empty("Dictate or read something aloud and your words per day appear here.")); return root; }
-
-        var max = days.Max(d => Math.Max(d.Words, d.WordsRead));
-        var grid = new Grid();
-        grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-        grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1) });
-        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        for (var i = 0; i < days.Count; i++)
-        {
-            var d = days[i];
-            var isToday = i == days.Count - 1;
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-
-            // Two bars side by side: dictated, then read aloud. The whole day is the hover target.
-            var pair = new Grid { Background = Brushes.Transparent, Margin = new Thickness(2, 0, 2, 0) };
-            pair.ColumnDefinitions.Add(new ColumnDefinition());
-            pair.ColumnDefinitions.Add(new ColumnDefinition());
-            pair.Children.Add(Bar(d.Words, max, isToday ? "Ob.Accent" : "Ob.Strong", 1, 0));
-            pair.Children.Add(Bar(d.WordsRead, max, "Ob.Strong", ReadOpacity, 1));
-            pair.ToolTip = $"{d.Day:dddd d MMMM}\n{d.Words:N0} words dictated in {d.Dictations} dictation{(d.Dictations == 1 ? "" : "s")}" +
-                           $"\n{d.WordsRead:N0} words read aloud";
-            Grid.SetColumn(pair, i);
-            grid.Children.Add(pair);
-
-            var tick = new TextBlock
-            {
-                Text = isToday ? "NOW" : Short(d.Day.ToString("ddd")).ToUpper(), Style = Readout, FontSize = 9,
-                HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 4, 0, 0),
-                FontWeight = isToday ? FontWeights.Bold : FontWeights.Normal,
-            };
-            if (isToday) tick.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Accent");
-            Grid.SetColumn(tick, i);
-            Grid.SetRow(tick, 2);
-            grid.Children.Add(tick);
-        }
-        var baseline = new Border();
-        baseline.SetResourceReference(Border.BackgroundProperty, "Ob.Border");
-        Grid.SetRow(baseline, 1);
-        Grid.SetColumnSpan(baseline, days.Count);
-        grid.Children.Add(baseline);
-        root.Children.Add(grid);
-        return root;
-    }
-
-    /// <summary>The read-aloud bars: ink, toned down so the two series tell apart.</summary>
-    const double ReadOpacity = 0.3;
-
-    /// <summary>One bar of a day, as a share of the busiest day.</summary>
-    static FrameworkElement Bar(int words, int max, string resource, double opacity, int column)
-    {
-        var f = max > 0 ? words / (double)max : 0;
-        var cell = new Grid { Margin = new Thickness(1, 0, 1, 0) };
-        cell.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1 - f, GridUnitType.Star) });
-        cell.RowDefinitions.Add(new RowDefinition { Height = new GridLength(f, GridUnitType.Star) });
-        var bar = new Border { MinHeight = words > 0 ? 2 : 0, Opacity = opacity };
-        bar.SetResourceReference(Border.BackgroundProperty, resource);
-        Grid.SetRow(bar, 1);
-        cell.Children.Add(bar);
-        Grid.SetColumn(cell, column);
-        return cell;
-    }
-
-    static string Short(string day) => day.Length <= 2 ? day : day[..2];
-
-    const int Blocks = 20;
-
-    /// <summary>The apps dictated into most, as rows of blocks filled to their share, with their counts.</summary>
-    FrameworkElement AppsChart(IReadOnlyList<(string App, int Count)> apps)
-    {
-        var root = new DockPanel();
-        var header = Header("OUTPUT // BY APP", "dictations · 30 days");
-        DockPanel.SetDock(header, Dock.Top);
-        root.Children.Add(header);
-        if (apps.Count == 0) { root.Children.Add(Empty("The apps you dictate into appear here.")); return root; }
-
-        var max = apps.Max(a => a.Count);
-        var grid = new Grid();
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0.8, GridUnitType.Star) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.5, GridUnitType.Star) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        for (var i = 0; i < apps.Count; i++)
-        {
-            var (app, count) = apps[i];
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star), MaxHeight = 30 });
-            var name = new TextBlock
-            {
-                Text = app.ToUpper(), FontFamily = Mono, FontSize = 11, VerticalAlignment = VerticalAlignment.Center,
-                TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 0, 10, 0), ToolTip = app,
-            };
-            Grid.SetRow(name, i);
-            grid.Children.Add(name);
-
-            var filled = Math.Max(1, (int)Math.Round(count / (double)max * Blocks));
-            var track = new UniformGrid { Rows = 1, Columns = Blocks, Height = 10, VerticalAlignment = VerticalAlignment.Center, Background = Brushes.Transparent };
-            for (var b = 0; b < Blocks; b++)
-            {
-                var block = new Border { BorderThickness = new Thickness(1), Margin = new Thickness(0, 0, 2, 0) };
-                block.SetResourceReference(Border.BorderBrushProperty, b < filled ? "Ob.Strong" : "Ob.Divider");
-                if (b < filled) block.SetResourceReference(Border.BackgroundProperty, "Ob.Strong");
-                track.Children.Add(block);
-            }
-            track.ToolTip = $"{app}: {count} dictation{(count == 1 ? "" : "s")}";
-            Grid.SetRow(track, i);
-            Grid.SetColumn(track, 1);
-            grid.Children.Add(track);
-
-            var n = new TextBlock { Text = count.ToString("N0"), FontFamily = Mono, FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 0, 0) };
-            Grid.SetRow(n, i);
-            Grid.SetColumn(n, 2);
-            grid.Children.Add(n);
-        }
-        root.Children.Add(grid);
-        return root;
     }
 }

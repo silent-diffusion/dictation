@@ -56,6 +56,13 @@ public partial class HistorySettingsPage : UserControl
         UpdateSize();
     }
 
+    void ResetWords_Click(object sender, RoutedEventArgs e)
+    {
+        if (MessageBox.Show("Reset the Analytics word tally (words, phrases, corrections, fillers, hours, profiles)? History and the dashboard counts are not touched.",
+                AppInfo.Name, MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+        App.Services.Words.Clear();
+    }
+
     void ResetUsage_Click(object sender, RoutedEventArgs e)
     {
         if (MessageBox.Show("Reset the dashboard's daily counts (words per day, streaks, apps)? History itself is not touched.",

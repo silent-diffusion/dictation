@@ -190,13 +190,14 @@ public partial class MainWindow : Window
             "SpeechToText" => new SpeechToTextPage(),
             "ReadAloud" => new ReadAloudPage(),
             "History" => new HistoryPage(),
+            "Analytics" => new AnalyticsPage(),
             _ => (object)new DashboardPage(),
         };
         Visit(tag);
         Place(_shut); // fit the new page to the sidebar's state
     }
 
-    /// <summary>Open a section ("Dashboard", "SpeechToText", "ReadAloud", "History") or a settings section by its tag
+    /// <summary>Open a section ("Dashboard", "SpeechToText", "ReadAloud", "History", "Analytics") or a settings section by its tag
     /// (e.g. "About" from the tray's update check).</summary>
     public void ShowPage(string tag)
     {

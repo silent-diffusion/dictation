@@ -49,7 +49,6 @@
                 <Grid.RowDefinitions>
                     <RowDefinition Height="1.3*" MinHeight="150"/>
                     <RowDefinition Height="1.15*" MinHeight="120"/>
-                    <RowDefinition Height="1.3*" MinHeight="140"/>
                 </Grid.RowDefinitions>
 
                 <!-- The signal path: profile → speech recognition → AI cleanup → read aloud -->
@@ -57,16 +56,7 @@
 
                 <!-- Meters -->
                 <UniformGrid x:Name="Dials" Grid.Row="1" Columns="6" Rows="1"/>
-
-                <!-- Charts -->
-                <Grid Grid.Row="2">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="1.6*"/>
-                        <ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
-                    <Border x:Name="DaysCard" Style="{StaticResource DashCell}" Padding="16,12,16,10"/>
-                    <Border x:Name="AppsCard" Grid.Column="1" Style="{StaticResource DashCell}" Padding="16,12,16,10"/>
-                </Grid>
+                <!-- The charts (words per day, output by app) live in Analytics since 4.2. -->
             </Grid>
         </Border>
 

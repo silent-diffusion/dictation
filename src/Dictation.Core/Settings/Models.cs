@@ -113,6 +113,9 @@ public sealed class AppSettings
     /// <summary>Keep each dictation's recording (16 kHz WAV, about 2 MB a minute) so it can be played back.</summary>
     public bool SaveHistoryAudio { get; set; } = true;
     public HistoryGrouping HistoryGrouping { get; set; } = HistoryGrouping.Chronological;
+    /// <summary>Keep the Analytics word tally (data\words.json): counts of words, phrases, corrections and fillers per
+    /// day, never sentences. On by default.</summary>
+    public bool KeepWordTally { get; set; } = true;
     /// <summary>Unload a model after this many minutes without use, to free memory (GPU memory especially).
     /// 0 = keep loaded; <see cref="UnloadImmediately"/> = as soon as each dictation or reading is done. It loads again by
     /// itself the next time it is needed.</summary>

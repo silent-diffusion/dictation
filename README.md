@@ -92,15 +92,14 @@ The folder keeps its pre-rename name so updates from Local Dictation 1.x keep yo
 
 ## Using it
 
-The sidebar has five sections: **Dashboard** (one screen, no scrolling: the signal path, drawn as a diagram of what's active and loaded
+The sidebar has six sections: **Dashboard** (one screen, no scrolling: the signal path, drawn as a diagram of what's active and loaded
 (microphone → speech model → AI model and profile → insert, with read aloud branching off; each node's status, the hotkey and
 the unload countdown), meters for words dictated and words read aloud today, turnaround,
-AI edits kept, history and the speech model's unload countdown, and charts of words per day (dictated and read aloud, side by side) and
-the apps you dictate into; the signal path grows with the window. Every step, meter and chart opens its page when
-clicked (History, the profiles, Models, Microphone, Model unloading); the big number on the speech-model meter unloads that model
+AI edits kept, history and the speech model's unload countdown; the signal path grows with the window. Every step and meter opens its page when
+clicked (History, Analytics, the profiles, Microphone, Model unloading); the big number on the speech-model meter unloads that model
 right away, and the big number on the History meter copies the last dictation's AI edit (or its text, without one) and says so. The figures come from daily counts in
 `data\usage.json` (dictations, words, seconds spoken, turnaround, AI edits kept, readings and dictations per app name; never
-any text, audio or window titles), so they survive History being trimmed, cleared or off), **Speech to text** (profiles), **Read aloud**, **History** and **Settings**. The menu button
+any text, audio or window titles), so they survive History being trimmed, cleared or off), **Speech to text** (profiles), **Read aloud**, **History**, **Analytics** and **Settings**. The menu button
 in the top-left corner (✕ while the sidebar is open, ☰ while it's hidden; or **Ctrl+B**) slides the sidebar away to give
 the page the whole window. **Back** (after the logo, or next to ☰ while the sidebar is hidden; also `Alt+←` or the mouse's
 back button) returns to the page you were on before, Settings sections included; it shows on every page but the dashboard.
@@ -176,6 +175,14 @@ window's edge.
 * **History**: the last 50 dictations (adjustable under *Settings › History*, up to *All of them*), kept in Oberton's data folder so they survive
   updates. Each has its recording (play it, also at 2×), the Transcription, AI Edit and Inserted boxes (each can be copied),
   and the app and window it went into. List them newest first, or grouped by app (each app's group folds away).
+* **Analytics**: how dictation goes over the last 7, 30 or 90 days, or everything: words dictated, speaking pace, time saved
+  against typing at 40 wpm, turnaround, AI edits kept and words read aloud; the **most corrected** words (what the recognizer
+  heard and what the AI wrote instead, each with *Add to vocabulary*, which adds it to the speech vocabulary hint so the
+  recognizer expects it next time); your **most used words** and **common phrases**; the fillers the AI removed; words per day
+  (dictated and read aloud); when you dictate (weekday × hour); how much each profile changes your words; and the apps you
+  dictate into. Words, phrases, corrections, fillers, hours and profiles come from the **word tally** in `data\words.json`:
+  counts only, never sentences, updated after every dictation and seeded once from History. It is on by default; turn it off
+  or reset it under *Settings › History*.
 * **Models** (*Settings › Models*): every speech, AI and voice model as a list, showing whether it is downloaded, active and
   loaded, with **Download** and **Use this** buttons. Cloud models are marked CLOUD.
 * **Model unloading** (*Settings*): unload models immediately after each use (a few seconds after a dictation or reading

@@ -122,6 +122,10 @@ public sealed class UsageStore
 
     // ----- figures for the dashboard -----
 
+    /// <summary>The days of the last <paramref name="days"/> days up to today, or all of them when null.</summary>
+    public IReadOnlyList<UsageDay> InPeriod(DateTime today, int? days) =>
+        (days is { } n ? Since(today, n) : _data.Days.Where(d => d.Day <= today.Date)).ToList();
+
     IEnumerable<UsageDay> Since(DateTime today, int days) => _data.Days.Where(d => d.Day > today.Date.AddDays(-days) && d.Day <= today.Date);
 
     /// <summary>Words and dictations per day for the last <paramref name="days"/> days, oldest first, ending today.</summary>

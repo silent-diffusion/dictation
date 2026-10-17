@@ -123,6 +123,13 @@
                             <TextBlock Text="HISTORY" VerticalAlignment="Center"/>
                         </DockPanel>
                     </ListBoxItem>
+                    <ListBoxItem x:Name="AnalyticsItem" Tag="Analytics" AutomationProperties.Name="Analytics">
+                        <DockPanel>
+                            <Path Style="{StaticResource NavIcon}" Data="M 2.5,14.5 L 2.5,9 M 6.5,14.5 L 6.5,4 M 10.5,14.5 L 10.5,7 M 14,14.5 L 14,1.5"/>
+                            <local:DecorText DockPanel.Dock="Right" Text="分析" Style="{StaticResource NavDecor}"/>
+                            <TextBlock Text="ANALYTICS" VerticalAlignment="Center"/>
+                        </DockPanel>
+                    </ListBoxItem>
                     <ListBoxItem x:Name="SettingsItem" Tag="Settings" AutomationProperties.Name="Settings">
                         <DockPanel>
                             <Path Style="{StaticResource NavIcon}" Data="M 8,6 A 2,2 0 1 1 7.99,6 M 8,1 L 8,4 M 8,12 L 8,15 M 1,8 L 4,8 M 12,8 L 15,8 M 3,3 L 5,5 M 11,11 L 13,13 M 13,3 L 11,5 M 5,11 L 3,13"/>

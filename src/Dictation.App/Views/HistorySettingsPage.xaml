@@ -36,6 +36,19 @@
                 <Button Content="DELETE ALL HISTORY…" Style="{StaticResource QuietButton}" Click="Clear_Click"/>
             </StackPanel>
 
+            <TextBlock Text="ANALYTICS WORD TALLY" Style="{StaticResource FieldLabel}" Margin="0,24,0,6"/>
+            <Border Style="{StaticResource Card}">
+                <CheckBox Style="{StaticResource Switch}" IsChecked="{Binding KeepWordTally}" Margin="18,4">
+                    <StackPanel>
+                        <TextBlock Text="Count the words I dictate, for Analytics" TextWrapping="Wrap"/>
+                        <TextBlock FontSize="12" Foreground="{DynamicResource Ob.Muted}" TextWrapping="Wrap" Margin="0,2,0,0"
+                                   Text="After each dictation: the words and phrases that went in, the words the AI corrected and the fillers it took out, the hour, and how much the profile changed. Counts only, never sentences, kept in words.json next to History."/>
+                    </StackPanel>
+                </CheckBox>
+            </Border>
+            <Button Content="RESET WORD TALLY…" Style="{StaticResource QuietButton}" HorizontalAlignment="Left" Margin="0,8,0,0"
+                    Click="ResetWords_Click"/>
+
             <TextBlock Text="DASHBOARD COUNTS" Style="{StaticResource FieldLabel}" Margin="0,24,0,6"/>
             <TextBlock Style="{StaticResource Caption}"
                        Text="The dashboard keeps its own daily tallies in usage.json next to History: per day, how many dictations and words, seconds spoken, the turnaround, AI edits kept, texts read aloud, and dictations per app (the app's name only). Never any text, audio or window titles. They stay when you delete History or turn it off."/>
