@@ -51,11 +51,19 @@ public sealed class NotesRecorder
     readonly object _wavLock = new();
     long _samples; // recorded, pauses not counted
     SpeechSessionClient? _speech;
+    // Audio that arrives while the engine isn't connected (still loading, or the connection dropped) waits here, up to
+    // three minutes of it, and goes out as soon as it is: the transcript has no gap. The lock guards _speech too.
+    readonly object _audioLock = new();
+    readonly Queue<byte[]> _backlog = new();
+    long _backlogBytes;
+    const long MaxBacklogBytes = MicCapture.SampleRate * 2L * 180;
     bool _connecting;
     DateTime _nextConnect = DateTime.MinValue;
+    TimeSpan _connectDelay = TimeSpan.FromSeconds(5);
     DispatcherTimer? _tick;
     double _lastPieceSeconds;
     bool _userPaused, _dictating, _formatting, _summarizing, _dirty;
+    int _formatRequests, _summaryRequests; // this session's AI requests, for the counts
     DateTime _lastFormat = DateTime.Now, _lastSave = DateTime.Now, _lastSection = DateTime.Now;
 
     public NotesRecorder(SettingsService settings, ISpeechRecognizer asr, ITextProcessor llm, NotesStore store, Func<string> speechModel)
@@ -89,6 +97,9 @@ public sealed class NotesRecorder
         Interlocked.Exchange(ref _samples, 0);
         _lastPieceSeconds = 0;
         _userPaused = _formatting = _summarizing = false;
+        _formatRequests = _summaryRequests = 0;
+        _connectDelay = TimeSpan.FromSeconds(5);
+        lock (_audioLock) { _backlog.Clear(); _backlogBytes = 0; }
         _lastFormat = _lastSave = _lastSection = DateTime.Now;
         try
         {
@@ -152,7 +163,16 @@ public sealed class NotesRecorder
     {
         if (Current == null || IsPaused || IsFinishing) return;
         lock (_wavLock) _wav?.Write(pcm, 0, pcm.Length);
-        _speech?.Send(pcm);
+        lock (_audioLock)
+        {
+            if (_speech is { IsConnected: true } speech) speech.Send(pcm);
+            else
+            {
+                _backlog.Enqueue(pcm);
+                _backlogBytes += pcm.Length;
+                while (_backlogBytes > MaxBacklogBytes) _backlogBytes -= _backlog.Dequeue().Length;
+            }
+        }
         Interlocked.Add(ref _samples, pcm.Length / 2);
     }
 
@@ -165,19 +185,35 @@ public sealed class NotesRecorder
             if (!_asr.IsReady) await _asr.InitializeAsync(_speechModel(), CancellationToken.None);
             var client = new SpeechSessionClient();
             client.Committed += text => OnUi(() => OnPiece(text));
-            client.Disconnected += () => OnUi(() => { if (_speech == client) { _speech = null; StateChanged?.Invoke(); } });
+            client.Disconnected += () => OnUi(() =>
+            {
+                bool mine;
+                lock (_audioLock) { mine = _speech == client; if (mine) _speech = null; }
+                if (mine) StateChanged?.Invoke();
+            });
             await client.ConnectAsync(_settings.Current.Asr.Port, CancellationToken.None);
             var asr = _settings.Current.Asr;
             client.Start(asr.Language, asr.VocabularyHint);
             if (Current == null) { await client.DisposeAsync(); return; }
-            _speech = client;
-            Log.Info("Extended notes: listening");
+            int waiting;
+            lock (_audioLock)
+            {
+                // What was said meanwhile goes first; the live audio follows on.
+                waiting = _backlog.Count;
+                while (_backlog.Count > 0) client.Send(_backlog.Dequeue());
+                _backlogBytes = 0;
+                _speech = client;
+            }
+            _connectDelay = TimeSpan.FromSeconds(5);
+            Log.Info("Extended notes: listening" + (waiting > 0 ? $" ({waiting} waiting pieces of audio sent first)" : ""));
             StateChanged?.Invoke();
         }
         catch (Exception e)
         {
-            Log.Warn("Extended notes: couldn't connect to the speech engine: " + e.Message);
-            _nextConnect = DateTime.Now.AddSeconds(5);
+            // Each try may load the model, so the tries space out: 5 s, 10 s, 20 s, up to a minute apart.
+            Log.Warn($"Extended notes: couldn't connect to the speech engine ({e.Message}); next try in {_connectDelay.TotalSeconds:0} s");
+            _nextConnect = DateTime.Now + _connectDelay;
+            _connectDelay = TimeSpan.FromSeconds(Math.Min(60, _connectDelay.TotalSeconds * 2));
         }
         finally { _connecting = false; }
     }
@@ -199,8 +235,12 @@ public sealed class NotesRecorder
         if (s == null || IsFinishing) return;
         s.Seconds = Seconds;
         if (_speech == null && !_connecting && DateTime.Now >= _nextConnect) _ = ConnectSpeechAsync();
-        MaybeFormat(s);
-        MaybeSummarize(s);
+        if (!_dictating)
+        {
+            // Not while a dictation runs: its AI edit would wait behind a long formatting or summary request.
+            MaybeFormat(s);
+            MaybeSummarize(s);
+        }
         if (_dirty && DateTime.Now - _lastSave > TimeSpan.FromSeconds(10)) Save(s);
         else if (DateTime.Now - _lastSave > TimeSpan.FromSeconds(30)) Save(s); // the recording's length, at least
         StateChanged?.Invoke(); // the timer
@@ -232,6 +272,7 @@ public sealed class NotesRecorder
         var failed = true;
         try
         {
+            _formatRequests++;
             var r = await _llm.ProcessAsync(sent, FormatProfile);
             if (!r.SafetyNet && r.Text.Trim().Length > 0) { ai = r.Text; failed = false; }
             else Log.Info("Extended notes: the AI's formatting was rejected; keeping the text as heard");
@@ -268,7 +309,7 @@ public sealed class NotesRecorder
             while (sections < (final ? 50 : 1) && s.BeginSection(NotesSummary.InputBudget) is { } section)
             {
                 sections++;
-                var reply = await _llm.AskAsync(NotesSummary.DigestPrompt(NotesSummary.DigestWords(section.Text)), section.Text, NotesSummary.DigestTokens);
+                var reply = await Ask(NotesSummary.DigestPrompt(NotesSummary.DigestWords(section.Text)), section.Text, NotesSummary.DigestTokens);
                 if (!NotesSummary.IsUsable(section.Text, reply))
                 {
                     s.EndSection(null, section.Start, section.End);
@@ -285,7 +326,7 @@ public sealed class NotesRecorder
             for (var merges = 0; merges < 20 && NotesSummary.MergeGroup(s.Frontier()) is { } group; merges++)
             {
                 var input = NotesSummary.MergeInput(group);
-                var reply = await _llm.AskAsync(NotesSummary.MergePrompt(NotesSummary.MergeWords(group)), input, NotesSummary.MergeTokens);
+                var reply = await Ask(NotesSummary.MergePrompt(NotesSummary.MergeWords(group)), input, NotesSummary.MergeTokens);
                 if (!NotesSummary.IsUsable(input, reply)) { Log.Info("Extended notes: merging summaries gave nothing usable; keeping them apart"); break; }
                 s.Merge(group, reply);
                 _dirty = true;
@@ -297,13 +338,19 @@ public sealed class NotesRecorder
             var basedOn = s.Summary;
             var listener = basedOn.Trim() != s.SummaryByAi.Trim() ? basedOn : null;
             var text = NotesSummary.FinalInput(frontier, listener);
-            var summary = NotesSummary.Shape(await _llm.AskAsync(NotesSummary.FinalPrompt, text, NotesSummary.FinalTokens));
+            var summary = NotesSummary.Shape(await Ask(NotesSummary.FinalPrompt, text, NotesSummary.FinalTokens));
             if (summary == null || NoteSession.Words(summary) > NoteSession.Words(text) * 1.5 + 60) Log.Info("Extended notes: the summary was unusable; keeping the last one");
             else if (!s.EndSummary(summary, basedOn, this)) Log.Info("Extended notes: the summary was edited meanwhile; keeping the edit");
             _dirty = true;
         }
         catch (Exception e) { Log.Warn("Extended notes: summarizing failed: " + e.Message); }
         finally { _summarizing = false; }
+    }
+
+    Task<string> Ask(string instructions, string text, int maxTokens)
+    {
+        _summaryRequests++;
+        return _llm.AskAsync(instructions, text, maxTokens);
     }
 
     public void Pause()
@@ -341,8 +388,16 @@ public sealed class NotesRecorder
         _tick?.Stop();
         try
         {
-            var speech = _speech;
-            _speech = null;
+            SpeechSessionClient? speech;
+            lock (_audioLock)
+            {
+                speech = _speech;
+                _speech = null;
+                if (_backlogBytes > 0)
+                    Log.Warn($"Extended notes: {_backlogBytes / 2 / MicCapture.SampleRate} s of audio never reached the speech engine (not connected); the recording has it");
+                _backlog.Clear();
+                _backlogBytes = 0;
+            }
             if (speech != null)
             {
                 var tail = await speech.StopAsync(TimeSpan.FromSeconds(60));
@@ -360,6 +415,7 @@ public sealed class NotesRecorder
         {
             s.Finished = true;
             _store.Save(s);
+            _store.Usage.Record(s, _formatRequests, _summaryRequests);
             Current = null;
             IsFinishing = false;
             _userPaused = false;
@@ -377,12 +433,13 @@ public sealed class NotesRecorder
         StopAudio();
         _tick?.Stop();
         try { _speech?.DisposeAsync().AsTask().Wait(1000); } catch { }
-        _speech = null;
+        lock (_audioLock) _speech = null;
         CloseWav();
         s.Seconds = Seconds;
         s.Finished = true;
         try { File.WriteAllText(Path.Combine(s.Folder, "session.json"), System.Text.Json.JsonSerializer.Serialize(s, JsonStore.Options)); }
         catch (Exception e) { Log.Warn("Extended notes: saving at exit failed: " + e.Message); }
+        _store.Usage.Record(s, _formatRequests, _summaryRequests);
         Current = null;
     }
 

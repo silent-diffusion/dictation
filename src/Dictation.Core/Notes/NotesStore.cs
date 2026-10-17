@@ -14,6 +14,8 @@ public sealed class NotesStore
     public static string Dir => Path.Combine(AppPaths.DataDir, "notes");
     static string DraftPath => Path.Combine(Dir, "draft.txt");
     public ObservableCollection<NoteSession> Sessions { get; } = new();
+    /// <summary>Daily counts of the sessions, kept apart from the dictation statistics.</summary>
+    public NotesUsage Usage { get; }
     readonly object _writeLock = new();
     readonly bool _disk;
     volatile string _draft = "";
@@ -22,6 +24,7 @@ public sealed class NotesStore
     public NotesStore(bool load = true)
     {
         _disk = load;
+        Usage = new NotesUsage(load ? NotesUsage.DefaultPath : null);
         if (load) Load();
     }
 
@@ -91,6 +94,7 @@ public sealed class NotesStore
     public void Delete(NoteSession s)
     {
         Sessions.Remove(s);
+        NotesAudio.Forget(s.Id);
         try { if (s.Folder.Length > 0 && Directory.Exists(s.Folder)) Directory.Delete(s.Folder, true); }
         catch (Exception e) { Log.Warn("Extended notes: couldn't delete a session: " + e.Message); }
     }

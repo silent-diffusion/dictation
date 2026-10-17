@@ -432,6 +432,26 @@ public class NotesPlaybackTests
     }
 
     [Fact]
+    public void The_prepared_copy_is_kept_for_the_next_time()
+    {
+        var dir = System.IO.Directory.CreateTempSubdirectory("oberton-notes-test");
+        var id = "test-" + Guid.NewGuid().ToString("N");
+        try
+        {
+            var src = System.IO.Path.Combine(dir.FullName, "audio.wav");
+            using (var w = new WaveFileWriter(src, new WaveFormat(16000, 16, 1))) w.WriteSamples(new short[16000], 0, 16000);
+            var first = NotesAudio.PrepareCached(src, id);
+            var again = NotesAudio.PrepareCached(src, id);
+            Assert.Equal(first.Path, again.Path);
+            Assert.True(System.IO.File.Exists(again.Path));
+            Assert.InRange(again.Seconds, 0.99, 1.01);
+            NotesAudio.Forget(id);
+            Assert.False(System.IO.File.Exists(first.Path));
+        }
+        finally { dir.Delete(true); NotesAudio.Forget(id); }
+    }
+
+    [Fact]
     public void Gain_never_lowers_and_never_exceeds_the_cap()
     {
         Assert.Equal(1f, NotesAudio.Gain(new[] { 0.95f, 0.9f, 0.99f }));
@@ -452,5 +472,25 @@ public class NotesPlaybackTests
         var pieces = NotesEdits.Build(s);
         Assert.Equal(5, pieces[0].Seconds, 3);
         Assert.Equal(40, pieces[^1].Seconds, 3);
+    }
+}
+
+public class NotesUsageTests
+{
+    [Fact]
+    public void A_finished_session_is_counted_on_its_day_apart_from_dictation()
+    {
+        var usage = new NotesUsage(null);
+        var s = new NoteSession
+        {
+            Started = new DateTime(2026, 10, 17, 9, 0, 0), Seconds = 3600, Source = NotesSource.Both,
+            Heard = "one two three", Transcript = "one two three my note",
+        };
+        usage.Record(s, formatRequests: 12, summaryRequests: 4);
+        usage.Record(new NoteSession { Started = new DateTime(2026, 10, 17, 14, 0, 0), Seconds = 60 }, 1, 0);
+        var day = Assert.Single(usage.Days);
+        Assert.Equal((2, 3660.0, 3, 2, 12, 4), (day.Sessions, day.Seconds, day.WordsHeard, day.WordsTyped, day.FormatRequests, day.SummaryRequests));
+        Assert.Equal(1, day.Sources["Both"]);
+        Assert.Equal(1, day.Sources["Mic"]);
     }
 }

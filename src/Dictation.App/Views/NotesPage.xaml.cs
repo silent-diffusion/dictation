@@ -26,7 +26,7 @@ public partial class NotesPage : UserControl
     NoteSession? _session;
     NoteDoc _tab = NoteDoc.Transcript;
     bool _edited, _playing, _seeking, _playerOpen, _preparing, _prepareFailed, _autoPlay;
-    string? _playCopy;
+    bool _editedDirty = true; // the session changed since the Edited tab was last built
     PreparedAudio? _prepared;
     readonly DispatcherTimer _skipTick = new() { Interval = TimeSpan.FromMilliseconds(120) };
     DateTime _editedBuilt = DateTime.MinValue;
@@ -236,6 +236,7 @@ public partial class NotesPage : UserControl
         _lastPlayCaret = -1;
         Seek.Value = 0;
         _editedBuilt = DateTime.MinValue;
+        _editedDirty = true;
         if (_edited) BuildEdited();
         Refresh();
     }
@@ -257,6 +258,7 @@ public partial class NotesPage : UserControl
 
     void OnSessionChanged(NoteDoc doc, object? source)
     {
+        _editedDirty = true;
         // The recorder saves its own changes; the user's edits are saved here, a moment after they stop typing.
         if (_session != null && !ReferenceEquals(source, _recorder) && !ReferenceEquals(_session, _recorder.Current)) _saveSoon = DateTime.Now.AddSeconds(2);
     }
@@ -297,7 +299,7 @@ public partial class NotesPage : UserControl
             if (_prepared == null && !_preparing && !_playerOpen) PreparePlayback();
             UpdatePlayer(seconds);
         }
-        if (_edited && live && DateTime.Now - _editedBuilt > TimeSpan.FromSeconds(4)) BuildEdited();
+        if (_edited && live && _editedDirty && DateTime.Now - _editedBuilt > TimeSpan.FromSeconds(4)) BuildEdited();
     }
 
     MainWindow? Owner => Window.GetWindow(this) as MainWindow;
@@ -385,6 +387,7 @@ public partial class NotesPage : UserControl
     {
         if (_session == null) return;
         _editedBuilt = DateTime.Now;
+        _editedDirty = false;
         IReadOnlyList<EditPiece> pieces;
         try { pieces = NotesEdits.Build(_session); }
         catch (Exception e) { Log.Error("Building the Edited view failed", e); return; }
@@ -548,28 +551,26 @@ public partial class NotesPage : UserControl
     TextBox? ActiveBox => _edited ? null : _tab switch { NoteDoc.Formatted => FormattedBox, NoteDoc.Summary => null, _ => TranscriptBox };
 
     /// <summary>Make the recording ready to play (its level brought up, its pauses found) in the background, and open
-    /// the player on the result. Mic recordings are often very quiet, so this comes before the first play.</summary>
+    /// the player on the result. Mic recordings are often very quiet, so this comes before the first play. The copy is
+    /// made once per session and kept in the temp folder, so the next time it opens it is ready at once.</summary>
     async void PreparePlayback()
     {
         if (_session == null || Live || _preparing || _prepared != null || _prepareFailed || !File.Exists(_session.AudioPath)) return;
         var session = _session;
-        var target = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"oberton-notes-{Guid.NewGuid():N}.wav");
         _preparing = true;
         UpdatePlayer(session.Seconds);
         try
         {
-            var prepared = await Task.Run(() => NotesAudio.Prepare(session.AudioPath, target));
-            if (!ReferenceEquals(session, _session) || !SessionView.IsVisible || _prepared != null) { TryDelete(target); return; }
+            var prepared = await Task.Run(() => NotesAudio.PrepareCached(session.AudioPath, session.Id));
+            if (!ReferenceEquals(session, _session) || !SessionView.IsVisible || _prepared != null) return;
             _prepared = prepared;
-            _playCopy = target;
-            _player.Open(new Uri(target));
+            _player.Open(new Uri(prepared.Path));
             _playerOpen = true;
         }
         catch (Exception ex)
         {
             Log.Warn("Extended notes: couldn't prepare the recording: " + ex.Message);
             _prepareFailed = true;
-            TryDelete(target);
         }
         finally
         {
@@ -681,17 +682,6 @@ public partial class NotesPage : UserControl
         _prepared = null;
         _pendingSeek = null;
         if (IsInitialized) ShowPlay();
-        var copy = _playCopy;
-        _playCopy = null;
-        if (copy != null) TryDelete(copy);
-    }
-
-    /// <summary>Delete a temporary copy; once more when idle, in case the player still held it.</summary>
-    void TryDelete(string path)
-    {
-        void Attempt() { try { if (File.Exists(path)) File.Delete(path); } catch { } }
-        Attempt();
-        Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, (Action)Attempt);
     }
 
     // ----- right-click: jump to this moment in the recording -----

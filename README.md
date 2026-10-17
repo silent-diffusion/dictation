@@ -195,7 +195,8 @@ window's edge.
   and notes typed by you in amber). The titles are click-to-rename. Once the session has stopped, the bar at the bottom
   plays the recording from where your cursor is in the text (1×, 1.5×, 2×, **Skip silences**) with its level brought up
   (mic recordings are quiet), and a right-click in any tab jumps to that moment in the recording; **Export** saves the
-  transcript, the formatted text, the summary or everything as .txt or .md, and the recording (as played) as .wav. **Pause**, **Full screen** and **Stop** are in the header; dictating into an
+  transcript, the formatted text, the summary or everything as .txt or .md, and the recording (as played) as .wav.
+  Extended Notes never count in the dictation statistics; their own daily counts are kept apart in `data\notes\usage.json`. **Pause**, **Full screen** and **Stop** are in the header; dictating into an
   app pauses the session for that moment. Everything is saved as it goes in `data\notes\` (a session.json and the
   audio.wav, about 115 MB an hour), so a crash keeps it; the landing page lists every session (search, open, delete).
   The speech engine is shared: notes open their own connection to the model already loaded, and no model unloads while a

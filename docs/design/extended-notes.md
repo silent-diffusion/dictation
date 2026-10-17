@@ -54,6 +54,15 @@ Agreed with the user on 2026-10-17; design mockup: https://claude.ai/artifact/47
   is done. Model unloading never happens while a session records.
 - **AI**: formatting with the default AI model, about every minute of new speech; a failure keeps the text as heard.
   A section summary every 5 to 10 minutes of speech (then any merges, and the Summary tab rewritten), and once more at Stop.
+  None of it starts while a dictation runs, so a dictation's AI edit never waits behind a long notes request.
+- **Statistics** (5.1.1): Extended Notes never count in the dictation statistics (dashboard, Analytics, History); a
+  lecture's hour and its ten thousand words are not dictation. Their own daily counts (sessions, seconds, words heard
+  and typed, AI requests, by source; never text) are kept apart in `data\notes\usage.json` for later.
+- **Speech engine not ready**: audio that arrives while the engine loads or reconnects waits (up to three minutes) and
+  is sent once it is connected, so the transcript has no gap; a failed connection is retried 5, 10, 20… seconds later,
+  up to a minute apart.
+- **Playback copy**: the louder copy is made once per session and kept in `%TEMP%\oberton-notes\<id>.wav` (with its
+  pauses in `<id>.json`; deleted with the session), so a session opens ready to play.
 - **Storage**: `data\notes\<yyyyMMdd-HHmmss>\session.json` and `audio.wav` (16 kHz mono, about 115 MB an hour; the wav
   header is refreshed with every save, so a crash keeps everything up to the last save).
 

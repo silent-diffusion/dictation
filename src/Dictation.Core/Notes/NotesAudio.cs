@@ -3,18 +3,26 @@ using NAudio.Wave;
 
 namespace Dictation.Core.Notes;
 
-/// <summary>A recording made ready to play (<see cref="NotesAudio.Prepare"/>): where the louder copy is, and its pauses.</summary>
+/// <summary>A pause in a recording, in seconds.</summary>
+public sealed class AudioPause
+{
+    public double Start { get; set; }
+    public double End { get; set; }
+}
+
+/// <summary>A recording made ready to play (<see cref="NotesAudio.Prepare"/>): where the louder copy is, and its pauses.
+/// Kept as JSON beside the copy, so a session opened again is ready at once.</summary>
 public sealed class PreparedAudio
 {
-    public string Path { get; init; } = "";
-    public double Seconds { get; init; }
+    public string Path { get; set; } = "";
+    public double Seconds { get; set; }
     /// <summary>How much the level was raised.</summary>
-    public double GainDb { get; init; }
-    /// <summary>Pauses of <see cref="NotesAudio.MinSilence"/> or longer, in seconds, in order.</summary>
-    public IReadOnlyList<(double Start, double End)> Silences { get; init; } = Array.Empty<(double, double)>();
+    public double GainDb { get; set; }
+    /// <summary>Pauses of <see cref="NotesAudio.MinSilence"/> or longer, in order.</summary>
+    public List<AudioPause> Silences { get; set; } = new();
 
     /// <summary>The pause <paramref name="seconds"/> falls in, if any.</summary>
-    public (double Start, double End)? SilenceAt(double seconds)
+    public AudioPause? SilenceAt(double seconds)
     {
         foreach (var s in Silences)
         {
@@ -28,7 +36,8 @@ public sealed class PreparedAudio
 /// <summary>
 /// Gets a recording ready for playback. Microphone recordings are often very quiet, so the level is raised to bring the
 /// speech near full scale (never lowered, and never by more than <see cref="MaxGainDb"/>), and the pauses are found so
-/// playback can skip them. The result is a new 16-bit file; the recording itself is left as it is.
+/// playback can skip them. The result is a new 16-bit file; the recording itself is left as it is. Made once per
+/// session and kept in the temp folder (<see cref="PrepareCached"/>).
 /// </summary>
 public static class NotesAudio
 {
@@ -40,6 +49,44 @@ public static class NotesAudio
     /// <summary>How much of a silence is kept when skipping it, so the speech doesn't run together.</summary>
     public const double KeepGap = 0.25;
     const double WindowSeconds = 0.05;
+
+    /// <summary>The prepared copies, one per session, named by the session's id.</summary>
+    public static string CacheDir => Path.Combine(Path.GetTempPath(), "oberton-notes");
+
+    /// <summary>The prepared copy of a session's recording: made the first time, then found again (unless the recording
+    /// is newer), so the session opens ready to play.</summary>
+    public static PreparedAudio PrepareCached(string wavPath, string sessionId)
+    {
+        Directory.CreateDirectory(CacheDir);
+        var copy = Path.Combine(CacheDir, sessionId + ".wav");
+        var meta = Path.Combine(CacheDir, sessionId + ".json");
+        if (File.Exists(copy) && File.Exists(meta) && File.GetLastWriteTimeUtc(copy) >= File.GetLastWriteTimeUtc(wavPath))
+        {
+            var cached = JsonStore.Load<PreparedAudio>(meta);
+            if (cached != null && cached.Seconds > 0) { cached.Path = copy; return cached; }
+        }
+        var tmp = copy + ".tmp";
+        var prepared = Prepare(wavPath, tmp);
+        File.Move(tmp, copy, true);
+        prepared.Path = copy;
+        try { JsonStore.Save(meta, prepared); }
+        catch (Exception e) { Log.Warn("Extended notes: couldn't keep the prepared recording's details: " + e.Message); }
+        return prepared;
+    }
+
+    /// <summary>A session was deleted: its prepared copy goes too.</summary>
+    public static void Forget(string sessionId)
+    {
+        foreach (var ext in new[] { ".wav", ".json", ".wav.tmp" })
+        {
+            try
+            {
+                var p = Path.Combine(CacheDir, sessionId + ext);
+                if (File.Exists(p)) File.Delete(p);
+            }
+            catch { }
+        }
+    }
 
     public static PreparedAudio Prepare(string wavPath, string outPath)
     {
@@ -121,9 +168,9 @@ public static class NotesAudio
 
     /// <summary>The pauses: runs of windows well under the recording's own speech level and close to its noise floor.
     /// Relative, so a quiet recording and a loud one are treated alike.</summary>
-    public static List<(double Start, double End)> FindSilences(IReadOnlyList<float> levelsDb, double windowSeconds)
+    public static List<AudioPause> FindSilences(IReadOnlyList<float> levelsDb, double windowSeconds)
     {
-        var result = new List<(double, double)>();
+        var result = new List<AudioPause>();
         if (levelsDb.Count < 4) return result;
         var sorted = levelsDb.OrderBy(l => l).ToList();
         var floor = sorted[(int)(sorted.Count * 0.2)];
@@ -135,7 +182,7 @@ public static class NotesAudio
         {
             var quiet = i < levelsDb.Count && levelsDb[i] < threshold;
             if (quiet) { if (start < 0) start = i; continue; }
-            if (start >= 0 && i - start >= minWindows) result.Add((start * windowSeconds, i * windowSeconds));
+            if (start >= 0 && i - start >= minWindows) result.Add(new AudioPause { Start = start * windowSeconds, End = i * windowSeconds });
             start = -1;
         }
         return result;

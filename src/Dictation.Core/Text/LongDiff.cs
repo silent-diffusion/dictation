@@ -8,8 +8,9 @@ namespace Dictation.Core.Text;
 /// </summary>
 public static class LongDiff
 {
-    /// <summary>Beyond this many differences the middle is reported as replaced wholesale (it would cost too much).</summary>
-    const int MaxEdits = 6000;
+    /// <summary>Beyond this many differences the middle is reported as replaced wholesale: the walk-back keeps about D²
+    /// ints, so this caps that near 36 MB, and a diff that different is no use to read anyway.</summary>
+    const int MaxEdits = 3000;
 
     public static IReadOnlyList<DiffToken> Compute(string original, string edited) =>
         Compute(Split(original), Split(edited));
