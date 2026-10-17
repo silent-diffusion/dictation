@@ -626,7 +626,7 @@ public partial class NotesPage : UserControl
         try { File.WriteAllBytes(dlg.FileName, NotesExport.BuildDocx(_session, part)); }
         catch (Exception ex)
         {
-            Log.Error("Extended notes: Word export failed", ex);
+            Log.Warn("Extended notes: Word export failed: " + ex.GetType().Name); // not the message: it carries the chosen path
             MessageBox.Show("Saving failed: " + ex.Message, AppInfo.Name, MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }

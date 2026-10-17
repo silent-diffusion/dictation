@@ -274,10 +274,16 @@ public partial class App : Application
 
     /// <summary>The marker hotkey is held only while an Extended Notes session records (paused or not); the rest of the
     /// time the key stays with whatever app uses it (Ctrl+Alt+M inserts a comment in Word).</summary>
+    bool _markerHotkeyHeld;
+
     void ApplyMarkerHotkey()
     {
+        // StateChanged also fires on the recorder's 2-second tick: act only when recording starts or stops.
+        var recording = Services.Notes.IsRecording;
+        if (recording == _markerHotkeyHeld) return;
+        _markerHotkeyHeld = recording;
         Hotkeys.Unregister(HkMarker);
-        if (!Services.Notes.IsRecording) return;
+        if (!recording) return;
         var err = MarkerClash(Services.Settings.Current) ?? Hotkeys.Register(HkMarker, Services.Settings.Current.NotesMarkerHotkey, () => Services.Notes.AddMarker());
         if (err != null) Log.Warn(err);
     }
