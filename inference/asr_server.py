@@ -195,6 +195,7 @@ class Session:
         self.live = False
         self.committed = 0          # samples already committed (live mode)
         self.committed_text = ""
+        self.dropped = 0            # live mode: committed samples already let go of (long sessions stay small)
 
     def audio(self):
         if not self.chunks:
@@ -260,6 +261,15 @@ class Session:
                 self.committed_text = (self.committed_text + " " + text).strip()
                 await self.send({"type": "commit", "text": text})
                 segs = [(t, e) for t, e in segs if e > end]
+                # Committed audio is never decoded again: let go of it, so an hour-long session (Extended Notes) doesn't
+                # keep, and re-join on every pass, everything said since it began.
+                drop = self.committed
+                pcm = b"".join(self.chunks)
+                self.chunks = [pcm[drop * 2:]]
+                self.samples -= drop
+                self.dropped += drop
+                self.committed = 0
+                last = max(0, last - drop)
             await self.send({"type": "partial", "text": " ".join(t for t, _ in segs).strip()})
 
     def start(self, msg):
@@ -267,7 +277,7 @@ class Session:
         self.language = msg.get("language") or None
         self.prompt = msg.get("prompt") or None
         self.live = bool(msg.get("live"))
-        self.committed, self.committed_text = 0, ""
+        self.committed, self.committed_text, self.dropped = 0, "", 0
         self.active = True
         self.partial_task = asyncio.create_task(self._live_loop() if self.live else self._partial_loop())
 
@@ -282,7 +292,7 @@ class Session:
         text = tail = ""
         loop = asyncio.get_running_loop()
         rest = audio[self.committed:]
-        if self.live and self.committed:
+        if self.live and (self.committed or self.dropped):
             # Live mode: the committed pieces are already transcribed, so only the speech after the last one is
             # decoded. The final transcript is those pieces plus this tail; nothing is transcribed twice.
             if len(rest) >= SAMPLE_RATE * 0.3:
@@ -295,8 +305,8 @@ class Session:
                 text = await loop.run_in_executor(
                     None, self.engine.transcribe, audio, True, self.language, self.prompt)
             tail = text if self.live else ""
-        secs = len(audio) / SAMPLE_RATE
-        self.chunks, self.samples, self.committed = [], 0, 0  # discard audio
+        secs = (len(audio) + self.dropped) / SAMPLE_RATE
+        self.chunks, self.samples, self.committed, self.dropped = [], 0, 0, 0  # discard audio
         await self.send({"type": "final", "text": text, "tail": tail, "seconds": round(secs, 2),
                          "decode_ms": int((time.time() - t0) * 1000)})
 

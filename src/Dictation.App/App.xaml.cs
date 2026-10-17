@@ -124,7 +124,8 @@ public partial class App : Application
         try
         {
             var c = Services.Controller;
-            if (c.State == DictationState.Idle && Services.Speech.IsReady && DateTime.Now - c.LastActivity > idle)
+            // Never while Extended Notes records: it listens through the same speech engine.
+            if (c.State == DictationState.Idle && !Services.Notes.IsRecording && Services.Speech.IsReady && DateTime.Now - c.LastActivity > idle)
                 await Services.Speech.UnloadAsync();
             if (_reader is { IsBusy: false } && Services.Tts.IsRunning && DateTime.Now - Services.Tts.LastUsed > idle)
                 await Services.Tts.UnloadAsync();
@@ -169,12 +170,14 @@ public partial class App : Application
         var skipped = new List<string>();
         if (speech)
         {
-            if (s.Controller.State != DictationState.Idle) skipped.Add("the speech model (dictating)");
+            if (s.Notes.IsRecording) skipped.Add("the speech model (Extended Notes is recording)");
+            else if (s.Controller.State != DictationState.Idle) skipped.Add("the speech model (dictating)");
             else if (s.Speech.IsReady) { await s.Speech.UnloadAsync(); done.Add("speech model"); }
         }
         if (ai)
         {
-            if (s.Controller.State != DictationState.Idle) skipped.Add("the AI model (dictating)");
+            if (s.Notes.IsRecording) skipped.Add("the AI model (Extended Notes is recording)");
+            else if (s.Controller.State != DictationState.Idle) skipped.Add("the AI model (dictating)");
             else if (await s.Llm.UnloadAllAsync() > 0) done.Add("AI model");
         }
         if (voice)
@@ -199,6 +202,7 @@ public partial class App : Application
     public void UnloadSoonIfImmediate()
     {
         if (Services.Settings.Current.UnloadAfterMinutes != Dictation.Core.Settings.AppSettings.UnloadImmediately) return;
+        if (Services.Notes.IsRecording) return; // the session still needs both models
         if (_unloadSoon == null)
         {
             _unloadSoon = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
@@ -239,6 +243,7 @@ public partial class App : Application
         c.StateChanged += state =>
         {
             if (state == DictationState.Idle) UnloadSoonIfImmediate();
+            Services.Notes.SetDictating(state != DictationState.Idle); // a dictation pauses Extended Notes
             if (state is DictationState.Confirming or DictationState.Placing)
             {
                 var err = Hotkeys.Register(HkEscape, "Escape", () => c.Cancel());
@@ -353,6 +358,7 @@ public partial class App : Application
         Hotkeys.Dispose();
         _tray?.Dispose();
         Services.Mic.Dispose();
+        Services.Notes.Shutdown(); // keep a session that is recording, up to now
         _reader?.Stop();
         _ = Services.Tts.DisposeAsync();
         _ = Services.Speech.DisposeAsync();

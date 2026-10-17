@@ -2,6 +2,7 @@ using System.Windows;
 using Dictation.Core.Audio;
 using Dictation.Core.Infrastructure;
 using Dictation.Core.Insertion;
+using Dictation.Core.Notes;
 using Dictation.Core.Session;
 using Dictation.Core.Settings;
 using Dictation.Core.Speech;
@@ -40,6 +41,9 @@ public sealed class AppServices
     public UsageStore Usage { get; }
     /// <summary>Word, phrase and correction counts for Analytics (no sentences), in data\words.json.</summary>
     public WordTally Words { get; }
+    /// <summary>Extended Notes: the sessions on disk, and the one recording now.</summary>
+    public NotesStore NotesStore { get; }
+    public NotesRecorder Notes { get; }
     /// <summary>Read aloud's voice (Kokoro); its process starts on first use.</summary>
     public KokoroSpeech Tts { get; }
     /// <summary>Every Read aloud voice: Kokoro's and the ones installed with Windows.</summary>
@@ -58,6 +62,10 @@ public sealed class AppServices
         Words = new WordTally(WordTally.DefaultPath, History.Entries, Settings);
         Controller = new DictationController(Mic, Speech, Llm, Inserter, Settings, Profiles, History, Usage, Words);
         Tts = new KokoroSpeech(Settings);
+        NotesStore = new NotesStore();
+        // Notes use the speech model already loaded (no reload), else the active profile's.
+        Notes = new NotesRecorder(Settings, Speech, Llm, NotesStore,
+            () => Speech.LoadedModel ?? SpeechModels.For(Profiles.Active, Settings.Current.Asr));
         Voices = new SpeechVoices(Tts);
 
         var d = Application.Current.Dispatcher;

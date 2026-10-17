@@ -199,6 +199,8 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
                         <Border Style="{StaticResource GlossRule}" BorderBrush="{DynamicResource Ob.Border}"/>
@@ -266,6 +268,18 @@
                         <TextBlock Grid.Row="10" Grid.Column="1" Text="sōnyū" Style="{StaticResource GlossReading}"/>
                         <TextBlock Grid.Row="10" Grid.Column="2" Text="Insertion" Style="{StaticResource GlossEnglish}"/>
                         <TextBlock Grid.Row="10" Grid.Column="3" Text="OVERLAY, AFTER INSERTING" Style="{StaticResource GlossWhere}"/>
+
+                        <Border Grid.Row="11" Style="{StaticResource GlossRule}"/>
+                        <local:DecorText Grid.Row="11" Text="記録" Style="{StaticResource GlossWord}"/>
+                        <TextBlock Grid.Row="11" Grid.Column="1" Text="kiroku" Style="{StaticResource GlossReading}"/>
+                        <TextBlock Grid.Row="11" Grid.Column="2" Text="Record, notes" Style="{StaticResource GlossEnglish}"/>
+                        <TextBlock Grid.Row="11" Grid.Column="3" Text="EXTENDED NOTES" Style="{StaticResource GlossWhere}"/>
+
+                        <Border Grid.Row="12" Style="{StaticResource GlossRule}"/>
+                        <local:DecorText Grid.Row="12" Text="分析" Style="{StaticResource GlossWord}"/>
+                        <TextBlock Grid.Row="12" Grid.Column="1" Text="bunseki" Style="{StaticResource GlossReading}"/>
+                        <TextBlock Grid.Row="12" Grid.Column="2" Text="Analysis" Style="{StaticResource GlossEnglish}"/>
+                        <TextBlock Grid.Row="12" Grid.Column="3" Text="ANALYTICS" Style="{StaticResource GlossWhere}"/>
                     </Grid>
                 </StackPanel>
             </Grid>

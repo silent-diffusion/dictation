@@ -197,6 +197,7 @@ public partial class MainWindow : Window
             "SpeechToText" => new SpeechToTextPage(),
             "ReadAloud" => new ReadAloudPage(),
             "History" => new HistoryPage(),
+            "Notes" => new NotesPage(),
             "Analytics" => new AnalyticsPage(),
             _ => (object)new DashboardPage(),
         };
@@ -213,6 +214,45 @@ public partial class MainWindow : Window
         if (Host.Content is SettingsPage settings) { settings.Show(tag); return; }
         _openSection = tag; // a new Settings page opens straight on this section
         NavList.SelectedItem = SettingsItem;
+    }
+
+    /// <summary>
+    /// Extended Notes: the live session if one is recording, otherwise the section's landing page; optionally full screen
+    /// (the dashboard's Full screen button).
+    /// </summary>
+    public void ShowNotes(bool fullScreen)
+    {
+        NavList.SelectedItem = NotesItem;
+        if (Host.Content is NotesPage page)
+        {
+            if (App.Services.Notes.Current is { } live) page.Open(live);
+            else page.ShowLanding();
+        }
+        if (fullScreen) SetFullScreen(true);
+    }
+
+    WindowState _stateBeforeFull = WindowState.Normal;
+    bool _sidebarBeforeFull = true;
+
+    /// <summary>The window fills the screen and the sidebar is folded away.</summary>
+    public bool IsFullScreen { get; private set; }
+
+    public void SetFullScreen(bool on)
+    {
+        if (on == IsFullScreen) return;
+        if (on)
+        {
+            _stateBeforeFull = WindowState == WindowState.Minimized ? WindowState.Normal : WindowState;
+            _sidebarBeforeFull = _open;
+            WindowState = WindowState.Maximized;
+            SetSidebar(false, save: false);
+        }
+        else
+        {
+            WindowState = _stateBeforeFull;
+            SetSidebar(_sidebarBeforeFull, save: false);
+        }
+        IsFullScreen = on;
     }
 
     /// <summary>Speech to text, with a profile open.</summary>

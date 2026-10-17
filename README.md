@@ -16,9 +16,9 @@
   <a href="https://github.com/silent-diffusion/dictation/releases/latest"><b>DOWNLOAD THE LATEST RELEASE →</b></a>
 </p>
 
-| `01 // DICTATE` | `02 // READ ALOUD` | `03 // STAYS ON YOUR PC` |
-|---|---|---|
-| Press **`Ctrl+Space`**, speak, press it again: cleaned-up text appears at your cursor, in any app. | Select text, press **`Ctrl+Shift+Space`**: a natural local voice reads it, from 0.25× to 4×. | *Keep everything offline* is on by default. No accounts, analytics or telemetry. |
+| `01 // DICTATE` | `02 // EXTENDED NOTES` | `03 // READ ALOUD` | `04 // STAYS ON YOUR PC` |
+|---|---|---|---|
+| Press **`Ctrl+Space`**, speak, press it again: cleaned-up text appears at your cursor, in any app. | Leave it on through a lecture or a meeting (your mic, the computer's audio, or both): transcript, AI-formatted text and a running summary, with the recording. | Select text, press **`Ctrl+Shift+Space`**: a natural local voice reads it, from 0.25× to 4×. | *Keep everything offline* is on by default. No accounts, analytics or telemetry. |
 
 ```
 MIC ──→ SPEECH ──→ AI ──→ INSERT
@@ -92,14 +92,17 @@ The folder keeps its pre-rename name so updates from Local Dictation 1.x keep yo
 
 ## Using it
 
-The sidebar has six sections: **Dashboard** (one screen, no scrolling: the signal path, drawn as a diagram of what's active and loaded
+The sidebar has seven sections: **Dashboard** (one screen, no scrolling: the signal path, drawn as a diagram of what's active and loaded
 (microphone → speech model → AI model and profile → insert, with read aloud branching off; each node's status, the hotkey and
 the unload countdown), meters for words dictated and words read aloud today, turnaround,
 AI edits kept, history and the speech model's unload countdown; the signal path grows with the window. Every step and meter opens its page when
 clicked (History, Analytics, the profiles, Microphone, Model unloading); the big number on the speech-model meter unloads that model
 right away, and the big number on the History meter copies the last dictation's AI edit (or its text, without one) and says so. The figures come from daily counts in
 `data\usage.json` (dictations, words, seconds spoken, turnaround, AI edits kept, readings and dictations per app name; never
-any text, audio or window titles), so they survive History being trimmed, cleared or off), **Speech to text** (profiles), **Read aloud**, **History**, **Analytics** and **Settings**. The menu button
+any text, audio or window titles), so they survive History being trimmed, cleared or off), **Extended Notes**, **Speech to text** (profiles), **Read aloud**, **History**, **Analytics** and **Settings**. Beside the
+signal path, the dashboard has an **Extended Notes** cell: a title and the live transcript, which you can type into; before a
+session its title's spot is an *Extended notes session* button (its red ring fills once it records; click the dot to stop),
+and *Full screen* opens the live session (or Extended Notes when nothing records). The menu button
 in the top-left corner (✕ while the sidebar is open, ☰ while it's hidden; or **Ctrl+B**) slides the sidebar away to give
 the page the whole window. **Back** (after the logo, or next to ☰ while the sidebar is hidden; also `Alt+←` or the mouse's
 back button) returns to the page you were on before, Settings sections included; it shows on every page but the dashboard.
@@ -180,6 +183,22 @@ window's edge.
 * **History**: the last 50 dictations (adjustable under *Settings › History*, up to *All of them*), kept in Oberton's data folder so they survive
   updates. Each has its recording (play it, also at 2×), the Transcription, AI Edit and Inserted boxes (each can be copied),
   and the app and window it went into. List them newest first, or grouped by app (each app's group folds away).
+* **Extended Notes** (5.0): for very long sessions, a lecture or a meeting. Pick what to listen to (**Mic**, **Computer
+  audio**, which is what the speakers play, for the other people on a video call, or **Both**) and press *Extended notes
+  session*. Four plain text tabs:
+  **Transcript** (word for word, as it is heard; type anywhere to add your own notes), **Formatted** (tidied by the AI about
+  every minute: punctuation, capitals, fillers out, paragraphs; the AI only ever adds new text after yours, so your edits
+  stay), **Summary** (updated every few minutes from the previous summary plus what is new; edit it freely, the next update
+  starts from your version) and **Edited** (read-only: every change in colour, the AI's apart from yours: removed by the
+  AI struck through in grey, added by the AI in the accent, ¶ where the AI made a paragraph; removed by you, changed by you
+  and notes typed by you in amber). The titles are click-to-rename. The bar at the bottom plays the recording from where
+  your cursor is in the text (1×, 1.5×, 2×); **Export** saves the transcript, the formatted text, the summary or everything
+  as .txt or .md, and the recording as .wav. **Pause**, **Full screen** and **Stop** are in the header; dictating into an
+  app pauses the session for that moment. Everything is saved as it goes in `data
+otes\` (a session.json and the
+  audio.wav, about 115 MB an hour), so a crash keeps it; the landing page lists every session (search, open, delete).
+  The speech engine is shared: notes open their own connection to the model already loaded, and no model unloads while a
+  session records.
 * **Analytics**: how dictation goes over the last 7, 30 or 90 days, or everything: words dictated, speaking pace, time saved
   against typing at 40 wpm, turnaround, AI edits kept and words read aloud; the **most corrected** words (what the recognizer
   heard and what the AI wrote instead, each with *Add to vocabulary*, which adds it to the speech vocabulary hint so the
