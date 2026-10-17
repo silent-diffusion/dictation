@@ -103,8 +103,12 @@ public static class Log
     public static void Warn(string m) => Write("WARN", m);
     public static void Error(string m, Exception? e = null) => Write("ERROR", e == null ? m : $"{m}: {e}");
 
+    /// <summary>Paths in messages (from exceptions, mostly) would carry the Windows account name.</summary>
+    static readonly string Profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
     static void Write(string level, string msg)
     {
+        if (Profile.Length > 3) msg = msg.Replace(Profile, "~", StringComparison.OrdinalIgnoreCase);
         try
         {
             lock (Gate)

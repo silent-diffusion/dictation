@@ -51,6 +51,7 @@ public sealed class NotesStore
             loaded.Add(s);
         }
         foreach (var s in loaded.OrderByDescending(s => s.Started)) Sessions.Add(s);
+        NotesAudio.Sweep(Sessions.Select(x => x.Id));
     }
 
     /// <summary>A new session with its folder, first in the list.</summary>

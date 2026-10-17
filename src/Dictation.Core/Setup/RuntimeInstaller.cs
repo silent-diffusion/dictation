@@ -52,7 +52,14 @@ public sealed class RuntimeInstaller
         if (Environment.GetEnvironmentVariable("DICTATION_FORCE_CPU") == "1") return false; // testing the CPU-only path
         try
         {
-            var psi = new ProcessStartInfo("nvidia-smi", "-L")
+            // The driver's own copy, by full path (never whatever "nvidia-smi" is first on PATH).
+            var exe = new[]
+            {
+                Path.Combine(Environment.SystemDirectory, "nvidia-smi.exe"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "NVIDIA Corporation", "NVSMI", "nvidia-smi.exe"),
+            }.FirstOrDefault(File.Exists);
+            if (exe == null) return false;
+            var psi = new ProcessStartInfo(exe, "-L")
                 { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
             using var p = Process.Start(psi)!;
             var output = p.StandardOutput.ReadToEnd();

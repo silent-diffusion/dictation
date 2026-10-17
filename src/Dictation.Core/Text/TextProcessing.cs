@@ -394,6 +394,9 @@ public sealed class OllamaTextProcessor : ITextProcessor
 
     async Task<string> ChatAsync(string model, JsonArray messages, int numPredict, int timeoutSeconds, CancellationToken ct)
     {
+        if (_settings.Current.Cloud.KeepOffline && CloudModels.IsOllamaCloud(model))
+            throw new UserFacingException($"{model} runs on ollama.com, but \"Keep everything offline\" is on. " +
+                                          "Turn it off under Settings › Cloud AI, or pick a model that runs on this PC.");
         var body = new JsonObject
         {
             ["model"] = model,
