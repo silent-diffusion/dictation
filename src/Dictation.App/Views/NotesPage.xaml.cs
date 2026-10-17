@@ -506,6 +506,18 @@ public partial class NotesPage : UserControl
         Item("Summary (.txt)", () => SaveText(NotesExport.Part.Summary, false));
         Item("Everything (.md)", () => SaveText(NotesExport.Part.Everything, true));
         Item("Everything (.txt)", () => SaveText(NotesExport.Part.Everything, false));
+        var word = new MenuItem { Header = "Word (.docx)" };
+        void Docx(string header, NotesExport.Part part)
+        {
+            var mi = new MenuItem { Header = header };
+            mi.Click += (_, _) => SaveDocx(part);
+            word.Items.Add(mi);
+        }
+        Docx("Everything", NotesExport.Part.Everything);
+        Docx("Formatted", NotesExport.Part.Formatted);
+        Docx("Summary", NotesExport.Part.Summary);
+        Docx("Transcript", NotesExport.Part.Transcript);
+        menu.Items.Add(word);
         menu.Items.Add(new Separator());
         Item("Recording (.wav)", SaveAudio);
         menu.IsOpen = true;
@@ -525,6 +537,20 @@ public partial class NotesPage : UserControl
         if (dlg.ShowDialog(Window.GetWindow(this)) != true) return;
         try { File.WriteAllText(dlg.FileName, NotesExport.Build(_session, part, markdown)); }
         catch (Exception ex) { MessageBox.Show("Saving failed: " + ex.Message, AppInfo.Name, MessageBoxButton.OK, MessageBoxImage.Warning); }
+    }
+
+    void SaveDocx(NotesExport.Part part)
+    {
+        if (_session == null) return;
+        var name = part == NotesExport.Part.Everything ? SafeName : $"{SafeName} - {part}";
+        var dlg = new Microsoft.Win32.SaveFileDialog { FileName = name, DefaultExt = ".docx", Filter = "Word document (*.docx)|*.docx" };
+        if (dlg.ShowDialog(Window.GetWindow(this)) != true) return;
+        try { File.WriteAllBytes(dlg.FileName, NotesExport.BuildDocx(_session, part)); }
+        catch (Exception ex)
+        {
+            Log.Error("Extended notes: Word export failed", ex);
+            MessageBox.Show("Saving failed: " + ex.Message, AppInfo.Name, MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
     void SaveAudio()
