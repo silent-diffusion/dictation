@@ -333,10 +333,18 @@ public partial class NotesPage : UserControl
 
     DateTime? _saveSoon;
 
+    bool _wasRecording;
+
     void OnRecorder()
     {
-        if (Landing.IsVisible) { ShowStart(); BuildUsage(); return; } // a session that just stopped is counted now
-        Refresh();
+        var recording = _recorder.IsRecording;
+        if (Landing.IsVisible)
+        {
+            ShowStart();
+            if (_wasRecording && !recording) BuildUsage(); // the session that just stopped is counted now (not every tick)
+        }
+        else Refresh();
+        _wasRecording = recording;
     }
 
     bool Live => _session != null && ReferenceEquals(_session, _recorder.Current);

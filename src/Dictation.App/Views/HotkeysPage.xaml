@@ -34,6 +34,7 @@
                 <TextBox x:Name="MarkerBox" IsReadOnly="True" Width="240" Padding="8,6" IsReadOnlyCaretVisible="False"
                          PreviewKeyDown="Marker_KeyDown" GotKeyboardFocus="Box_Focus"/>
                 <Button Style="{StaticResource QuietButton}" Content="RESET" Margin="8,0,0,0" Padding="12,6" Click="ResetMarker_Click"/>
+                <Button Style="{StaticResource QuietButton}" Content="CLEAR" Margin="8,0,0,0" Padding="12,6" Click="ClearMarker_Click"/>
             </StackPanel>
             <TextBlock Style="{StaticResource Caption}" Margin="0,6,0,0"
                        Text="Drops a time marker (⚑ h:mm:ss) into the transcript while an extended notes session records, from whatever application you are in. The key is only taken while a session records; the rest of the time it stays with the application that uses it."/>

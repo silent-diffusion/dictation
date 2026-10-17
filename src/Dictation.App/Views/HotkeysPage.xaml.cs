@@ -87,6 +87,13 @@ public partial class HotkeysPage : UserControl
         Refresh();
     }
 
+    void ClearMarker_Click(object sender, RoutedEventArgs e)
+    {
+        App.Services.Settings.Current.NotesMarkerHotkey = "";
+        App.Services.Settings.Save();
+        Refresh();
+    }
+
     void ResetSpeak_Click(object sender, RoutedEventArgs e)
     {
         App.Services.Settings.Current.SpeakHotkey = "Ctrl+Shift+Space";

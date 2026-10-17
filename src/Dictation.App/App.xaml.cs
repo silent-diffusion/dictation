@@ -278,8 +278,20 @@ public partial class App : Application
     {
         Hotkeys.Unregister(HkMarker);
         if (!Services.Notes.IsRecording) return;
-        var err = Hotkeys.Register(HkMarker, Services.Settings.Current.NotesMarkerHotkey, () => Services.Notes.AddMarker());
+        var err = MarkerClash(Services.Settings.Current) ?? Hotkeys.Register(HkMarker, Services.Settings.Current.NotesMarkerHotkey, () => Services.Notes.AddMarker());
         if (err != null) Log.Warn(err);
+    }
+
+    /// <summary>The marker key must differ from the other shortcuts; registering it second would only say "used by
+    /// another application".</summary>
+    static string? MarkerClash(AppSettings st)
+    {
+        var key = st.NotesMarkerHotkey;
+        if (string.IsNullOrWhiteSpace(key)) return null;
+        static bool Same(string a, string b) => string.Equals(a.Replace(" ", ""), b.Replace(" ", ""), StringComparison.OrdinalIgnoreCase);
+        var other = Same(key, st.Hotkey) ? "the dictation shortcut" : Same(key, st.SpeakHotkey) ? "the Read aloud shortcut"
+            : Same(key, st.CycleProfileHotkey) ? "the profile-switching shortcut" : null;
+        return other == null ? null : $"{key} is already {other}. Choose a different marker shortcut under Settings > Hotkeys.";
     }
 
     void ApplyHotkeys()
@@ -300,7 +312,9 @@ public partial class App : Application
         var e3 = Hotkeys.Register(HkSpeak, st.SpeakHotkey, OnSpeakHotkey);
         if (e3 != null) errors.Add(e3);
         // The marker key is held only while a session records (see ApplyMarkerHotkey); re-register it if that is now.
-        if (Services.Notes.IsRecording)
+        var clash = MarkerClash(st);
+        if (clash != null) errors.Add(clash);
+        else if (Services.Notes.IsRecording)
         {
             Hotkeys.Unregister(HkMarker);
             var e4 = Hotkeys.Register(HkMarker, st.NotesMarkerHotkey, () => Services.Notes.AddMarker());
