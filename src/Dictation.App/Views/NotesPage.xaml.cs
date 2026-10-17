@@ -279,9 +279,9 @@ public partial class NotesPage : UserControl
         if (_session == null || !SessionView.IsVisible) return;
         var live = Live;
         if (TitleBox.Visibility != Visibility.Visible) TitleText.Text = _session.Title.ToUpperInvariant();
-        PauseButton.Visibility = StopButton.Visibility = live ? Visibility.Visible : Visibility.Collapsed;
+        MarkButton.Visibility = PauseButton.Visibility = StopButton.Visibility = live ? Visibility.Visible : Visibility.Collapsed;
         PauseButton.Content = _recorder.UserPaused ? "● RESUME" : "Ⅱ PAUSE";
-        StopButton.IsEnabled = PauseButton.IsEnabled = !_recorder.IsFinishing;
+        StopButton.IsEnabled = PauseButton.IsEnabled = MarkButton.IsEnabled = !_recorder.IsFinishing;
         if (live && !_recorder.IsPaused && !_recorder.IsFinishing) RecDot.SetResourceReference(Shape.FillProperty, "Ob.Record");
         else RecDot.Fill = Brushes.Transparent;
         RecDot.Visibility = live ? Visibility.Visible : Visibility.Collapsed;
@@ -309,6 +309,8 @@ public partial class NotesPage : UserControl
         if (_recorder.UserPaused) _recorder.Resume(); else _recorder.Pause();
         Refresh();
     }
+
+    void Mark_Click(object sender, RoutedEventArgs e) => _recorder.AddMarker();
 
     async void Stop_Click(object sender, RoutedEventArgs e)
     {

@@ -177,6 +177,9 @@ public static class NotesExport
             sb.AppendLine(text.Trim()).AppendLine();
         }
         if (part is Part.Summary or Part.Everything) Section("Summary", s.Summary);
+        // The moments the listener marked, one a line (a list in Markdown, or they would run into one line).
+        if (part == Part.Everything && s.Markers.Count > 0)
+            Section("Markers", string.Join(Environment.NewLine, s.Markers.Select(m => (markdown ? "- " : "") + NoteSession.MarkerLabel(m.Seconds))));
         if (part is Part.Formatted or Part.Everything) Section("Formatted", s.Formatted);
         if (part is Part.Transcript or Part.Everything) Section("Transcript", s.Transcript);
         return sb.ToString().TrimEnd() + Environment.NewLine;

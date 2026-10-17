@@ -29,6 +29,15 @@
                 <Button Style="{StaticResource QuietButton}" Content="RESET" Margin="8,0,0,0" Padding="12,6" Click="ResetSpeak_Click"/>
             </StackPanel>
 
+            <TextBlock Text="EXTENDED NOTES MARKER" Style="{StaticResource FieldLabel}"/>
+            <StackPanel Orientation="Horizontal">
+                <TextBox x:Name="MarkerBox" IsReadOnly="True" Width="240" Padding="8,6" IsReadOnlyCaretVisible="False"
+                         PreviewKeyDown="Marker_KeyDown" GotKeyboardFocus="Box_Focus"/>
+                <Button Style="{StaticResource QuietButton}" Content="RESET" Margin="8,0,0,0" Padding="12,6" Click="ResetMarker_Click"/>
+            </StackPanel>
+            <TextBlock Style="{StaticResource Caption}" Margin="0,6,0,0"
+                       Text="Drops a time marker (⚑ h:mm:ss) into the transcript while an extended notes session records, from whatever application you are in. Does nothing otherwise."/>
+
             <TextBlock x:Name="StatusText" Margin="0,16,0,0" TextWrapping="Wrap"/>
             <TextBlock Style="{StaticResource Caption}" Margin="0,16,0,0"
                        Text="Tip: Ctrl+Space can clash with some editors and input-method switchers. If it doesn't fire, pick another combination such as Ctrl+Alt+D or F9."/>
