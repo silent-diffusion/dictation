@@ -8,7 +8,7 @@
 #define MyAppName "Oberton"
 #define MyAppExe "LocalDictation.exe"
 #ifndef MyAppVersion
-  #define MyAppVersion "5.2.0"
+  #define MyAppVersion "5.2.1"
 #endif
 #ifndef SourceDir
   #define SourceDir "..\publish"
@@ -79,8 +79,12 @@ begin
   if CurUninstallStep = usUninstall then
     RegDeleteValue(HKEY_CURRENT_USER, 'Software\Microsoft\Windows\CurrentVersion\Run', 'LocalDictation');
   if CurUninstallStep = usPostUninstall then
+  begin
+    { The louder playback copies of Extended Notes recordings live in the temp folder. }
+    DelTree(ExpandConstant('{%TEMP}\oberton-notes'), True, True, True);
     if SuppressibleMsgBox('Also delete the downloaded AI models, runtimes and your settings?' + #13#10 + #13#10 +
          'They take several GB in ' + ExpandConstant('{localappdata}\LocalDictation') + '.' + #13#10 +
          'Choose No if you plan to reinstall.', mbConfirmation, MB_YESNO, IDNO) = IDYES then
       DelTree(ExpandConstant('{localappdata}\LocalDictation'), True, True, True);
+  end;
 end;

@@ -75,6 +75,24 @@ public static class NotesAudio
     }
 
     /// <summary>A session was deleted: its prepared copy goes too.</summary>
+    /// <summary>Delete prepared copies whose session no longer exists (deleted while Oberton wasn't running, or the
+    /// copy was being made as the session was deleted).</summary>
+    public static void Sweep(IEnumerable<string> sessionIds)
+    {
+        try
+        {
+            if (!Directory.Exists(CacheDir)) return;
+            var keep = new HashSet<string>(sessionIds, StringComparer.OrdinalIgnoreCase);
+            foreach (var file in Directory.GetFiles(CacheDir))
+            {
+                var name = Path.GetFileName(file);
+                var dot = name.IndexOf('.');
+                if (!keep.Contains(dot < 0 ? name : name[..dot])) File.Delete(file);
+            }
+        }
+        catch (Exception e) { Log.Warn("Extended notes: sweeping the playback copies failed: " + e.Message); }
+    }
+
     public static void Forget(string sessionId)
     {
         foreach (var ext in new[] { ".wav", ".json", ".wav.tmp" })

@@ -235,7 +235,17 @@ Or download models from **Settings › Models**, and pick the active one there (
 ## Privacy
 
 * Speech recognition and the language model run locally. Whisper runs with `HF_HUB_OFFLINE=1`; the Ollama endpoint must be loopback (other values are rejected) and Ollama's cloud features are disabled.
-* Audio exists only in memory during a dictation and is discarded. Logs record timings and sizes, never what you said.
+* A dictation's audio is held in memory while it runs. What is kept on disk, all under `%LOCALAPPDATA%\LocalDictation\data`
+  and only for you: **History** (the last 50 dictations by default, with their recordings when *Save audio* is on, the app's
+  name and window title; adjustable or off under *Settings › History*), **Extended Notes** sessions (transcripts and the
+  recording, until you delete them; a louder playback copy of an opened session sits in `%TEMP%\oberton-notes` and is
+  removed with the session or by the uninstaller), the daily **usage counts** (numbers only, never text) and the dashboard
+  notepad. Logs record timings and sizes, never what you said.
+* Read aloud reads your selection through UI Automation; in apps that don't offer it, it sends Ctrl+C and restores your
+  clipboard afterwards, so for a moment the selection passes through the Windows clipboard.
+* *Keep everything offline* (on by default) blocks the cloud providers and Ollama's own cloud models. With it off, a profile
+  with a cloud model sends that profile's dictations to it, and Extended Notes send their text to the default AI model,
+  whichever that is.
 * Network access happens only for: the first-run download, and checking for updates (when you click it, or at startup if you enable that).
   The update check is a plain request for this repository's public release list.
 

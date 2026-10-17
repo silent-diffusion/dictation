@@ -25,6 +25,14 @@ public static class CloudModels
         model != null && (model.StartsWith(Anthropic + ":", StringComparison.OrdinalIgnoreCase) ||
                           model.StartsWith(OpenAi + ":", StringComparison.OrdinalIgnoreCase));
 
+    /// <summary>An Ollama model that Ollama runs on ollama.com rather than on this PC (its names end in "-cloud" or
+    /// ":cloud"). It goes through the local Ollama like any other model, so it is not a <see cref="IsCloud"/> model,
+    /// but "Keep everything offline" blocks it all the same.</summary>
+    public static bool IsOllamaCloud(string? model) =>
+        model != null && (model.EndsWith("-cloud", StringComparison.OrdinalIgnoreCase) ||
+                          model.EndsWith(":cloud", StringComparison.OrdinalIgnoreCase) ||
+                          model.Contains("-cloud:", StringComparison.OrdinalIgnoreCase));
+
     public static (string Provider, string Name) Split(string model)
     {
         var i = model.IndexOf(':');
@@ -143,6 +151,10 @@ public sealed class CloudCompletion
 
     async Task<string> OpenAiAsync(string key, string baseUrl, string model, string system, JsonArray turns, int maxTokens, CancellationToken ct)
     {
+        // The key and the text go to this address: over TLS, unless it is a server on this PC.
+        if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var baseUri) || (baseUri.Scheme != Uri.UriSchemeHttps && !baseUri.IsLoopback))
+            throw new UserFacingException("The OpenAI-compatible address must start with https:// (http:// only for a server on this PC). " +
+                                          "Check it under Settings › Cloud AI.");
         var messages = new JsonArray { new JsonObject { ["role"] = "system", ["content"] = system } };
         foreach (var t in turns) messages.Add(t!.DeepClone());
         using var req = new HttpRequestMessage(HttpMethod.Post, baseUrl.TrimEnd('/') + "/chat/completions")
@@ -171,7 +183,7 @@ public sealed class CloudCompletion
             try { detail = JsonNode.Parse(body)?["error"]?["message"]?.GetValue<string>() ?? body; }
             catch { detail = body; }
             if (detail.Length > 200) detail = detail[..200] + "…";
-            Log.Warn($"{provider} returned {(int)resp.StatusCode}: {detail}");
+            Log.Warn($"{provider} returned {(int)resp.StatusCode}"); // the message is shown, not logged: it can echo the text
             throw new UserFacingException(resp.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden
                 ? $"{provider} rejected the API key. Check it under Settings › Cloud AI."
                 : $"{provider} returned an error: {detail}");

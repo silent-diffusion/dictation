@@ -199,7 +199,7 @@ async def serve(port, engine):
 
     # No keepalive pings: the app is the only client, on loopback, and it does not read between requests, so
     # pings went unanswered and the idle connection was dropped after ~45 s.
-    async with ws_serve(handler, "127.0.0.1", port, max_size=2**24, ping_interval=None):
+    async with ws_serve(handler, "127.0.0.1", port, max_size=2**24, ping_interval=None, origins=[None]):  # no browser clients
         print(f"READY port={port}", flush=True)
         await asyncio.Future()
 

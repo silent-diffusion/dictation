@@ -287,8 +287,6 @@ class Session:
             await self.partial_task
         t0 = time.time()
         audio = self.audio()
-        if os.environ.get("DICTATION_DEBUG_DUMP"):  # diagnostics only, never set in normal use
-            np.save(os.environ["DICTATION_DEBUG_DUMP"], audio)
         text = tail = ""
         loop = asyncio.get_running_loop()
         rest = audio[self.committed:]
@@ -344,7 +342,7 @@ async def serve(args, engine):
         finally:
             s.cancel()
 
-    async with ws_serve(handler, "127.0.0.1", args.port, max_size=2**24):
+    async with ws_serve(handler, "127.0.0.1", args.port, max_size=2**24, origins=[None]):  # no browser (Origin) clients
         print(f"READY port={args.port} device={engine.device}", flush=True)
         await asyncio.Future()
 

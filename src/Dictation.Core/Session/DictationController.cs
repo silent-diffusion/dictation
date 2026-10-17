@@ -551,7 +551,16 @@ public sealed class DictationController
         if (State != DictationState.Placing) return;
         _placeCts?.Cancel();
         _placeCts = null;
-        try { System.Windows.Clipboard.SetText(_placingText); } catch (Exception e) { Log.Warn("Copying the dictation failed: " + e.Message); }
+        try
+        {
+            // Like a paste: not into Windows clipboard history or cloud sync.
+            var data = new System.Windows.DataObject();
+            data.SetText(_placingText, System.Windows.TextDataFormat.UnicodeText);
+            data.SetData("CanIncludeInClipboardHistory", new MemoryStream(new byte[4]));
+            data.SetData("CanUploadToCloudClipboard", new MemoryStream(new byte[4]));
+            System.Windows.Clipboard.SetDataObject(data, true);
+        }
+        catch (Exception e) { Log.Warn("Copying the dictation failed: " + e.Message); }
         SaveToHistory(_placingText, false);
         _pendingProcessed = _pendingRaw = "";
         _pendingSafetyNet = false;

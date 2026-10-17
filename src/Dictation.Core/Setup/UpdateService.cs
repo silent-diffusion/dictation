@@ -58,7 +58,15 @@ public sealed class UpdateService
                                  && a["name"]!.GetValue<string>().Contains("Setup", StringComparison.OrdinalIgnoreCase));
         if (asset == null) return null; // release exists but its installer isn't uploaded yet
 
-        return new UpdateInfo(latest, tag!, asset["browser_download_url"]!.GetValue<string>(), asset["name"]!.GetValue<string>(),
+        // Only the places GitHub serves release assets from, over TLS: a release list pointing anywhere else is not followed.
+        var url = asset["browser_download_url"]!.GetValue<string>();
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps
+            || uri.Host is not ("github.com" or "objects.githubusercontent.com" or "release-assets.githubusercontent.com"))
+        {
+            Log.Warn("Update: the installer link is not on GitHub; ignored");
+            return null;
+        }
+        return new UpdateInfo(latest, tag!, url, asset["name"]!.GetValue<string>(),
             asset["size"]?.GetValue<long>() ?? 0, json["html_url"]?.GetValue<string>() ?? AppInfo.RepositoryUrl + "/releases",
             json["body"]?.GetValue<string>() ?? "");
     }
@@ -88,6 +96,12 @@ public sealed class UpdateService
         catch (HttpRequestException e)
         {
             throw new UserFacingException("Downloading the update failed. Check your internet connection and try again.", e);
+        }
+        // A truncated or substituted download is not run.
+        if (info.Size > 0 && new FileInfo(path).Length != info.Size)
+        {
+            try { File.Delete(path); } catch { }
+            throw new UserFacingException("The downloaded installer is not the size the release lists, so it was not run. Try again.");
         }
         return path;
     }
