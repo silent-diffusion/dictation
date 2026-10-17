@@ -73,7 +73,7 @@ public partial class App : Application
         _overlay = new OverlayWindow();
         _reader = new ReaderWindow();
         _main = new MainWindow();
-        _tray = new TrayIcon(s.Profiles, () => s.Controller.Toggle(), ShowMain, () => ShowPage("About"), Quit);
+        _tray = new TrayIcon(s.Profiles, () => s.Controller.Toggle(), ShowMain, () => ShowPage("Updates"), Quit);
 
         WireController();
         ApplyHotkeys();
@@ -140,7 +140,7 @@ public partial class App : Application
             var info = await new UpdateService().CheckAsync();
             if (info == null) return;
             AvailableUpdate = info;
-            _overlay?.ShowMessage($"{AppInfo.Name} {info.Version.ToString(3)} is available. Open Settings > About & updates to install it.", NoticeLevel.Info);
+            _overlay?.ShowMessage($"{AppInfo.Name} {info.Version.ToString(3)} is available. Open Settings > Updates to install it.", NoticeLevel.Info);
         }
         catch (Exception ex) { Log.Warn("Startup update check failed: " + ex.Message); }
     }
