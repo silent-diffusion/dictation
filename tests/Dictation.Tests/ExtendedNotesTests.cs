@@ -435,7 +435,8 @@ public class NotesPlaybackTests
     public void Gain_never_lowers_and_never_exceeds_the_cap()
     {
         Assert.Equal(1f, NotesAudio.Gain(new[] { 0.95f, 0.9f, 0.99f }));
-        Assert.Equal(100f, NotesAudio.Gain(new[] { 0.0001f, 0.0001f }), 1); // +40 dB
+        Assert.Equal(100f, NotesAudio.Gain(new[] { 0.001f, 0.001f }), 1); // capped at +40 dB
+        Assert.Equal(1f, NotesAudio.Gain(new[] { 0.0001f, 0.0001f })); // silence: nothing to bring up
         Assert.Equal(1f, NotesAudio.Gain(Array.Empty<float>()));
     }
 

@@ -162,7 +162,6 @@ public static class NotesSummary
                 if (rest.Length > 0) main = rest; else expectMain = true;
                 continue;
             }
-            if (IsHeading(line)) { EndParagraph(); continue; }
             if (BulletMark.Match(line) is { Success: true } bullet)
             {
                 EndParagraph();
@@ -170,6 +169,7 @@ public static class NotesSummary
                 if (b.Length > 0) bullets.Add(b);
                 continue;
             }
+            if (IsHeading(line)) { EndParagraph(); continue; } // after the bullets: a short point is not a heading
             if (expectMain) { main = line; expectMain = false; continue; }
             if (current.Length > 0) current.Append(' ');
             current.Append(line);
