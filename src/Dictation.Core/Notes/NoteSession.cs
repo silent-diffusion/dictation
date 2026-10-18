@@ -68,6 +68,9 @@ public sealed class NoteSession
     public NotesSource Source { get; set; } = NotesSource.Mic;
     /// <summary>False while recording (and after a crash until the next start, which closes it).</summary>
     public bool Finished { get; set; }
+    /// <summary>The formatting checks it was made (or last repaired) with: older sessions are repaired once when
+    /// loaded (<see cref="NotesFormat.Repair"/>).</summary>
+    public int FormatVersion { get; set; }
 
     public string Heard { get; set; } = "";
     public string Transcript { get; set; } = "";
@@ -262,9 +265,13 @@ public sealed class NoteSession
         Chunks.Add(new NoteChunk { Heard = heard, Sent = sent, Ai = ai.Trim(), Seconds = seconds, AiFailed = failed });
         FormattedThrough = _pendingFormatEnd >= 0 ? _pendingFormatEnd : Transcript.Length;
         _pendingFormatEnd = -1;
-        var sep = Formatted.Length == 0 ? "" : Formatted.EndsWith("\n\n") ? "" : Formatted.EndsWith('\n') ? "\n" : "\n\n";
+        ai = ai.Trim();
+        // A part that carries on a sentence the last one left open joins it; otherwise it starts a paragraph.
+        var continues = Formatted.Length > 0 && ai.Length > 0 && char.IsLower(ai[0]) &&
+                        (char.IsLetterOrDigit(Formatted[^1]) || Formatted[^1] == ',');
+        var sep = Formatted.Length == 0 ? "" : continues ? " " : Formatted.EndsWith("\n\n") ? "" : Formatted.EndsWith('\n') ? "\n" : "\n\n";
         FormattedAnchors.Add(new NoteAnchor { Offset = Formatted.Length + sep.Length, Seconds = seconds });
-        Formatted += sep + ai.Trim();
+        Formatted += sep + ai;
         Changed?.Invoke(NoteDoc.Formatted, source);
     }
 

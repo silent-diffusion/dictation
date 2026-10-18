@@ -82,3 +82,26 @@ user's edits.
 ## Later (not in 5.0.0)
 
 Speaker labels, organized views (lecture notes, minutes, action items). Markers and Word export shipped in 5.2.0.
+
+## Formatting safeguards (5.2.4)
+
+Found in a real 47-minute session (18 Oct 2026, a quiet mic plus computer audio, qwen3:4b): in 14 of 32 formatting steps
+the model formatted the text and then ran on until it was cut off (rows of "⚠️ 00:03:15", "⌋", stray Chinese characters:
+432 of the Formatted text's 524 lines), copied the speech engine's "Thank you." loop (82 times in what was heard, once
+41 in a row), added labels ("listener note:") and changed a number ("1550" to "155-0"). Now:
+
+- **Speech engine** (`asr_server.py`): a stock phrase ("Thank you.", "Thanks for watching") is dropped when Whisper
+  doubts there was speech or it is stretched over seconds; loops (a sentence three or more times in a row, or a
+  segment with a high compression ratio) are collapsed; a stock phrase that only repeats the one just committed is
+  dropped; repeats and stock phrases are kept out of the prompt fed back to Whisper; and stretches with nothing heard
+  are let go of, so silence doesn't pile up.
+- **Before the AI**: loops are collapsed (`NotesFormat.CollapseRepeats`). The instructions mention typed lines and markers
+  only when the text has them (mentioned anyway, the model invented its own), and the reply is limited to about the
+  text's length.
+- **After the AI** (`NotesFormat.Accept`): junk lines, emoji and symbols (and Chinese, Japanese or Korean script the
+  text hasn't got), invented markers, timestamps and labels come out, split lines are joined back. A reply that drops
+  most of the text, adds more than a few words (a tenth of the text) or has a number the text hadn't is rejected: that part is kept as heard.
+- **Old sessions** are repaired once when loaded (`NotesFormat.Repair`): junk lines and loops come out of the Formatted
+  text and the formatting steps, one edit at a time so anchors and the user's edits stay.
+- A part that carries on a sentence the last one left open joins it instead of starting a paragraph; summary paragraphs
+  lose labels like "What was decided:".

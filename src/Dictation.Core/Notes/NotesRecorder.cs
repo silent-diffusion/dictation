@@ -21,20 +21,6 @@ public sealed class NotesRecorder
     const int FormatWords = 110;
     static readonly TimeSpan FormatEvery = TimeSpan.FromSeconds(90);
 
-    public const string FormatPrompt =
-        "You are formatting a live transcript of a lecture or meeting, one part at a time. Fix punctuation and " +
-        "capitalization, remove filler words, false starts and words said twice, and split the text into paragraphs " +
-        "where the topic changes. Keep every point, name and number and the speaker's own wording: do not summarize, " +
-        "shorten, add headings or add anything that was not said. Some lines are notes the listener typed: keep them " +
-        "exactly as written, on their own line. Lines beginning with ⚑ are the listener's time markers: keep each one " +
-        "exactly as written, on its own line.";
-
-    static readonly Profile FormatProfile = new()
-    {
-        Name = "Extended notes: format", Prompt = FormatPrompt, AutoProcess = true, RewriteWhole = true,
-        PreserveParagraphs = true, RemoveFillers = true,
-    };
-
     readonly SettingsService _settings;
     readonly ISpeechRecognizer _asr;
     readonly ITextProcessor _llm;
@@ -269,18 +255,20 @@ public sealed class NotesRecorder
         if (take == null) return;
         _formatting = true;
         var (heard, sent, seconds) = take.Value;
-        string ai = sent;
+        // The speech engine's loops ("Thank you." forty times) go before anything else: the AI would copy them.
+        var input = NotesFormat.CollapseRepeats(sent);
+        string ai = input;
         var failed = true;
         try
         {
             // Nothing but markers since the last step (Stop right after one): nothing for the AI to tidy.
-            if (OnlyMarkers(sent)) failed = false;
+            if (OnlyMarkers(sent)) { ai = sent; failed = false; }
             else
             {
                 _formatRequests++;
-                var r = await _llm.ProcessAsync(sent, FormatProfile);
-                if (!r.SafetyNet && r.Text.Trim().Length > 0) { ai = r.Text; failed = false; }
-                else Log.Info("Extended notes: the AI's formatting was rejected; keeping the text as heard");
+                var reply = await _llm.AskAsync(NotesFormat.Instructions(input), NotesFormat.Wrap(input), NotesFormat.MaxTokens(input));
+                if (NotesFormat.Accept(input, reply) is { } accepted) { ai = accepted; failed = false; }
+                else Log.Info("Extended notes: the AI's formatting added to, dropped or changed the text; keeping it as heard");
             }
         }
         catch (Exception e) { Log.Warn("Extended notes: formatting failed, keeping the text as heard: " + e.Message); }

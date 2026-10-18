@@ -48,6 +48,13 @@ public sealed class NotesStore
                 Save(s);
                 Log.Info("Extended notes: closed a session left open: " + s.Id);
             }
+            if (s.FormatVersion < NotesFormat.Version)
+            {
+                // Formatted before the checks on the AI's reply: its junk and loops come out, once.
+                if (NotesFormat.Repair(s)) Log.Info("Extended notes: repaired the formatted text of " + s.Id);
+                s.FormatVersion = NotesFormat.Version;
+                Save(s);
+            }
             loaded.Add(s);
         }
         foreach (var s in loaded.OrderByDescending(s => s.Started)) Sessions.Add(s);
@@ -63,7 +70,7 @@ public sealed class NotesStore
         Directory.CreateDirectory(folder);
         var s = new NoteSession
         {
-            Started = started, Source = source, Folder = folder,
+            Started = started, Source = source, Folder = folder, FormatVersion = NotesFormat.Version,
             Title = $"Session // {started:d MMM HH:mm}",
         };
         Sessions.Insert(0, s);

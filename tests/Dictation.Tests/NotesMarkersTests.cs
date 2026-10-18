@@ -95,10 +95,12 @@ public class NotesMarkersTests
     }
 
     [Fact]
-    public void The_ai_is_told_to_keep_the_markers_lines()
+    public void The_ai_is_told_to_keep_the_markers_lines_only_when_there_are_some()
     {
-        Assert.Contains("⚑", NotesRecorder.FormatPrompt);
-        Assert.Contains("own line", NotesRecorder.FormatPrompt);
+        var with = NotesFormat.Instructions("We start.\n⚑ 1:23\nWe go on.");
+        Assert.Contains("⚑", with);
+        Assert.Contains("own line", with);
+        Assert.DoesNotContain("⚑", NotesFormat.Instructions("We start and we go on."));
     }
 
     static NoteSession Session() => new()

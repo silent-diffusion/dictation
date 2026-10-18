@@ -494,3 +494,103 @@ public class NotesUsageTests
         Assert.Equal(1, day.Sources["Mic"]);
     }
 }
+
+public class NotesFormatTests
+{
+    [Fact]
+    public void A_reply_that_runs_on_past_the_text_is_cut_back_to_it()
+    {
+        const string sent = "We visited two families. We talked about the budget.";
+        var reply = "We visited two families. We talked about the budget.  \n\n⚠️ 00:03:15  \n⚠️ 00:03:16  \n⌋  \n⏸️  \n☑ 00:00:02\n璩  \n璩";
+        Assert.Equal(sent, NotesFormat.Accept(sent, reply));
+    }
+
+    [Fact]
+    public void Loops_are_collapsed_but_a_sentence_said_twice_stays()
+    {
+        Assert.Equal("Hello. Thank you. Bye.", NotesFormat.CollapseRepeats("Hello. Thank you. Thank you. Thank you. Thank you. Bye."));
+        Assert.Equal("Thank you. Thank you. Bye.", NotesFormat.CollapseRepeats("Thank you. Thank you. Bye."));
+        Assert.Equal("Thank you.\nThank you.\nThank you.", NotesFormat.CollapseRepeats("Thank you.\nThank you.\nThank you.")); // lines stay
+    }
+
+    [Fact]
+    public void A_reply_that_adds_words_or_changes_a_number_is_rejected()
+    {
+        const string sent = "it is north of lowes on 4th east and 1550 north at 3 on saturday";
+        Assert.Null(NotesFormat.Accept(sent, "It is north of Lowe's, on 4th East and 155-0 North, at 3 on Saturday."));
+        Assert.Null(NotesFormat.Accept(sent, "It is north of Lowe's on 4th East and 1550 North at 3 on Saturday, and everyone should bring a dish and a friend along to the event."));
+        Assert.Null(NotesFormat.Accept(sent, "North."));
+        Assert.Equal("It is north of Lowe's, on 4th East and 1550 North, at 3 on Saturday.",
+            NotesFormat.Accept(sent, "It is north of Lowe's, on 4th East and 1550 North, at 3 on Saturday."));
+    }
+
+    [Fact]
+    public void Labels_no_one_said_and_split_lines_are_undone()
+    {
+        Assert.Equal("You need to go on the state in volleyball.",
+            NotesFormat.Accept("you need to go on the state in volleyball", "⚠️ listener note: You need to go on the state in volleyball."));
+        Assert.Equal("Thank you. What are you going to think about it?",
+            NotesFormat.Accept("thank you what are you going to think about it", "Thank you.  \nWhat are you going to think about it?"));
+        Assert.Equal("Todo: buy milk", NotesFormat.Accept("Todo: buy milk", "Todo: buy milk")); // a label in the text stays
+    }
+
+    [Fact]
+    public void Markers_stay_lost_ones_come_back_and_made_up_ones_go()
+    {
+        const string sent = "Hello there.\n⚑ 1:23\nMore words here.";
+        Assert.Equal(sent, NotesFormat.Accept(sent, sent));
+        Assert.Equal("Hello there.\nMore words here.\n⚑ 1:23", NotesFormat.Accept(sent, "Hello there.\nMore words here."));
+        Assert.Equal(sent, NotesFormat.Accept(sent, "Hello there.\n⚑ 1:23\n⚑ 9:59\nMore words here."));
+    }
+
+    [Fact]
+    public void The_reply_limit_follows_the_text()
+    {
+        Assert.InRange(NotesFormat.MaxTokens(new string('a', 600)), 240, 260);
+        Assert.InRange(NotesFormat.MaxTokens(new string('会', 600)), 640, 660);
+    }
+
+    [Fact]
+    public void A_session_formatted_before_the_checks_is_repaired_with_its_anchors()
+    {
+        var s = new NoteSession();
+        s.AppendHeard("first part of the talk", 0);
+        var t = s.BeginFormat()!.Value;
+        s.EndFormat(t.Heard, t.Sent, "First part of the talk.  \n\n⚠️ 00:03:15  \n⚠️ 00:03:16", t.Seconds, false);
+        s.AppendHeard("second part", 60);
+        t = s.BeginFormat()!.Value;
+        s.EndFormat(t.Heard, t.Sent, "Second part. Thank you. Thank you. Thank you.  \n璩  \n璩", t.Seconds, false);
+        s.SummarizedThrough = s.Formatted.Length;
+
+        Assert.True(NotesFormat.Repair(s));
+        Assert.Equal("First part of the talk.\n\nSecond part. Thank you.", s.Formatted);
+        Assert.Equal(s.Formatted.IndexOf("Second", StringComparison.Ordinal), s.FormattedAnchors[1].Offset);
+        Assert.Equal(s.Formatted.Length, s.SummarizedThrough);
+        Assert.Equal("First part of the talk.", s.Chunks[0].Ai);
+        Assert.Equal("Second part. Thank you.", s.Chunks[1].Ai);
+        Assert.False(NotesFormat.Repair(s)); // once is enough
+    }
+
+    [Fact]
+    public void A_part_that_carries_on_a_sentence_joins_it()
+    {
+        var s = new NoteSession();
+        s.AppendHeard("and so", 0);
+        var t = s.BeginFormat()!.Value;
+        s.EndFormat(t.Heard, t.Sent, "And so,", t.Seconds, false);
+        s.AppendHeard("we went home", 10);
+        t = s.BeginFormat()!.Value;
+        s.EndFormat(t.Heard, t.Sent, "we went home.", t.Seconds, false);
+        s.AppendHeard("Next topic", 20);
+        t = s.BeginFormat()!.Value;
+        s.EndFormat(t.Heard, t.Sent, "Next topic.", t.Seconds, false);
+        Assert.Equal("And so, we went home.\n\nNext topic.", s.Formatted);
+    }
+
+    [Fact]
+    public void A_labelled_summary_paragraph_loses_its_label()
+    {
+        var shaped = NotesSummary.Shape("Main idea: Plans.\n\n- A\n- B\n- C\n\nWhat was decided: We meet weekly outside the library.")!;
+        Assert.EndsWith("\n\nWe meet weekly outside the library.", shaped);
+    }
+}
