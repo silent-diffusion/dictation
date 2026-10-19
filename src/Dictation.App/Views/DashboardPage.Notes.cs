@@ -125,6 +125,8 @@ public partial class DashboardPage
             _notesHint.Visibility = _notesBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
         };
         boxArea.Children.Add(_notesBox);
+        // Read as Markdown; a click (or typing) turns it back into the plain box to edit.
+        _ = new MarkdownPresenter(_notesBox, 13);
         _notesHint = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(12, 9, 12, 0), FontSize = 12.5, IsHitTestVisible = false };
         _notesHint.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Muted");
         boxArea.Children.Add(_notesHint);

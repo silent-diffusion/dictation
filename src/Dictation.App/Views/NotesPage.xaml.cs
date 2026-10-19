@@ -8,6 +8,8 @@ using System.Windows.Threading;
 using Dictation.App.Services;
 using Dictation.Core.Infrastructure;
 using Dictation.Core.Notes;
+using Dictation.Core.Setup;
+using Dictation.Core.Speech;
 
 namespace Dictation.App.Views;
 
@@ -23,6 +25,10 @@ public partial class NotesPage : UserControl
     readonly DispatcherTimer _tick = new() { Interval = TimeSpan.FromMilliseconds(400) };
     readonly MediaPlayer _player = new();
     readonly List<NotesTextBinder> _binders = new();
+    readonly Dictionary<NoteDoc, MarkdownPresenter> _views = new();
+    readonly NotesPipeline _landingPipe, _sessionPipe;
+    string? _idleModel;              // the AI model a session would use, shown while none records
+    DateTime _idleModelAt = DateTime.MinValue;
     NoteSession? _session;
     NoteDoc _tab = NoteDoc.Transcript;
     bool _edited, _playing, _seeking, _playerOpen, _preparing, _prepareFailed, _autoPlay;
@@ -50,9 +56,19 @@ public partial class NotesPage : UserControl
         _skipTick.Tick += (_, _) => SkipTick();
         _player.MediaOpened += (_, _) => OnPlayerOpened();
         _player.MediaEnded += (_, _) => PausePlayback();
+        // The texts read as Markdown; a click (or typing) turns one back into its plain text box to edit.
+        _views[NoteDoc.Transcript] = new MarkdownPresenter(TranscriptBox, 14.5);
+        _views[NoteDoc.Formatted] = new MarkdownPresenter(FormattedBox, 14.5);
+        _views[NoteDoc.Summary] = new MarkdownPresenter(SummaryBox, 14.5);
         AttachJump(TranscriptBox, NoteDoc.Transcript);
         AttachJump(FormattedBox, NoteDoc.Formatted);
         AttachJump(SummaryBox, NoteDoc.Summary);
+        Action? models = () => ((App)Application.Current).ShowPage("Models");
+        var open = new Action?[] { () => ((App)Application.Current).ShowPage("Audio"), models, models, models };
+        _landingPipe = new NotesPipeline(open);
+        _sessionPipe = new NotesPipeline(open);
+        LandingPipeline.Content = _landingPipe.View;
+        SessionPipeline.Content = _sessionPipe.View;
         AttachJumpEdited();
         Loaded += (_, _) => { _tick.Start(); ShowLanding(); };
         Unloaded += (_, _) =>
@@ -302,6 +318,7 @@ public partial class NotesPage : UserControl
         _session = s;
         Landing.Visibility = Visibility.Collapsed;
         SessionView.Visibility = Visibility.Visible;
+        foreach (var view in _views.Values) view.ShowView();
         _binders.Add(new NotesTextBinder(TranscriptBox, s, NoteDoc.Transcript));
         _binders.Add(new NotesTextBinder(FormattedBox, s, NoteDoc.Formatted));
         _binders.Add(new NotesTextBinder(SummaryBox, s, NoteDoc.Summary));
@@ -359,6 +376,7 @@ public partial class NotesPage : UserControl
 
     void Refresh()
     {
+        UpdatePipelines();
         if (_saveSoon is { } due && DateTime.Now >= due && _session != null) { _store.Save(_session); _saveSoon = null; }
         if (_session == null || !SessionView.IsVisible) return;
         var live = Live;
@@ -449,9 +467,7 @@ public partial class NotesPage : UserControl
     {
         _edited = EditedTab.IsChecked == true;
         _tab = FormattedTab.IsChecked == true ? NoteDoc.Formatted : SummaryTab.IsChecked == true ? NoteDoc.Summary : NoteDoc.Transcript;
-        TranscriptBox.Visibility = !_edited && _tab == NoteDoc.Transcript ? Visibility.Visible : Visibility.Collapsed;
-        FormattedBox.Visibility = !_edited && _tab == NoteDoc.Formatted ? Visibility.Visible : Visibility.Collapsed;
-        SummaryBox.Visibility = !_edited && _tab == NoteDoc.Summary ? Visibility.Visible : Visibility.Collapsed;
+        foreach (var (doc, view) in _views) view.Shown = !_edited && _tab == doc;
         EditedPanel.Visibility = _edited ? Visibility.Visible : Visibility.Collapsed;
         TabHint.Text = _edited ? "EVERY CHANGE, IN COLOUR // READ ONLY"
             : _tab switch
@@ -852,10 +868,66 @@ public partial class NotesPage : UserControl
         if (IsInitialized) ShowPlay();
     }
 
+    // ----- the pipeline at the top: what each model is doing -----
+
+    void UpdatePipelines()
+    {
+        if (!IsLoaded) return;
+        var steps = PipelineSteps();
+        if (Landing.IsVisible) _landingPipe.Update(steps);
+        if (SessionView.IsVisible) _sessionPipe.Update(steps);
+    }
+
+    IReadOnlyList<NotesPipeline.Step> PipelineSteps()
+    {
+        const NotesPipeline.State ready = NotesPipeline.State.Ready, busy = NotesPipeline.State.Busy, off = NotesPipeline.State.Off;
+        var sv = App.Services;
+        var live = _recorder.Current;
+        var source = (live?.Source ?? ChosenSource) switch { NotesSource.Computer => "Computer audio", NotesSource.Both => "Mic + computer", _ => "Mic" };
+        var paused = _recorder.IsPaused;
+        var finishing = _recorder.IsFinishing;
+        var listen = live == null ? new NotesPipeline.Step("LISTEN", source, "ready", ready)
+            : finishing ? new NotesPipeline.Step("LISTEN", source, "stopped", ready)
+            : paused ? new NotesPipeline.Step("LISTEN", source, _recorder.UserPaused ? "paused" : "paused while you dictate", ready)
+            : new NotesPipeline.Step("LISTEN", source, "recording", busy);
+
+        var speechModel = sv.Speech.LoadedModel ?? SpeechModels.For(sv.Profiles.Active, sv.Settings.Current.Asr);
+        var speech = live == null
+                ? new NotesPipeline.Step("SPEECH", speechModel, sv.Speech.IsReady ? "loaded" : "loads when a session starts", sv.Speech.IsReady ? ready : off)
+            : finishing ? new NotesPipeline.Step("SPEECH", speechModel, "the last piece…", busy)
+            : paused ? new NotesPipeline.Step("SPEECH", speechModel, "waiting", ready)
+            : _recorder.Transcribing ? new NotesPipeline.Step("SPEECH", speechModel, "transcribing", busy)
+            : new NotesPipeline.Step("SPEECH", speechModel, "connecting…", ready);
+
+        // The AI model: the session's, or the one a session would use now (worked out every half minute).
+        if (live == null && DateTime.Now - _idleModelAt > TimeSpan.FromSeconds(30)) ResolveIdleModel();
+        var ai = _recorder.Model ?? _idleModel ?? "…";
+        var format = _recorder.IsFormatting ? new NotesPipeline.Step("FORMAT", ai, "formatting now", busy)
+            : live != null ? new NotesPipeline.Step("FORMAT", ai, $"{live.UnformattedWords():N0} words waiting", ready)
+            : new NotesPipeline.Step("FORMAT", ai, "about every minute", ready);
+        var summary = _recorder.IsSummarizing ? new NotesPipeline.Step("SUMMARY", ai, "summing up now", busy)
+            : live != null ? new NotesPipeline.Step("SUMMARY", ai, $"next section {Math.Min(99, live.UnsummarizedChars() * 100 / NotesSummary.SectionChars)}% there", ready)
+            : new NotesPipeline.Step("SUMMARY", ai, "every 5–10 minutes", ready);
+        return new[] { listen, speech, format, summary };
+    }
+
+    async void ResolveIdleModel()
+    {
+        _idleModelAt = DateTime.Now;
+        try
+        {
+            var s = App.Services.Settings.Current;
+            var gpu = await Task.Run(RuntimeInstaller.GpuMemoryBytes);
+            (_idleModel, _) = await NotesModels.ResolveAsync(s.NotesModel, s.Llm.DefaultModel, () => App.Services.Llm.ListModelDetailsAsync(), gpu);
+        }
+        catch (Exception e) { Log.Warn("Extended notes: couldn't work out the AI model: " + e.Message); }
+    }
+
     // ----- right-click: jump to this moment in the recording -----
 
     void AttachJump(TextBox box, NoteDoc doc)
     {
+        AttachJumpView(_views[doc], box, doc);
         var jump = new MenuItem();
         jump.Click += (_, _) => { if (jump.Tag is double at) PlayFrom(at); };
         var menu = new ContextMenu();
@@ -875,6 +947,28 @@ public partial class NotesPage : UserControl
             }
             var seconds = doc == NoteDoc.Summary ? SummaryMoment(box) : _session?.SecondsAt(doc, box.CaretIndex);
             ShowJump(jump, seconds);
+        };
+    }
+
+    /// <summary>The same menu on the rendered text: the place right-clicked is found in the plain text.</summary>
+    void AttachJumpView(MarkdownPresenter view, TextBox box, NoteDoc doc)
+    {
+        var jump = new MenuItem();
+        jump.Click += (_, _) => { if (jump.Tag is double at) PlayFrom(at); };
+        var at = 0;
+        var editHere = new MenuItem { Header = "Edit here" };
+        editHere.Click += (_, _) => view.Edit(at);
+        var menu = new ContextMenu();
+        menu.Items.Add(jump);
+        menu.Items.Add(new Separator());
+        menu.Items.Add(new MenuItem { Command = ApplicationCommands.Copy, CommandTarget = view.Viewer });
+        menu.Items.Add(editHere);
+        view.Viewer.ContextMenu = menu;
+        view.Viewer.ContextMenuOpening += (_, e) =>
+        {
+            at = e.CursorLeft >= 0 ? view.OffsetAt(Mouse.GetPosition(view.Viewer)) : box.CaretIndex;
+            box.CaretIndex = Math.Clamp(at, 0, box.Text.Length); // the Play button and the Summary's match go from here
+            ShowJump(jump, doc == NoteDoc.Summary ? SummaryMoment(box) : _session?.SecondsAt(doc, at));
         };
     }
 

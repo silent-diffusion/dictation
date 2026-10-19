@@ -116,3 +116,16 @@ model chosen by name that is no longer installed falls back to the best one. The
 session starts, when it changes, and every ten minutes, and logs the model it uses. Found on 18 Oct 2026: the notes had
 used the active model (qwen3:4b) while the user's profiles use qwen2.5:7b, which on that 6 GB GPU is the best fit, and
 is what dictation already loads, so the two no longer swap models in memory.
+
+## Reading view and the pipeline (5.4.0)
+
+- The Transcript, Formatted and Summary tabs, and the dashboard's notes box, show their text rendered as Markdown
+  (`NotesMarkdown`, `MarkdownPresenter`): headings, bullet and numbered lists, quotes, code, rules, **bold**, *italic*,
+  `code`, links as their text, ⚑ markers in the accent, and a short label at the start of a line ("Main idea:") in bold.
+  Line breaks are kept as typed. A click turns the view back into the plain text box with the cursor at that place;
+  typing while reading goes on at the end; leaving the box shows the rendered text again. Right-click on the rendered text
+  finds the same place in the plain text (each run carries its source offset), so the jump to the recording still works.
+- At the top of Extended Notes (the landing page and a session), a signal path of its own (`NotesPipeline`): LISTEN (the
+  source) → SPEECH (the speech model) → FORMAT and SUMMARY (the AI model). A step lights in the accent, its core pulsing,
+  while it works: recording, transcribing, formatting now, summing up now; between steps it shows what is waiting (words
+  to format, how far to the next summary section). Each step opens its settings page.

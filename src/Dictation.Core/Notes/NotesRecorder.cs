@@ -75,6 +75,12 @@ public sealed class NotesRecorder
     public double Seconds => Interlocked.Read(ref _samples) / (double)MicCapture.SampleRate;
     /// <summary>The engine is listening (connected); false while it reconnects.</summary>
     public bool Transcribing => _speech?.IsConnected == true;
+    /// <summary>The AI is formatting a part right now.</summary>
+    public bool IsFormatting => _formatting;
+    /// <summary>The AI is summing up right now (a section, a merge or the Summary tab).</summary>
+    public bool IsSummarizing => _summarizing;
+    /// <summary>The AI model this session formats and sums up with, once it has been worked out; null before.</summary>
+    public string? Model => _model;
 
     /// <summary>Recording started, paused, resumed or stopped (UI thread).</summary>
     public event Action? StateChanged;
