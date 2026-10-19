@@ -47,6 +47,38 @@ public sealed class RuntimeInstaller
     public static bool IsInstalled =>
         File.Exists(Marker) && File.Exists(AppPaths.PythonExe) && File.Exists(AppPaths.OllamaExe);
 
+    static readonly Lazy<long?> GpuMemory = new(ReadGpuMemory);
+
+    /// <summary>The NVIDIA GPU's memory in bytes (the largest, if there are several); null without one. Asked once.</summary>
+    public static long? GpuMemoryBytes() => GpuMemory.Value;
+
+    static long? ReadGpuMemory()
+    {
+        if (Environment.GetEnvironmentVariable("DICTATION_FORCE_CPU") == "1") return null;
+        try
+        {
+            var exe = new[]
+            {
+                Path.Combine(Environment.SystemDirectory, "nvidia-smi.exe"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "NVIDIA Corporation", "NVSMI", "nvidia-smi.exe"),
+            }.FirstOrDefault(File.Exists);
+            if (exe == null) return null;
+            var psi = new ProcessStartInfo(exe, "--query-gpu=memory.total --format=csv,noheader,nounits")
+                { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
+            using var p = Process.Start(psi)!;
+            var output = p.StandardOutput.ReadToEnd();
+            p.WaitForExit(5000);
+            if (p.ExitCode != 0) return null;
+            var mib = output.Split('\n').Select(l => long.TryParse(l.Trim(), out var v) ? v : 0).DefaultIfEmpty(0).Max();
+            return mib > 0 ? mib * 1024 * 1024 : null;
+        }
+        catch (Exception e)
+        {
+            Log.Warn("Couldn't read the GPU's memory: " + e.Message);
+            return null;
+        }
+    }
+
     public static bool HasNvidiaGpu()
     {
         if (Environment.GetEnvironmentVariable("DICTATION_FORCE_CPU") == "1") return false; // testing the CPU-only path

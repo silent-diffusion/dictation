@@ -105,3 +105,14 @@ the model formatted the text and then ran on until it was cut off (rows of "⚠�
   text and the formatting steps, one edit at a time so anchors and the user's edits stay.
 - A part that carries on a sentence the last one left open joins it instead of starting a paragraph; summary paragraphs
   lose labels like "What was decided:".
+
+## The AI model (5.3.0)
+
+Extended Notes has its own AI model setting (Settings › Models › *Extended Notes · AI*, and *AI model* on the start
+card; one setting, `NotesModel`). The default is **Best on this PC**: the installed model with the most parameters that
+fits in the GPU's memory (without an NVIDIA GPU, up to 4.5B), then the larger file; never an embedding model, or one of Ollama's cloud models (they run on ollama.com). It can also
+follow the active model, name an installed model, or a cloud model (which sends the transcript to that service). A
+model chosen by name that is no longer installed falls back to the best one. The recorder resolves the setting when a
+session starts, when it changes, and every ten minutes, and logs the model it uses. Found on 18 Oct 2026: the notes had
+used the active model (qwen3:4b) while the user's profiles use qwen2.5:7b, which on that 6 GB GPU is the best fit, and
+is what dictation already loads, so the two no longer swap models in memory.

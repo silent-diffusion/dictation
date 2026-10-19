@@ -14,6 +14,28 @@ namespace Dictation.Core.Text;
 /// <param name="SafetyNet">True when the model's output was rejected as implausible and the raw text was kept.</param>
 public sealed record ProcessResult(string Text, bool Modified, string? Warning, bool SafetyNet = false);
 
+/// <summary>An AI model installed on this PC, with what Ollama says about it.</summary>
+/// <param name="Billions">Its size in parameters (billions).</param>
+/// <param name="Bytes">Its size on disk, about what it takes in memory.</param>
+public sealed record LocalModel(string Name, double Billions, long Bytes, string Family)
+{
+    /// <summary>Ollama's "parameter_size" ("7.6B", "494.03M") in billions; without one, estimated from the file (a
+    /// 4-bit model takes about 0.6 bytes a parameter).</summary>
+    public static double ParseBillions(string? parameterSize, long bytes)
+    {
+        var t = (parameterSize ?? "").Trim().ToUpperInvariant();
+        if (t.Length > 1 && double.TryParse(t[..^1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var n))
+            switch (t[^1])
+            {
+                case 'B': return n;
+                case 'M': return n / 1000;
+                case 'K': return n / 1_000_000;
+                case 'T': return n * 1000;
+            }
+        return Math.Round(bytes / 6e8, 1);
+    }
+}
+
 /// <summary>Turns a raw transcript into a processed one according to a profile. Backend-agnostic.</summary>
 public interface ITextProcessor
 {
@@ -21,8 +43,11 @@ public interface ITextProcessor
     /// <summary>One plain request to the default AI model, outside the dictation profiles: the instructions, the text,
     /// and a reply of at most <paramref name="maxTokens"/>. No safety net (the caller checks the reply). Extended Notes
     /// uses it for its summaries.</summary>
-    Task<string> AskAsync(string instructions, string text, int maxTokens, CancellationToken ct = default);
+    /// <param name="model">The model to ask; null asks the active model.</param>
+    Task<string> AskAsync(string instructions, string text, int maxTokens, string? model = null, CancellationToken ct = default);
     Task<IReadOnlyList<string>> ListModelsAsync(CancellationToken ct = default);
+    /// <summary>The local models with their sizes (empty when the runtime doesn't answer).</summary>
+    Task<IReadOnlyList<LocalModel>> ListModelDetailsAsync(CancellationToken ct = default);
     /// <summary>Make sure the runtime is up and the model is resident in memory.</summary>
     Task WarmUpAsync(string? model, CancellationToken ct = default);
     /// <summary>Local models currently loaded in memory (empty if the runtime isn't running). Never starts the runtime.</summary>
@@ -350,9 +375,9 @@ public sealed class OllamaTextProcessor : ITextProcessor
             "The AI's rewrite failed the safety net, so your original words were inserted unchanged.", SafetyNet: true);
     }
 
-    public async Task<string> AskAsync(string instructions, string text, int maxTokens, CancellationToken ct = default)
+    public async Task<string> AskAsync(string instructions, string text, int maxTokens, string? model = null, CancellationToken ct = default)
     {
-        var model = _settings.Current.Llm.DefaultModel;
+        model = string.IsNullOrWhiteSpace(model) ? _settings.Current.Llm.DefaultModel : model;
         if (CloudModels.IsCloud(model))
             return OutputSanitizer.Clean(await _cloud.CompleteAsync(model, instructions, Array.Empty<(string, string)>(), text, maxTokens, ct), text);
         await _host.EnsureRunningAsync(ct);
@@ -445,6 +470,31 @@ public sealed class OllamaTextProcessor : ITextProcessor
         {
             Log.Warn("Listing models failed: " + e.Message);
             return Array.Empty<string>();
+        }
+    }
+
+    public async Task<IReadOnlyList<LocalModel>> ListModelDetailsAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            await _host.EnsureRunningAsync(ct);
+            var json = await _http.GetFromJsonAsync<JsonObject>(Url("/api/tags"), ct);
+            var list = new List<LocalModel>();
+            foreach (var m in json?["models"]?.AsArray() ?? new JsonArray())
+            {
+                var name = m?["name"]?.GetValue<string>() ?? "";
+                if (name.Length == 0) continue;
+                var bytes = m?["size"]?.GetValue<long>() ?? 0;
+                var details = m?["details"];
+                list.Add(new LocalModel(name, LocalModel.ParseBillions(details?["parameter_size"]?.GetValue<string>(), bytes), bytes,
+                    details?["family"]?.GetValue<string>() ?? ""));
+            }
+            return list.OrderBy(m => m.Name).ToList();
+        }
+        catch (Exception e)
+        {
+            Log.Warn("Listing models failed: " + e.Message);
+            return Array.Empty<LocalModel>();
         }
     }
 

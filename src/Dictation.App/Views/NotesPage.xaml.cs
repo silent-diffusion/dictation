@@ -77,6 +77,14 @@ public partial class NotesPage : UserControl
         ShowStart();
         BuildUsage();
         BuildList();
+        FillModelChoices();
+    }
+
+    /// <summary>The AI model drop-down on the start card (the same setting as Settings › Models).</summary>
+    async void FillModelChoices()
+    {
+        try { await NotesModelChoices.FillAsync(NotesModelBox); }
+        catch (Exception e) { Log.Warn("Extended notes: couldn't list the AI models: " + e.Message); }
     }
 
     void OnSessions(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)

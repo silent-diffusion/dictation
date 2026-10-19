@@ -125,6 +125,9 @@ public sealed class AppSettings
     public bool KeepWordTally { get; set; } = true;
     /// <summary>What Extended Notes listens to: the microphone, the computer's audio, or both (remembered).</summary>
     public Dictation.Core.Notes.NotesSource NotesSource { get; set; } = Dictation.Core.Notes.NotesSource.Mic;
+    /// <summary>The AI model for Extended Notes' formatting and summaries: "" = the best on this PC (the default),
+    /// "active" = the active model, otherwise a model by name. See <see cref="Dictation.Core.Notes.NotesModels"/>.</summary>
+    public string NotesModel { get; set; } = "";
     /// <summary>Unload a model after this many minutes without use, to free memory (GPU memory especially).
     /// 0 = keep loaded; <see cref="UnloadImmediately"/> = as soon as each dictation or reading is done. It loads again by
     /// itself the next time it is needed.</summary>

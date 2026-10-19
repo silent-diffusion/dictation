@@ -20,6 +20,10 @@
             <TextBlock Style="{StaticResource Caption}" Margin="0,2,0,0"
                        Text="The active model is the default for profiles that don't pick their own. With 6 GB of GPU memory, 3–4B models run fully on the GPU alongside speech recognition."/>
 
+            <TextBlock Text="EXTENDED NOTES · AI" Style="{StaticResource MonoLabel}" Margin="0,22,0,8"/>
+            <ComboBox x:Name="NotesModelBox" Width="528" HorizontalAlignment="Left" AutomationProperties.Name="AI model for Extended Notes"/>
+            <TextBlock x:Name="NotesModelNote" Style="{StaticResource Caption}" Margin="0,6,0,0"/>
+
             <TextBlock Text="AI CLEANUP · CLOUD" Style="{StaticResource MonoLabel}" Margin="0,22,0,8"/>
             <TextBlock x:Name="CloudNote" Style="{StaticResource Caption}" Margin="0,0,0,8"/>
             <StackPanel x:Name="CloudList"/>

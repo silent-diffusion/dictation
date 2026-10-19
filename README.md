@@ -199,6 +199,8 @@ window's edge.
   transcript, the formatted text, the summary or everything as .txt, .md or Word (.docx), and the recording (as played) as .wav.
   While a session records, **⚑ Mark** in the header (or the marker hotkey, default `Ctrl+Alt+M`) drops a time marker
   on its own line in the transcript (the AI keeps it; a right-click on it jumps there; *Everything* exports list them).
+  The AI model for Extended Notes is its own setting (Settings › Models, or *AI model* on the start card); by default the
+  best on this PC, the largest installed model that fits in the GPU's memory.
   Extended Notes never count in the dictation statistics; their own daily counts are kept apart in `data\notes\usage.json`
   and shown as a **Usage** strip on the landing page (last 30 days and all time: sessions, time recorded, words heard and
   typed, AI requests, by source). **Pause**, **Full screen** and **Stop** are in the header; dictating into an

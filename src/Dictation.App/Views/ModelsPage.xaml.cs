@@ -107,6 +107,10 @@ public partial class ModelsPage : UserControl
                 Style = (Style)FindResource("Caption"),
             });
 
+        // Extended Notes: its own model, the best on this PC unless another is chosen
+        var (best, gpu) = await NotesModelChoices.FillAsync(NotesModelBox);
+        NotesModelNote.Text = NotesModelChoices.Explain(best, gpu);
+
         // Cloud AI
         CloudList.Children.Clear();
         var cloud = s.Cloud;

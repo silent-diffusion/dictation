@@ -78,6 +78,10 @@
                             <RadioButton x:Name="MicSource" GroupName="Source" Style="{StaticResource Pill}" Content="MIC" Margin="0,0,4,6" Checked="Source_Checked"/>
                             <RadioButton x:Name="ComputerSource" GroupName="Source" Style="{StaticResource Pill}" Content="COMPUTER AUDIO" Margin="0,0,4,6" Checked="Source_Checked"/>
                             <RadioButton x:Name="BothSource" GroupName="Source" Style="{StaticResource Pill}" Content="BOTH" Margin="0,0,4,6" Checked="Source_Checked"/>
+                            <TextBlock Text="AI MODEL" Style="{StaticResource MonoLabel}" VerticalAlignment="Center" Margin="14,0,10,6"/>
+                            <ComboBox x:Name="NotesModelBox" Width="300" Margin="0,0,0,6" VerticalAlignment="Center"
+                                      ToolTip="Formats and sums up the session. Also under Settings › Models."
+                                      AutomationProperties.Name="AI model for Extended Notes"/>
                         </WrapPanel>
                         <TextBlock x:Name="StartNote" Style="{StaticResource MonoLabel}" FontSize="10" TextWrapping="Wrap" Margin="0,6,0,0"
                                    Text="KEEPS THE RECORDING // ABOUT 115 MB AN HOUR // DICTATING INTO AN APP PAUSES THE SESSION, THEN IT RESUMES"/>

@@ -3,6 +3,7 @@ using System.Windows.Threading;
 using Dictation.Core.Audio;
 using Dictation.Core.Infrastructure;
 using Dictation.Core.Settings;
+using Dictation.Core.Setup;
 using Dictation.Core.Speech;
 using Dictation.Core.Text;
 using NAudio.Wave;
@@ -51,6 +52,9 @@ public sealed class NotesRecorder
     double _lastPieceSeconds;
     bool _userPaused, _dictating, _formatting, _summarizing, _dirty;
     int _formatRequests, _summaryRequests; // this session's AI requests, for the counts
+    string? _model;          // the AI model formatting and summaries use, as last resolved
+    string _modelFor = "";   // the setting it was resolved from
+    DateTime _modelResolved;
     DateTime _lastFormat = DateTime.Now, _lastSave = DateTime.Now, _lastSection = DateTime.Now;
 
     public NotesRecorder(SettingsService settings, ISpeechRecognizer asr, ITextProcessor llm, NotesStore store, Func<string> speechModel)
@@ -85,6 +89,7 @@ public sealed class NotesRecorder
         _lastPieceSeconds = 0;
         _userPaused = _formatting = _summarizing = false;
         _formatRequests = _summaryRequests = 0;
+        _model = null;
         _connectDelay = TimeSpan.FromSeconds(5);
         lock (_audioLock) { _backlog.Clear(); _backlogBytes = 0; }
         _lastFormat = _lastSave = _lastSection = DateTime.Now;
@@ -266,7 +271,7 @@ public sealed class NotesRecorder
             else
             {
                 _formatRequests++;
-                var reply = await _llm.AskAsync(NotesFormat.Instructions(input), NotesFormat.Wrap(input), NotesFormat.MaxTokens(input));
+                var reply = await _llm.AskAsync(NotesFormat.Instructions(input), NotesFormat.Wrap(input), NotesFormat.MaxTokens(input), await ModelAsync());
                 if (NotesFormat.Accept(input, reply) is { } accepted) { ai = accepted; failed = false; }
                 else Log.Info("Extended notes: the AI's formatting added to, dropped or changed the text; keeping it as heard");
             }
@@ -345,10 +350,25 @@ public sealed class NotesRecorder
         finally { _summarizing = false; }
     }
 
-    Task<string> Ask(string instructions, string text, int maxTokens)
+    async Task<string> Ask(string instructions, string text, int maxTokens)
     {
         _summaryRequests++;
-        return _llm.AskAsync(instructions, text, maxTokens);
+        return await _llm.AskAsync(instructions, text, maxTokens, await ModelAsync());
+    }
+
+    /// <summary>The AI model for formatting and summaries (see <see cref="NotesModels"/>): resolved again when the setting
+    /// changes, and every ten minutes, since a model may have been downloaded or removed meanwhile.</summary>
+    async Task<string> ModelAsync()
+    {
+        var setting = _settings.Current.NotesModel ?? "";
+        if (_model != null && setting == _modelFor && DateTime.Now - _modelResolved < TimeSpan.FromMinutes(10)) return _model;
+        var (model, why) = await NotesModels.ResolveAsync(setting, _settings.Current.Llm.DefaultModel,
+            () => _llm.ListModelDetailsAsync(), RuntimeInstaller.GpuMemoryBytes());
+        if (model != _model) Log.Info($"Extended notes: AI model {model} ({why})");
+        _model = model;
+        _modelFor = setting;
+        _modelResolved = DateTime.Now;
+        return model;
     }
 
     public void Pause()
