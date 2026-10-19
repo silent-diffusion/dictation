@@ -814,8 +814,10 @@ public partial class NotesPage : UserControl
     {
         if (_pendingSeek is { } s) _player.Position = TimeSpan.FromSeconds(s);
         _pendingSeek = null;
-        _player.SpeedRatio = Speed;
+        // No SpeedRatio here: setting it makes the player start. Opening a session must stay silent until Play
+        // (StartPlayback sets the speed just before it plays).
         if (_autoPlay) { _autoPlay = false; StartPlayback(); }
+        else _player.Pause();
         UpdatePlayer(_session?.Seconds ?? 0);
     }
 
@@ -838,7 +840,8 @@ public partial class NotesPage : UserControl
 
     void Speed_Checked(object sender, RoutedEventArgs e)
     {
-        if (IsLoaded && _playerOpen) _player.SpeedRatio = Speed;
+        // Only while playing: setting the speed of a paused player starts it. Otherwise the next Play takes it.
+        if (IsLoaded && _playerOpen && _playing) _player.SpeedRatio = Speed;
     }
 
     void ShowPlay() => PlayGlyph.Text = _playing ? "" : ""; // pause : play
