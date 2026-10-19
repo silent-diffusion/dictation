@@ -577,36 +577,92 @@ public partial class NotesPage : UserControl
 
     // ----- export -----
 
+    /// <summary>Export: first what (everything, one of the texts, or the recording), then how: copied to the clipboard,
+    /// or saved as a file (.txt, .md or Word; the recording as .wav).</summary>
     void Export_Click(object sender, RoutedEventArgs e)
     {
         if (_session == null) return;
         var menu = new ContextMenu { PlacementTarget = ExportButton, Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom };
-        void Item(string header, Action action)
+        static MenuItem Item(MenuItem parent, string header, Action action)
         {
             var mi = new MenuItem { Header = header };
             mi.Click += (_, _) => action();
-            menu.Items.Add(mi);
+            parent.Items.Add(mi);
+            return mi;
         }
-        Item("Transcript (.txt)", () => SaveText(NotesExport.Part.Transcript, false));
-        Item("Formatted (.txt)", () => SaveText(NotesExport.Part.Formatted, false));
-        Item("Summary (.txt)", () => SaveText(NotesExport.Part.Summary, false));
-        Item("Everything (.md)", () => SaveText(NotesExport.Part.Everything, true));
-        Item("Everything (.txt)", () => SaveText(NotesExport.Part.Everything, false));
-        var word = new MenuItem { Header = "Word (.docx)" };
-        void Docx(string header, NotesExport.Part part)
+        void Part(string header, NotesExport.Part part)
         {
-            var mi = new MenuItem { Header = header };
-            mi.Click += (_, _) => SaveDocx(part);
-            word.Items.Add(mi);
+            var what = new MenuItem { Header = header };
+            Item(what, "Copy to clipboard", () => CopyText(part, markdown: false));
+            if (part == NotesExport.Part.Everything) Item(what, "Copy to clipboard as Markdown", () => CopyText(part, markdown: true));
+            what.Items.Add(new Separator());
+            Item(what, "Save as text (.txt)…", () => SaveText(part, false));
+            Item(what, "Save as Markdown (.md)…", () => SaveText(part, true));
+            Item(what, "Save as Word (.docx)…", () => SaveDocx(part));
+            menu.Items.Add(what);
         }
-        Docx("Everything", NotesExport.Part.Everything);
-        Docx("Formatted", NotesExport.Part.Formatted);
-        Docx("Summary", NotesExport.Part.Summary);
-        Docx("Transcript", NotesExport.Part.Transcript);
-        menu.Items.Add(word);
+        Part("Everything", NotesExport.Part.Everything);
+        Part("Formatted", NotesExport.Part.Formatted);
+        Part("Summary", NotesExport.Part.Summary);
+        Part("Transcript", NotesExport.Part.Transcript);
         menu.Items.Add(new Separator());
-        Item("Recording (.wav)", SaveAudio);
+        var recording = new MenuItem { Header = "Recording", IsEnabled = File.Exists(_session.AudioPath) };
+        Item(recording, "Copy the file to the clipboard", CopyAudio);
+        Item(recording, "Save as WAV (.wav)…", SaveAudio);
+        menu.Items.Add(recording);
         menu.IsOpen = true;
+    }
+
+    /// <summary>A text, or everything, to the clipboard; the button says so for a moment.</summary>
+    void CopyText(NotesExport.Part part, bool markdown)
+    {
+        if (_session == null) return;
+        var text = NotesExport.Build(_session, part, markdown);
+        try { Clipboard.SetText(text); }
+        catch (Exception ex)
+        {
+            Log.Warn("Extended notes: copying failed: " + ex.GetType().Name);
+            MessageBox.Show("The clipboard is busy; try again in a moment.", AppInfo.Name, MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        Copied($"COPIED {NoteSession.Words(text):N0} WORDS ✓");
+    }
+
+    /// <summary>The recording (as played, once prepared) to the clipboard as a file, named after the session, so it can
+    /// be pasted into a folder, an email or a chat.</summary>
+    void CopyAudio()
+    {
+        if (_session == null || !File.Exists(_session.AudioPath)) return;
+        var source = _prepared != null && File.Exists(_prepared.Path) ? _prepared.Path : _session.AudioPath;
+        try
+        {
+            // A copy with the session's name: what is pasted is called that, not "audio.wav". The folder holds one at a time.
+            var dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "oberton-copied");
+            if (Directory.Exists(dir)) foreach (var old in Directory.GetFiles(dir)) try { File.Delete(old); } catch { }
+            Directory.CreateDirectory(dir);
+            var copy = System.IO.Path.Combine(dir, SafeName + ".wav");
+            CopyRecording(source, copy);
+            Clipboard.SetFileDropList(new System.Collections.Specialized.StringCollection { copy });
+        }
+        catch (Exception ex)
+        {
+            Log.Warn("Extended notes: copying the recording failed: " + ex.GetType().Name);
+            MessageBox.Show("The recording couldn't be copied: " + ex.Message, AppInfo.Name, MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        Copied("COPIED THE RECORDING ✓");
+    }
+
+    DispatcherTimer? _copiedTimer;
+
+    /// <summary>The Export button says what was copied, for two seconds.</summary>
+    void Copied(string what)
+    {
+        ExportButton.Content = what;
+        _copiedTimer?.Stop();
+        _copiedTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+        _copiedTimer.Tick += (_, _) => { _copiedTimer?.Stop(); ExportButton.Content = "EXPORT ▾"; };
+        _copiedTimer.Start();
     }
 
     string SafeName => string.Join("_", (_session?.Title ?? "Extended notes").Split(System.IO.Path.GetInvalidFileNameChars())).Trim();

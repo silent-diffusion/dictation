@@ -215,15 +215,29 @@ public partial class DashboardPage : UserControl
     /// <summary>One step of the signal path: what it is, the model or device, and how it is doing.</summary>
     sealed record PathNode(string Label, string Title, string Status, Dot State, Action Open);
 
-    // Drawn at this height and as wide as the cell's shape asks for, then scaled to the cell: it always fills it.
+    // Drawn at a design size and scaled to the cell. One row when the cell can show it at full size (a wide window);
+    // otherwise two levels, mic → speech above and AI → insert below, so each step has more room and its text stays
+    // larger. Whichever shows the text larger is used.
     double _pathWidth = 900;
+    bool _pathTwoLevel;
     const double PathHeight = 210, PathY = 92, NodeRadius = 22, BranchY = 188, StepWidth = 230;
+    const double TwoWidth = 760, TwoHeight = 350, TwoY1 = 70, TwoY2 = 220, TwoCol0 = 190, TwoCol1 = 545, TwoColWidth = 340,
+        TwoFont = 1.2, TwoTurnX = 735;
+
+    /// <summary>The layout for a cell of this size: one row (and how wide to draw it), or two levels.</summary>
+    static (bool TwoLevel, double Width) PathLayout(Size cell)
+    {
+        var width = Math.Clamp(PathHeight * cell.Width / cell.Height, 4 * StepWidth, 2400);
+        var oneRow = Math.Min(cell.Width / width, cell.Height / PathHeight);
+        var twoLevels = Math.Min(cell.Width / TwoWidth, cell.Height / TwoHeight) * TwoFont; // how large the text comes out
+        return (oneRow < 1 && twoLevels > oneRow, width);
+    }
 
     /// <summary>
-    /// The signal path, drawn like an instrument diagram at a fixed design size and scaled to the cell: a line through
-    /// the four steps, each a node (core filled when ready, hollow when off, the accent while busy) in a ring of ticks,
-    /// with read aloud branching off the insert step (dashed: it only runs when the profile reads aloud, or on demand).
-    /// Every node opens its page.
+    /// The signal path, drawn like an instrument diagram: a line through the four steps, each a node (core filled when
+    /// ready, hollow when off, the accent while busy) in a ring of ticks, with read aloud branching off the insert step
+    /// (dashed: it only runs when the profile reads aloud, or on demand). In one row across a wide cell, or in two
+    /// levels that turn at the right. Every node opens its page.
     /// </summary>
     FrameworkElement SignalPath(PathNode[] nodes, PathNode voice, bool readsAloud, string hotkey, string unloadNote)
     {
@@ -256,36 +270,34 @@ public partial class DashboardPage : UserControl
         DockPanel.SetDock(foot, Dock.Bottom);
         root.Children.Add(foot);
 
-        Canvas Draw(double width)
+        void Wire(Canvas c, params Point[] points)
         {
-            var c = new Canvas { Width = width, Height = PathHeight };
-            double X(int i) => StepWidth / 2 + i * (width - StepWidth / 2 - 150) / (nodes.Length - 1);
-
-            var line = new Line { X1 = X(0), Y1 = PathY, X2 = X(nodes.Length - 1), Y2 = PathY, StrokeThickness = 1 };
+            var line = new Polyline { Points = new PointCollection(points), StrokeThickness = 1 };
             line.SetResourceReference(Shape.StrokeProperty, "Ob.Text");
             c.Children.Add(line);
-            for (var i = 0; i < nodes.Length - 1; i++)
-            {
-                // An arrowhead halfway to the next node
-                var mid = (X(i) + X(i + 1)) / 2;
-                var arrow = new Polyline { Points = new PointCollection { new(mid - 3, PathY - 4), new(mid + 3, PathY), new(mid - 3, PathY + 4) }, StrokeThickness = 1 };
-                arrow.SetResourceReference(Shape.StrokeProperty, "Ob.Text");
-                c.Children.Add(arrow);
-            }
+        }
 
-            // Read aloud: a dashed branch from the insert node, down and back under the AI node
-            var last = X(nodes.Length - 1);
-            var pillX = X(nodes.Length - 2);
-            var branch = new Polyline
+        // An arrowhead at (x, y) pointing along (dx, dy), one of the four directions.
+        void Arrow(Canvas c, double x, double y, double dx, double dy)
+        {
+            var arrow = new Polyline
             {
-                Points = new PointCollection { new(last + NodeRadius, PathY), new(last + 90, PathY), new(last + 90, BranchY), new(pillX + 80, BranchY) },
-                StrokeThickness = 1, StrokeDashArray = new DoubleCollection { 3, 3 },
+                Points = new PointCollection { new(x - 3 * dx - 4 * dy, y - 3 * dy - 4 * dx), new(x + 3 * dx, y + 3 * dy), new(x - 3 * dx + 4 * dy, y - 3 * dy + 4 * dx) },
+                StrokeThickness = 1,
             };
+            arrow.SetResourceReference(Shape.StrokeProperty, "Ob.Text");
+            c.Children.Add(arrow);
+        }
+
+        // Read aloud: a dashed branch off the insert node to a pill with the voice; place(pill) positions it once measured.
+        void ReadAloud(Canvas c, double font, Point[] branchPoints, Action<Border> place)
+        {
+            var branch = new Polyline { Points = new PointCollection(branchPoints), StrokeThickness = 1, StrokeDashArray = new DoubleCollection { 3, 3 } };
             branch.SetResourceReference(Shape.StrokeProperty, readsAloud ? "Ob.Text" : "Ob.Muted");
             c.Children.Add(branch);
             var pill = new Border
             {
-                BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(11), Padding = new Thickness(14, 4, 14, 4),
+                BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(11 * font), Padding = new Thickness(14, 4, 14, 4),
                 Cursor = Cursors.Hand, ToolTip = $"Read aloud: {voice.Title} ({voice.Status})" + (readsAloud ? " — this profile reads each dictation aloud" : ""),
             };
             pill.SetResourceReference(Border.BorderBrushProperty, "Ob.Text");
@@ -294,7 +306,7 @@ public partial class DashboardPage : UserControl
             pillText.Children.Add(Node(voice.State, small: true));
             var pillLabel = new TextBlock
             {
-                Text = $"{voice.Label} // {voice.Title} // {voice.Status}".ToUpper(), FontFamily = Mono, FontSize = 12.5,
+                Text = $"{voice.Label} // {voice.Title} // {voice.Status}".ToUpper(), FontFamily = Mono, FontSize = 12.5 * font,
                 Margin = new Thickness(7, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center,
             };
             pillLabel.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Text");
@@ -304,30 +316,74 @@ public partial class DashboardPage : UserControl
                 (pill, Border.BorderBrushProperty, "Ob.Text"),
                 (pillLabel, TextBlock.ForegroundProperty, "Ob.Text"));
             pill.MouseLeftButtonUp += (_, e) => { e.Handled = true; voice.Open(); };
-            pill.Loaded += (_, _) =>
-            {
-                Canvas.SetLeft(pill, pillX + 80 - pill.ActualWidth);
-                Canvas.SetTop(pill, BranchY - pill.ActualHeight / 2);
-            };
-            Canvas.SetLeft(pill, pillX - 120);
-            Canvas.SetTop(pill, BranchY - 13);
+            pill.Loaded += (_, _) => place(pill);
+            Panel.SetZIndex(pill, 1); // above the step columns, which are click targets too
+            place(pill);
             c.Children.Add(pill);
+        }
 
-            for (var i = 0; i < nodes.Length; i++) c.Children.Add(PathStep(nodes[i], X(i), first: i == 0));
+        Canvas DrawRow(double width)
+        {
+            var c = new Canvas { Width = width, Height = PathHeight };
+            double X(int i) => StepWidth / 2 + i * (width - StepWidth / 2 - 150) / (nodes.Length - 1);
+            Wire(c, new Point(X(0), PathY), new Point(X(nodes.Length - 1), PathY));
+            for (var i = 0; i < nodes.Length - 1; i++) Arrow(c, (X(i) + X(i + 1)) / 2, PathY, 1, 0); // halfway to the next node
+
+            // Read aloud: down from the insert node and back under the AI node
+            var last = X(nodes.Length - 1);
+            var pillRight = X(nodes.Length - 2) + 80;
+            ReadAloud(c, 1, new[] { new Point(last + NodeRadius, PathY), new Point(last + 90, PathY), new Point(last + 90, BranchY), new Point(pillRight, BranchY) },
+                pill =>
+                {
+                    Canvas.SetLeft(pill, pillRight - (pill.ActualWidth > 0 ? pill.ActualWidth : 200));
+                    Canvas.SetTop(pill, BranchY - (pill.ActualHeight > 0 ? pill.ActualHeight : 26) / 2);
+                });
+
+            for (var i = 0; i < nodes.Length; i++) c.Children.Add(PathStep(nodes[i], X(i), PathY, first: i == 0, StepWidth, 1));
             return c;
         }
 
-        // Redrawn to the cell's own proportions whenever it resizes, so the scaled drawing fills it edge to edge instead
-        // of shrinking to fit a fixed shape (and its text with it).
-        var view = new Viewbox { Stretch = Stretch.Uniform, Child = Draw(_pathWidth) };
+        // Two levels: mic → speech, a turn down the right, then AI → insert going back left; read aloud below insert.
+        Canvas DrawTwoLevels()
+        {
+            var c = new Canvas { Width = TwoWidth, Height = TwoHeight };
+            Wire(c, new Point(TwoCol0 + NodeRadius, TwoY1), new Point(TwoCol1 - NodeRadius, TwoY1));
+            Arrow(c, (TwoCol0 + TwoCol1) / 2, TwoY1, 1, 0);
+            Wire(c, new Point(TwoCol1 + NodeRadius, TwoY1), new Point(TwoTurnX, TwoY1), new Point(TwoTurnX, TwoY2), new Point(TwoCol1 + NodeRadius, TwoY2));
+            Arrow(c, TwoTurnX, (TwoY1 + TwoY2) / 2, 0, 1);
+            Wire(c, new Point(TwoCol1 - NodeRadius, TwoY2), new Point(TwoCol0 + NodeRadius, TwoY2));
+            Arrow(c, (TwoCol0 + TwoCol1) / 2, TwoY2, -1, 0);
+
+            var pillY = TwoY2 + 108;
+            ReadAloud(c, TwoFont, new[] { new Point(TwoCol0 - NodeRadius, TwoY2), new Point(20, TwoY2), new Point(20, pillY), new Point(40, pillY) },
+                pill =>
+                {
+                    Canvas.SetLeft(pill, 40);
+                    Canvas.SetTop(pill, pillY - (pill.ActualHeight > 0 ? pill.ActualHeight : 30) / 2);
+                });
+
+            c.Children.Add(PathStep(nodes[0], TwoCol0, TwoY1, first: true, TwoColWidth, TwoFont));
+            c.Children.Add(PathStep(nodes[1], TwoCol1, TwoY1, first: false, TwoColWidth, TwoFont));
+            c.Children.Add(PathStep(nodes[2], TwoCol1, TwoY2, first: false, TwoColWidth, TwoFont));
+            c.Children.Add(PathStep(nodes[3], TwoCol0, TwoY2, first: false, TwoColWidth, TwoFont));
+            return c;
+        }
+
+        Canvas Draw(bool twoLevels, double width) => twoLevels && nodes.Length == 4 ? DrawTwoLevels() : DrawRow(width);
+
+        // Redrawn to the cell's own shape whenever it resizes, so the scaled drawing fills it instead of shrinking to fit
+        // a fixed shape (and its text with it).
+        var view = new Viewbox { Stretch = Stretch.Uniform, Child = Draw(_pathTwoLevel, _pathWidth) };
         var host = new Border { Background = Brushes.Transparent, Child = view };
         host.SizeChanged += (_, e) =>
         {
             if (e.NewSize.Width < 1 || e.NewSize.Height < 1) return;
-            var width = Math.Clamp(PathHeight * e.NewSize.Width / e.NewSize.Height, 4 * StepWidth, 2400);
-            if (view.Child is Canvas { Width: var drawn } && Math.Abs(drawn - width) < 1) return;
-            _pathWidth = width; // the next refresh starts at this shape, so it doesn't flicker
-            view.Child = Draw(width);
+            var (twoLevels, width) = PathLayout(e.NewSize);
+            var same = twoLevels == _pathTwoLevel && (twoLevels || Math.Abs(width - _pathWidth) < 1);
+            // The next refresh starts from this layout, so it doesn't flicker.
+            _pathTwoLevel = twoLevels;
+            _pathWidth = width;
+            if (!same || view.Child is not Canvas) view.Child = Draw(twoLevels, width);
         };
 
         root.Children.Add(host);
@@ -358,20 +414,20 @@ public partial class DashboardPage : UserControl
         else target.SetValue(property, restore);
     }
 
-    /// <summary>A node of the signal path with its label above and its model and status below; the whole column is the
-    /// click target.</summary>
-    FrameworkElement PathStep(PathNode n, double x, bool first)
+    /// <summary>A node of the signal path at (<paramref name="x"/>, <paramref name="y"/>), its label above and its model
+    /// and status below, in a column <paramref name="w"/> wide with its text <paramref name="font"/> times the usual
+    /// size; the whole column is the click target.</summary>
+    FrameworkElement PathStep(PathNode n, double x, double y, bool first, double w, double font)
     {
-        const double w = StepWidth;
-        var col = new Grid { Width = w, Height = PathHeight - 16, Background = Brushes.Transparent, Cursor = Cursors.Hand, ToolTip = $"{n.Title}: {n.Status}" };
+        var col = new Grid { Width = w, Height = 108 + 46 * font, Background = Brushes.Transparent, Cursor = Cursors.Hand, ToolTip = $"{n.Title}: {n.Status}" };
         var label = new TextBlock
         {
-            Text = n.Label, FontFamily = Mono, FontSize = 15, FontWeight = FontWeights.Bold, HorizontalAlignment = HorizontalAlignment.Center,
-            Margin = new Thickness(0, PathY - 64, 0, 0), VerticalAlignment = VerticalAlignment.Top,
+            Text = n.Label, FontFamily = Mono, FontSize = 15 * font, FontWeight = FontWeights.Bold, HorizontalAlignment = HorizontalAlignment.Center,
+            Margin = new Thickness(0, 6 - 4 * (font - 1), 0, 0), VerticalAlignment = VerticalAlignment.Top,
         };
         col.Children.Add(label);
 
-        var dial = new Canvas { Width = 80, Height = 80, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, PathY - 40, 0, 0) };
+        var dial = new Canvas { Width = 80, Height = 80, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 30, 0, 0) };
         for (var k = 0; k < 12; k++)
         {
             var a = k / 12.0 * Math.PI * 2;
@@ -400,16 +456,16 @@ public partial class DashboardPage : UserControl
         dial.Children.Add(core);
         col.Children.Add(dial);
 
-        var below = new StackPanel { VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, PathY + 38, 0, 0) };
+        var below = new StackPanel { VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 108, 0, 0) };
         var title = new TextBlock
         {
-            Text = n.Title.ToUpper(), FontFamily = Mono, FontSize = 13.5, HorizontalAlignment = HorizontalAlignment.Center,
+            Text = n.Title.ToUpper(), FontFamily = Mono, FontSize = 13.5 * font, HorizontalAlignment = HorizontalAlignment.Center,
             TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = w - 8,
         };
         below.Children.Add(title);
         var status = new TextBlock
         {
-            Text = n.Status.ToUpper(), FontFamily = Mono, FontSize = 12, HorizontalAlignment = HorizontalAlignment.Center,
+            Text = n.Status.ToUpper(), FontFamily = Mono, FontSize = 12 * font, HorizontalAlignment = HorizontalAlignment.Center,
             TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = w - 8, Margin = new Thickness(0, 2, 0, 0),
         };
         status.SetResourceReference(TextBlock.ForegroundProperty, n.State == Dot.Busy ? "Ob.Accent" : "Ob.Muted");
@@ -423,8 +479,9 @@ public partial class DashboardPage : UserControl
             (title, TextBlock.ForegroundProperty, "Ob.Text"),
             (ring, Shape.StrokeProperty, n.State == Dot.Busy ? "Ob.Accent" : "Ob.Text"));
         col.MouseLeftButtonUp += (_, e) => { e.Handled = true; n.Open(); };
+        // The dial's centre sits at (x, y): 70 below the column's top.
         Canvas.SetLeft(col, x - w / 2);
-        Canvas.SetTop(col, 0);
+        Canvas.SetTop(col, y - 70);
         return col;
     }
 
