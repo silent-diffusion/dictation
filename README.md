@@ -94,10 +94,11 @@ The folder keeps its pre-rename name so updates from Local Dictation 1.x keep yo
 
 The sidebar has seven sections: **Dashboard** (one screen, no scrolling: the signal path, drawn as a diagram of what's active and loaded
 (microphone → speech model → AI model and profile → insert, with read aloud branching off; each node's status, the hotkey and
-the unload countdown), meters for words dictated and words read aloud today, turnaround,
-AI edits kept, history and the speech model's unload countdown; the signal path grows with the window. Every step and meter opens its page when
-clicked (History, Analytics, the profiles, Microphone, Model unloading); the big number on the speech-model meter unloads that model
-right away, and the big number on the History meter copies the last dictation's AI edit (or its text, without one) and says so. The figures come from daily counts in
+the unload countdown), meters for words dictated and words read aloud today, turnaround and the speech model's unload
+countdown, and at the right, two meters wide, **History**: the last dictation's AI edit (or its text, without one) with
+*Copy*, and *Insert transcription into the last app* at the bottom; its title opens History. The signal path grows with
+the window. Every step and meter opens its page when clicked (Analytics, the profiles, Microphone, Model unloading); the
+big number on the speech-model meter unloads that model right away. The figures come from daily counts in
 `data\usage.json` (dictations, words, seconds spoken, turnaround, AI edits kept, readings and dictations per app name; never
 any text, audio or window titles), so they survive History being trimmed, cleared or off), **Extended Notes**, **Speech to text** (profiles), **Read aloud**, **History**, **Analytics** and **Settings**. Beside the
 signal path, the dashboard has an **Extended Notes** cell: a title and a text box you can always type in (the live
