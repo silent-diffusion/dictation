@@ -242,6 +242,7 @@ class Session:
         self.partial_task = None
         self.last_decoded = 0
         self.live = False
+        self.drop_phantoms = False
         self.committed = 0          # samples already committed (live mode)
         self.committed_text = ""
         self.dropped = 0            # live mode: committed samples already let go of (long sessions stay small)
@@ -353,6 +354,8 @@ class Session:
         self.language = msg.get("language") or None
         self.prompt = msg.get("prompt") or None
         self.live = bool(msg.get("live"))
+        # Extended Notes transcribing a recording again, part by part: Whisper's made-up phrases dropped as in live mode.
+        self.drop_phantoms = bool(msg.get("drop_phantoms"))
         self.committed, self.committed_text, self.dropped = 0, "", 0
         self.active = True
         self.partial_task = asyncio.create_task(self._live_loop() if self.live else self._partial_loop())
@@ -378,8 +381,8 @@ class Session:
         elif len(audio) >= SAMPLE_RATE * 0.3:
             async with self.gpu_lock:
                 text = await loop.run_in_executor(
-                    None, self.engine.transcribe, audio, True, self.language, self.prompt, self.live)
-            if self.live:
+                    None, self.engine.transcribe, audio, True, self.language, self.prompt, self.live or self.drop_phantoms)
+            if self.live or self.drop_phantoms:
                 text = collapse_repeats(text)
             tail = text if self.live else ""
         secs = (len(audio) + self.dropped) / SAMPLE_RATE

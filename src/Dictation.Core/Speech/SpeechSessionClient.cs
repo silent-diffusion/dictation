@@ -37,16 +37,20 @@ public sealed class SpeechSessionClient : IAsyncDisposable
         await _ready.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
     }
 
-    /// <summary>Begin a live session (finished pieces every few seconds).</summary>
-    public void Start(string? language, string? prompt)
+    bool _live = true;
+
+    /// <summary>Begin a session: live (finished pieces every few seconds, the rest when it stops), or not (everything
+    /// sent is decoded at once when it stops). <paramref name="dropPhantoms"/>: leave out Whisper's made-up phrases.</summary>
+    public void Start(string? language, string? prompt, bool live = true, bool dropPhantoms = false)
     {
-        var msg = JsonSerializer.Serialize(new { type = "start", language, prompt, live = true });
+        _live = live;
+        var msg = JsonSerializer.Serialize(new { type = "start", language, prompt, live, drop_phantoms = dropPhantoms });
         _outbox.Writer.TryWrite((false, Encoding.UTF8.GetBytes(msg)));
     }
 
     public void Send(byte[] pcm16kMono) { if (_connected) _outbox.Writer.TryWrite((true, pcm16kMono)); }
 
-    /// <summary>Finish: decodes the speech after the last piece and returns that text (the tail).</summary>
+    /// <summary>Finish: decodes the speech after the last piece and returns that text (the tail); not live, all of it.</summary>
     public async Task<string> StopAsync(TimeSpan timeout)
     {
         var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -101,7 +105,8 @@ public sealed class SpeechSessionClient : IAsyncDisposable
                 if (text.Trim().Length > 0) Committed?.Invoke(text);
                 break;
             case "final":
-                _final?.TrySetResult(root.TryGetProperty("tail", out var tail) ? tail.GetString() ?? "" : "");
+                // Live: the speech after the last piece; otherwise the whole text.
+                _final?.TrySetResult(root.TryGetProperty(_live ? "tail" : "text", out var tail) ? tail.GetString() ?? "" : "");
                 break;
             case "error":
                 Log.Warn("Extended notes speech: " + root.GetProperty("message").GetString());

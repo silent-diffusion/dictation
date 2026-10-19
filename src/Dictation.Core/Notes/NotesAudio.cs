@@ -106,6 +106,15 @@ public static class NotesAudio
         }
     }
 
+    /// <summary>The recording's pauses, without making a copy (for cutting it into parts).</summary>
+    public static List<AudioPause> Pauses(string wavPath)
+    {
+        var levels = new List<float>();
+        using var reader = new WaveFileReader(wavPath);
+        Scan(reader.ToSampleProvider(), (int)(reader.WaveFormat.SampleRate * WindowSeconds) * reader.WaveFormat.Channels, (_, rms) => levels.Add(Db(rms)));
+        return FindSilences(levels, WindowSeconds);
+    }
+
     public static PreparedAudio Prepare(string wavPath, string outPath)
     {
         var peaks = new List<float>();

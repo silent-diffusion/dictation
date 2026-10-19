@@ -66,7 +66,12 @@ public partial class NotesPage : UserControl
         Action? models = () => ((App)Application.Current).ShowPage("Models");
         var open = new Action?[] { () => ((App)Application.Current).ShowPage("Audio"), models, models, models };
         _landingPipe = new NotesPipeline(open);
-        _sessionPipe = new NotesPipeline(open);
+        // In a session, a step redoes itself (and what follows it) from the recording.
+        _sessionPipe = new NotesPipeline(new Action?[]
+        {
+            () => Redo(NotesRedo.Step.Transcribe), () => Redo(NotesRedo.Step.Transcribe),
+            () => Redo(NotesRedo.Step.Format), () => Redo(NotesRedo.Step.Summary),
+        });
         LandingPipeline.Content = _landingPipe.View;
         SessionPipeline.Content = _sessionPipe.View;
         AttachJumpEdited();
@@ -873,9 +878,85 @@ public partial class NotesPage : UserControl
     void UpdatePipelines()
     {
         if (!IsLoaded) return;
-        var steps = PipelineSteps();
-        if (Landing.IsVisible) _landingPipe.Update(steps);
-        if (SessionView.IsVisible) _sessionPipe.Update(steps);
+        if (Landing.IsVisible) _landingPipe.Update(PipelineSteps());
+        if (SessionView.IsVisible) _sessionPipe.Update(_session != null && !Live ? RedoSteps(_session) : PipelineSteps());
+    }
+
+    /// <summary>A finished session's pipeline: each step redoes itself when clicked; while one is redone, it is lit with
+    /// how far it got, and the steps after it wait for it.</summary>
+    IReadOnlyList<NotesPipeline.Step> RedoSteps(NoteSession s)
+    {
+        const NotesPipeline.State ready = NotesPipeline.State.Ready, busy = NotesPipeline.State.Busy;
+        var sv = App.Services;
+        var source = s.Source switch { NotesSource.Computer => "Computer audio", NotesSource.Both => "Mic + computer", _ => "Mic" };
+        var speechModel = sv.Speech.LoadedModel ?? SpeechModels.For(sv.Profiles.Active, sv.Settings.Current.Asr);
+        if (_recorder.Redoing == null && DateTime.Now - _idleModelAt > TimeSpan.FromSeconds(30)) ResolveIdleModel();
+        var ai = _recorder.Model ?? _idleModel ?? "…";
+        var redo = ReferenceEquals(_recorder.RedoSession, s) ? _recorder.Redoing : null;
+        var other = _recorder.Redoing != null && redo == null;
+        var progress = _recorder.RedoProgress.Length > 0 ? " · " + _recorder.RedoProgress : "";
+        const string again = "Click to transcribe this session again from its recording (then format and sum it up again)";
+        NotesPipeline.Step Make(string label, string title, NotesRedo.Step step, string idle, string doing, string hint)
+        {
+            if (redo == step) return new(label, title, doing + progress, busy, "Click to stop");
+            if (redo != null && step > redo) return new(label, title, "waiting", ready);
+            if (redo != null) return new(label, title, "done", ready);
+            return new(label, title, other ? "another session is being redone" : idle, ready, hint);
+        }
+        return new[]
+        {
+            Make("LISTEN", source, NotesRedo.Step.Transcribe, File.Exists(s.AudioPath) ? $"recorded · {Length(s.Seconds)}" : "no recording", "reading again", again),
+            Make("SPEECH", speechModel, NotesRedo.Step.Transcribe, "click to transcribe again", "transcribing again", again),
+            Make("FORMAT", ai, NotesRedo.Step.Format, "click to format again", "formatting again",
+                "Click to format the whole transcript again (then sum it up again)"),
+            Make("SUMMARY", ai, NotesRedo.Step.Summary, "click to sum up again", "summing up again", "Click to write the summary again"),
+        };
+    }
+
+    /// <summary>A click on a step of a finished session's pipeline: confirm, then redo it (or stop the one running).</summary>
+    async void Redo(NotesRedo.Step step)
+    {
+        if (_session is not { } s) return;
+        if (Live)
+        {
+            MessageBox.Show("A step can be redone once the session has stopped.", AppInfo.Name, MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        if (_recorder.Redoing != null)
+        {
+            if (ReferenceEquals(_recorder.RedoSession, s) &&
+                MessageBox.Show("Stop redoing? What is done so far stays; a transcript is only replaced once it is whole.", AppInfo.Name,
+                    MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
+                _recorder.CancelRedo();
+            return;
+        }
+        if (step == NotesRedo.Step.Transcribe && !File.Exists(s.AudioPath))
+        {
+            MessageBox.Show("This session has no recording to transcribe again.", AppInfo.Name, MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        var minutes = Math.Max(1, (int)Math.Ceiling(s.Seconds / 60));
+        var question = step switch
+        {
+            NotesRedo.Step.Transcribe =>
+                $"Transcribe this session again from its recording? The transcript, the formatted text and the summary are made again, " +
+                $"so edits and notes typed into them are replaced (your markers are kept). For {minutes} minutes of recording this takes a few minutes.",
+            NotesRedo.Step.Format =>
+                "Format the whole transcript again? The formatted text and the summary are made again, so edits typed into them are replaced. " +
+                "The transcript stays as it is.",
+            _ => "Write the summary again? Edits typed into the summary are replaced.",
+        };
+        if (MessageBox.Show(question, AppInfo.Name, MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+        try { await _recorder.RedoAsync(s, step); }
+        catch (OperationCanceledException) { Log.Info("Extended notes: redo stopped"); }
+        catch (UserFacingException ex) { MessageBox.Show(ex.Message, AppInfo.Name, MessageBoxButton.OK, MessageBoxImage.Warning); }
+        catch (Exception ex)
+        {
+            Log.Error("Extended notes: redoing a step failed", ex);
+            MessageBox.Show("Redoing that step failed. See the log for details.", AppInfo.Name, MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        _editedDirty = true;
+        Refresh();
     }
 
     IReadOnlyList<NotesPipeline.Step> PipelineSteps()

@@ -13,6 +13,9 @@ public sealed class NoteAnchor
 {
     public int Offset { get; set; }
     public double Seconds { get; set; }
+    /// <summary>Where the piece begins in <see cref="NoteSession.Heard"/> (transcript anchors; null in sessions from
+    /// before 5.5 and for markers), so a part of the transcript can be lined up with what was heard.</summary>
+    public int? HeardOffset { get; set; }
 }
 
 /// <summary>A moment the listener marked (the marker hotkey or the Mark button) while the session recorded. The
@@ -119,9 +122,10 @@ public sealed class NoteSession
     {
         text = text.Trim();
         if (text.Length == 0) return;
+        var heardAt = Heard.Length == 0 ? 0 : Heard.Length + 1;
         Heard = Join(Heard, text);
         var sep = Transcript.Length == 0 || char.IsWhiteSpace(Transcript[^1]) ? "" : " ";
-        TranscriptAnchors.Add(new NoteAnchor { Offset = Transcript.Length + sep.Length, Seconds = seconds });
+        TranscriptAnchors.Add(new NoteAnchor { Offset = Transcript.Length + sep.Length, Seconds = seconds, HeardOffset = heardAt });
         Transcript += sep + text;
         Changed?.Invoke(NoteDoc.Transcript, source);
     }
@@ -144,12 +148,61 @@ public sealed class NoteSession
     /// way, stay where they are.</summary>
     public void AddMarker(double seconds, object? source = null)
     {
-        var label = MarkerLabel(seconds);
+        AppendMarkerLine(seconds);
+        Markers.Add(new NoteMarker { Seconds = seconds, Label = MarkerLabel(seconds) });
+        Changed?.Invoke(NoteDoc.Transcript, source);
+    }
+
+    void AppendMarkerLine(double seconds)
+    {
         var sep = Transcript.Length == 0 || Transcript.EndsWith('\n') ? "" : "\n";
         TranscriptAnchors.Add(new NoteAnchor { Offset = Transcript.Length + sep.Length, Seconds = seconds });
-        Transcript += sep + MarkerFlag + " " + label + "\n";
-        Markers.Add(new NoteMarker { Seconds = seconds, Label = label });
+        Transcript += sep + MarkerFlag + " " + MarkerLabel(seconds) + "\n";
+    }
+
+    // ===== redoing a step (a finished session) =====
+
+    /// <summary>A new transcript, from the recording transcribed again: these pieces, with the markers back in place by
+    /// their time. What was formatted and summed up goes with the old one.</summary>
+    public void ReplaceTranscript(IReadOnlyList<(double Seconds, string Text)> pieces, object? source = null)
+    {
+        Heard = "";
+        Transcript = "";
+        TranscriptAnchors.Clear();
+        ResetFormatting(source);
+        var markers = Markers.OrderBy(m => m.Seconds).ToList();
+        var next = 0;
+        foreach (var (seconds, text) in pieces.OrderBy(p => p.Seconds))
+        {
+            while (next < markers.Count && markers[next].Seconds <= seconds) AppendMarkerLine(markers[next++].Seconds);
+            AppendHeard(text, seconds);
+        }
+        while (next < markers.Count) AppendMarkerLine(markers[next++].Seconds);
         Changed?.Invoke(NoteDoc.Transcript, source);
+    }
+
+    /// <summary>Formatting from scratch: the Formatted text, its steps and the summary go.</summary>
+    public void ResetFormatting(object? source = null)
+    {
+        Formatted = "";
+        Chunks.Clear();
+        FormattedAnchors.Clear();
+        FormattedThrough = 0;
+        HeardFormattedThrough = 0;
+        _pendingFormatEnd = -1;
+        ResetSummary(source);
+        Changed?.Invoke(NoteDoc.Formatted, source);
+    }
+
+    /// <summary>Summing up from scratch.</summary>
+    public void ResetSummary(object? source = null)
+    {
+        Digests.Clear();
+        SummarizedThrough = 0;
+        Summary = "";
+        SummaryByAi = "";
+        _pendingSummaryEnd = -1;
+        Changed?.Invoke(NoteDoc.Summary, source);
     }
 
     /// <summary>The user edited a text (in a text box): keep the anchors and the formatting marks in step.</summary>
@@ -255,6 +308,38 @@ public sealed class NoteSession
         _pendingFormatEnd = Transcript.Length;
         var heard = Heard[Math.Min(HeardFormattedThrough, Heard.Length)..];
         HeardFormattedThrough = Heard.Length;
+        var seconds = TranscriptAnchors.Where(a => a.Offset >= from).Select(a => a.Seconds).DefaultIfEmpty(Seconds).First();
+        return (heard.Trim(), sent.Trim(), seconds);
+    }
+
+    /// <summary>Like <see cref="BeginFormat"/>, but at most about <paramref name="maxWords"/> words, ending where a
+    /// piece ends (at the end of a sentence if one does), for formatting a whole transcript again part by part.</summary>
+    public (string Heard, string Sent, double Seconds)? BeginFormatPart(int maxWords)
+    {
+        var from = Math.Min(FormattedThrough, Transcript.Length);
+        if (Transcript[from..].Trim().Length == 0) return null;
+        NoteAnchor? any = null, sentence = null, first = null;
+        foreach (var a in TranscriptAnchors.Where(a => a.Offset > from && a.Offset <= Transcript.Length).OrderBy(a => a.Offset))
+        {
+            var words = Words(Transcript[from..a.Offset]);
+            if (words == 0) continue;
+            first ??= a;
+            if (words > maxWords) break;
+            any = a;
+            var before = Transcript[..a.Offset].TrimEnd();
+            var lastLine = before[(before.LastIndexOf('\n') + 1)..].TrimStart();
+            if (before.Length > 0 && (before[^1] is '.' or '!' or '?' or '"' or '”' || lastLine.StartsWith(MarkerFlag, StringComparison.Ordinal))) sentence = a;
+        }
+        // All the rest when it fits; otherwise to a sentence's end, else a piece's; a first piece longer than the limit whole.
+        var cut = Words(Transcript[from..]) <= maxWords ? null : sentence ?? any ?? first;
+        var end = cut?.Offset ?? Transcript.Length;
+        var sent = Transcript[from..end];
+        _pendingFormatEnd = end;
+        var heardFrom = Math.Min(HeardFormattedThrough, Heard.Length);
+        string heard;
+        if (cut == null) { heard = Heard[heardFrom..]; HeardFormattedThrough = Heard.Length; }
+        else if (cut.HeardOffset is { } h && h >= heardFrom && h <= Heard.Length) { heard = Heard[heardFrom..h]; HeardFormattedThrough = h; }
+        else heard = sent; // a session from before heard offsets: the part counts as heard
         var seconds = TranscriptAnchors.Where(a => a.Offset >= from).Select(a => a.Seconds).DefaultIfEmpty(Seconds).First();
         return (heard.Trim(), sent.Trim(), seconds);
     }

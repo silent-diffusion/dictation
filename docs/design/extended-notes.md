@@ -129,3 +129,15 @@ is what dictation already loads, so the two no longer swap models in memory.
   source) → SPEECH (the speech model) → FORMAT and SUMMARY (the AI model). A step lights in the accent, its core pulsing,
   while it works: recording, transcribing, formatting now, summing up now; between steps it shows what is waiting (words
   to format, how far to the next summary section). Each step opens its settings page.
+
+## Redoing a step (5.5.0)
+
+In a finished session, a click on a step of the pipeline at the top redoes it, and every step after it, after a
+confirmation (edits typed into what is redone are replaced). LISTEN and SPEECH transcribe the recording again: cut into
+parts of about 15 s in its pauses (`NotesRedo.PlanParts`), each decoded whole on a connection of its own with Whisper's
+made-up phrases dropped (`drop_phantoms`), the end of the part before as the prompt; the transcript is replaced only
+once every part is done (`NoteSession.ReplaceTranscript`, markers put back by their time), then formatted and summed up
+again. FORMAT formats the whole transcript again about 110 words at a time, ending at piece ends
+(`NoteSession.BeginFormatPart`; transcript anchors now record where their piece begins in Heard), then sums up again.
+SUMMARY sums up again from the formatted text. The step being redone is lit with its progress; a click on it offers to
+stop. Not while a session records, and a new session can't start during a redo.

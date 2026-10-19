@@ -18,7 +18,8 @@ sealed class NotesPipeline
     public enum State { Ready, Busy, Off }
 
     /// <summary>A step: its label, its model or source, what it is doing, and its state.</summary>
-    public readonly record struct Step(string Label, string Title, string Status, State State);
+    /// <param name="Hint">What a click does, for the tooltip.</param>
+    public readonly record struct Step(string Label, string Title, string Status, State State, string? Hint = null);
 
     const double Width = 1000, Height = 118, Y = 46, Radius = 15, ColumnWidth = 250;
 
@@ -91,7 +92,7 @@ sealed class NotesPipeline
             p.Label.Text = s.Label;
             p.Title.Text = s.Title.ToUpperInvariant();
             p.Status.Text = s.Status.ToUpperInvariant();
-            ((FrameworkElement)p.Label.Parent).ToolTip = $"{s.Label}: {s.Title} · {s.Status}";
+            ((FrameworkElement)p.Label.Parent).ToolTip = $"{s.Label}: {s.Title} · {s.Status}" + (s.Hint != null ? "\n" + s.Hint : "");
             if (p.Shown == s.State) continue;
             p.Shown = s.State;
             var key = s.State == State.Busy ? "Ob.Accent" : "Ob.Text";

@@ -90,6 +90,8 @@ public sealed class NotesRecorder
     public async Task StartAsync(NotesSource source)
     {
         if (IsRecording) return;
+        if (Redoing != null)
+            throw new UserFacingException("A session is being redone. Wait for it to finish, or stop it from its pipeline, then start a new one.");
         var s = _store.Create(source);
         Interlocked.Exchange(ref _samples, 0);
         _lastPieceSeconds = 0;
@@ -259,10 +261,10 @@ public sealed class NotesRecorder
         if (words >= FormatWords || words >= 15 && DateTime.Now - _lastFormat >= FormatEvery) _ = FormatAsync(s);
     }
 
-    async Task FormatAsync(NoteSession s)
+    async Task FormatAsync(NoteSession s, int? maxWords = null)
     {
         if (_formatting) return;
-        var take = s.BeginFormat();
+        var take = maxWords is { } most ? s.BeginFormatPart(most) : s.BeginFormat();
         if (take == null) return;
         _formatting = true;
         var (heard, sent, seconds) = take.Value;
@@ -290,6 +292,128 @@ public sealed class NotesRecorder
             _formatting = false;
             _dirty = true;
         }
+    }
+
+    // ===== redoing a finished session's steps =====
+
+    /// <summary>The step being redone (null when none is), for which session, and how far it got.</summary>
+    public NotesRedo.Step? Redoing { get; private set; }
+    public NoteSession? RedoSession { get; private set; }
+    public string RedoProgress { get; private set; } = "";
+    CancellationTokenSource? _redo;
+
+    /// <summary>Stop the redo running now; what is done so far stays (a transcript is only replaced once it is whole).</summary>
+    public void CancelRedo() => _redo?.Cancel();
+
+    /// <summary>
+    /// Redo a step of a finished session, and every step after it: transcribe the recording again (then format and sum
+    /// up again), format the whole transcript again (then sum up again), or sum up again. Not while a session records.
+    /// Saved as it goes; cancelled by <see cref="CancelRedo"/>.
+    /// </summary>
+    public async Task RedoAsync(NoteSession s, NotesRedo.Step step)
+    {
+        if (IsRecording) throw new UserFacingException("A step can be redone once the session recording now has stopped.");
+        if (Redoing != null) throw new UserFacingException("Another step is being redone; wait for it to finish.");
+        _redo = new CancellationTokenSource();
+        var ct = _redo.Token;
+        RedoSession = s;
+        _model = null;
+        Log.Info($"Extended notes: redoing {step} for {s.Id}");
+        try
+        {
+            if (step == NotesRedo.Step.Transcribe)
+            {
+                Redoing = NotesRedo.Step.Transcribe;
+                StateChanged?.Invoke();
+                await RetranscribeAsync(s, ct);
+            }
+            if (step <= NotesRedo.Step.Format)
+            {
+                Redoing = NotesRedo.Step.Format;
+                RedoProgress = "";
+                StateChanged?.Invoke();
+                s.ResetFormatting(this);
+                _store.Save(s);
+                var parts = 0;
+                while (s.Transcript[Math.Min(s.FormattedThrough, s.Transcript.Length)..].Trim().Length > 0)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    RedoProgress = $"{s.FormattedThrough * 100 / Math.Max(1, s.Transcript.Length)}%";
+                    var before = s.FormattedThrough;
+                    await FormatAsync(s, FormatWords);
+                    if (s.FormattedThrough <= before) break; // nothing taken: don't loop
+                    if (++parts % 5 == 0) _store.Save(s);
+                }
+            }
+            ct.ThrowIfCancellationRequested();
+            Redoing = NotesRedo.Step.Summary;
+            RedoProgress = "";
+            StateChanged?.Invoke();
+            s.ResetSummary(this);
+            await SummarizeAsync(s, final: true);
+            Log.Info($"Extended notes: redid {step} for {s.Id}");
+        }
+        finally
+        {
+            Redoing = null;
+            RedoSession = null;
+            RedoProgress = "";
+            _redo = null;
+            _store.Save(s);
+            StateChanged?.Invoke();
+        }
+    }
+
+    /// <summary>The recording, transcribed again part by part (cut in its pauses), on a connection of its own. The
+    /// transcript is replaced only once every part is done, so a cancelled redo changes nothing.</summary>
+    async Task RetranscribeAsync(NoteSession s, CancellationToken ct)
+    {
+        if (!File.Exists(s.AudioPath)) throw new UserFacingException("This session has no recording to transcribe again.");
+        RedoProgress = "reading the recording";
+        var pauses = await Task.Run(() => NotesAudio.Pauses(s.AudioPath), ct);
+        using var reader = new WaveFileReader(s.AudioPath);
+        var format = reader.WaveFormat;
+        if (format.Encoding != WaveFormatEncoding.Pcm || format.BitsPerSample != 16 || format.Channels != 1 || format.SampleRate != MicCapture.SampleRate)
+            throw new UserFacingException("This recording isn't in the format the speech engine takes (16 kHz mono).");
+        var parts = NotesRedo.PlanParts(reader.TotalTime.TotalSeconds, pauses);
+        if (!_asr.IsReady) await _asr.InitializeAsync(_speechModel(), ct);
+        await using var client = new SpeechSessionClient();
+        await client.ConnectAsync(_settings.Current.Asr.Port, ct);
+        var asr = _settings.Current.Asr;
+        var pieces = new List<(double Seconds, string Text)>();
+        var previous = "";
+        var buffer = new byte[32000];
+        for (var i = 0; i < parts.Count; i++)
+        {
+            ct.ThrowIfCancellationRequested();
+            RedoProgress = $"{i * 100 / parts.Count}%";
+            var (start, end) = parts[i];
+            // The end of the part before keeps names and casing consistent (loops left out, as live).
+            var tail = NotesFormat.CollapseRepeats(previous);
+            tail = tail.Length > 200 ? tail[^200..] : tail;
+            var prompt = string.Join(" ", new[] { asr.VocabularyHint, tail }.Where(p => !string.IsNullOrWhiteSpace(p)));
+            client.Start(asr.Language, prompt.Length > 0 ? prompt : null, live: false, dropPhantoms: true);
+            reader.Position = (long)(start * format.SampleRate) * format.BlockAlign;
+            var left = (long)((end - start) * format.SampleRate) * format.BlockAlign;
+            while (left > 0)
+            {
+                var n = reader.Read(buffer, 0, (int)Math.Min(buffer.Length, left));
+                if (n <= 0) break;
+                client.Send(buffer[..n]);
+                left -= n;
+            }
+            var text = (await client.StopAsync(TimeSpan.FromSeconds(Math.Max(60, (end - start) * 4)))).Trim();
+            if (!client.IsConnected) throw new UserFacingException("The speech engine stopped while transcribing again; nothing was changed.");
+            if (text.Length > 0)
+            {
+                pieces.Add((start, text));
+                previous = text;
+            }
+        }
+        ct.ThrowIfCancellationRequested();
+        s.ReplaceTranscript(pieces, this);
+        _store.Save(s);
+        Log.Info($"Extended notes: transcribed {s.Id} again in {parts.Count} parts");
     }
 
     /// <summary>Every line is a marker's (or blank).</summary>
