@@ -124,8 +124,8 @@ public partial class App : Application
         try
         {
             var c = Services.Controller;
-            // Never while Extended Notes records: it listens through the same speech engine.
-            if (c.State == DictationState.Idle && !Services.Notes.IsRecording && Services.Speech.IsReady && DateTime.Now - c.LastActivity > idle)
+            // Never while Extended Notes records or redoes a step: it uses the same speech engine.
+            if (c.State == DictationState.Idle && !Services.Notes.NeedsModels && Services.Speech.IsReady && DateTime.Now - c.LastActivity > idle)
                 await Services.Speech.UnloadAsync();
             if (_reader is { IsBusy: false } && Services.Tts.IsRunning && DateTime.Now - Services.Tts.LastUsed > idle)
                 await Services.Tts.UnloadAsync();
@@ -170,13 +170,13 @@ public partial class App : Application
         var skipped = new List<string>();
         if (speech)
         {
-            if (s.Notes.IsRecording) skipped.Add("the speech model (Extended Notes is recording)");
+            if (s.Notes.NeedsModels) skipped.Add("the speech model (Extended Notes is using it)");
             else if (s.Controller.State != DictationState.Idle) skipped.Add("the speech model (dictating)");
             else if (s.Speech.IsReady) { await s.Speech.UnloadAsync(); done.Add("speech model"); }
         }
         if (ai)
         {
-            if (s.Notes.IsRecording) skipped.Add("the AI model (Extended Notes is recording)");
+            if (s.Notes.NeedsModels) skipped.Add("the AI model (Extended Notes is using it)");
             else if (s.Controller.State != DictationState.Idle) skipped.Add("the AI model (dictating)");
             else if (await s.Llm.UnloadAllAsync() > 0) done.Add("AI model");
         }
@@ -202,7 +202,7 @@ public partial class App : Application
     public void UnloadSoonIfImmediate()
     {
         if (Services.Settings.Current.UnloadAfterMinutes != Dictation.Core.Settings.AppSettings.UnloadImmediately) return;
-        if (Services.Notes.IsRecording) return; // the session still needs both models
+        if (Services.Notes.NeedsModels) return; // a session recording, or a step being redone, still needs both models
         if (_unloadSoon == null)
         {
             _unloadSoon = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };

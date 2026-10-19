@@ -65,6 +65,9 @@ public sealed class NotesRecorder
     /// <summary>The session recording now; null when none is.</summary>
     public NoteSession? Current { get; private set; }
     public bool IsRecording => Current != null;
+    /// <summary>Recording, or redoing a step: either way the speech engine and the AI model are in use, so nothing
+    /// may unload them.</summary>
+    public bool NeedsModels => Current != null || Redoing != null;
     /// <summary>Paused by the user (Pause), not by a dictation.</summary>
     public bool UserPaused => _userPaused;
     /// <summary>Not recording right now: paused by the user, or while a dictation runs.</summary>
@@ -377,43 +380,73 @@ public sealed class NotesRecorder
             throw new UserFacingException("This recording isn't in the format the speech engine takes (16 kHz mono).");
         var parts = NotesRedo.PlanParts(reader.TotalTime.TotalSeconds, pauses);
         if (!_asr.IsReady) await _asr.InitializeAsync(_speechModel(), ct);
-        await using var client = new SpeechSessionClient();
-        await client.ConnectAsync(_settings.Current.Asr.Port, ct);
+        var client = await ConnectForRedoAsync(ct);
         var asr = _settings.Current.Asr;
         var pieces = new List<(double Seconds, string Text)>();
         var previous = "";
         var buffer = new byte[32000];
-        for (var i = 0; i < parts.Count; i++)
+        try
         {
-            ct.ThrowIfCancellationRequested();
-            RedoProgress = $"{i * 100 / parts.Count}%";
-            var (start, end) = parts[i];
-            // The end of the part before keeps names and casing consistent (loops left out, as live).
-            var tail = NotesFormat.CollapseRepeats(previous);
-            tail = tail.Length > 200 ? tail[^200..] : tail;
-            var prompt = string.Join(" ", new[] { asr.VocabularyHint, tail }.Where(p => !string.IsNullOrWhiteSpace(p)));
-            client.Start(asr.Language, prompt.Length > 0 ? prompt : null, live: false, dropPhantoms: true);
-            reader.Position = (long)(start * format.SampleRate) * format.BlockAlign;
-            var left = (long)((end - start) * format.SampleRate) * format.BlockAlign;
-            while (left > 0)
+            for (var i = 0; i < parts.Count; i++)
             {
-                var n = reader.Read(buffer, 0, (int)Math.Min(buffer.Length, left));
-                if (n <= 0) break;
-                client.Send(buffer[..n]);
-                left -= n;
-            }
-            var text = (await client.StopAsync(TimeSpan.FromSeconds(Math.Max(60, (end - start) * 4)))).Trim();
-            if (!client.IsConnected) throw new UserFacingException("The speech engine stopped while transcribing again; nothing was changed.");
-            if (text.Length > 0)
-            {
-                pieces.Add((start, text));
-                previous = text;
+                ct.ThrowIfCancellationRequested();
+                RedoProgress = $"{i * 100 / parts.Count}%";
+                var (start, end) = parts[i];
+                // The end of the part before keeps names and casing consistent (loops left out, as live).
+                var tail = NotesFormat.CollapseRepeats(previous);
+                tail = tail.Length > 200 ? tail[^200..] : tail;
+                var prompt = string.Join(" ", new[] { asr.VocabularyHint, tail }.Where(p => !string.IsNullOrWhiteSpace(p)));
+                string? text = null;
+                for (var attempt = 0; text == null; attempt++)
+                {
+                    if (!client.IsConnected)
+                    {
+                        // The engine went away (it restarted, or was unloaded): bring it back and do this part again.
+                        if (attempt > 2) throw new UserFacingException("The speech engine kept stopping while transcribing again; nothing was changed.");
+                        Log.Warn($"Extended notes: the speech engine stopped at part {i + 1} of {parts.Count}; reconnecting");
+                        await client.DisposeAsync();
+                        await Task.Delay(TimeSpan.FromSeconds(2 * attempt), ct);
+                        client = await ConnectForRedoAsync(ct);
+                    }
+                    client.Start(asr.Language, prompt.Length > 0 ? prompt : null, live: false, dropPhantoms: true);
+                    reader.Position = (long)(start * format.SampleRate) * format.BlockAlign;
+                    var left = (long)((end - start) * format.SampleRate) * format.BlockAlign;
+                    while (left > 0)
+                    {
+                        var n = reader.Read(buffer, 0, (int)Math.Min(buffer.Length, left));
+                        if (n <= 0) break;
+                        client.Send(buffer[..n]);
+                        left -= n;
+                    }
+                    var heard = (await client.StopAsync(TimeSpan.FromSeconds(Math.Max(60, (end - start) * 4)))).Trim();
+                    if (client.IsConnected) text = heard;
+                }
+                if (text.Length > 0)
+                {
+                    pieces.Add((start, text));
+                    previous = text;
+                }
             }
         }
+        finally { await client.DisposeAsync(); }
         ct.ThrowIfCancellationRequested();
         s.ReplaceTranscript(pieces, this);
         _store.Save(s);
         Log.Info($"Extended notes: transcribed {s.Id} again in {parts.Count} parts");
+    }
+
+    /// <summary>A connection of the redo's own to the speech engine, loading it first if it isn't running.</summary>
+    async Task<SpeechSessionClient> ConnectForRedoAsync(CancellationToken ct)
+    {
+        if (!_asr.IsReady) await _asr.InitializeAsync(_speechModel(), ct);
+        var client = new SpeechSessionClient();
+        try { await client.ConnectAsync(_settings.Current.Asr.Port, ct); }
+        catch
+        {
+            await client.DisposeAsync();
+            throw;
+        }
+        return client;
     }
 
     /// <summary>Every line is a marker's (or blank).</summary>
