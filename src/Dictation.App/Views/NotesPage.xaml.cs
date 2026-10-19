@@ -60,6 +60,7 @@ public partial class NotesPage : UserControl
         _views[NoteDoc.Transcript] = new MarkdownPresenter(TranscriptBox, 14.5);
         _views[NoteDoc.Formatted] = new MarkdownPresenter(FormattedBox, 14.5);
         _views[NoteDoc.Summary] = new MarkdownPresenter(SummaryBox, 14.5);
+        foreach (var (doc, view) in _views) view.Shown = !_edited && _tab == doc; // the tab was chosen before the views existed
         AttachJump(TranscriptBox, NoteDoc.Transcript);
         AttachJump(FormattedBox, NoteDoc.Formatted);
         AttachJump(SummaryBox, NoteDoc.Summary);

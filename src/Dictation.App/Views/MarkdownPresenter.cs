@@ -30,6 +30,8 @@ sealed class MarkdownPresenter
     {
         _box = box;
         _fontSize = fontSize;
+        // A box that is hidden (another tab is showing) starts with its view hidden too: views share the same place.
+        _shown = box.Visibility == Visibility.Visible;
         Viewer = new RichTextBox
         {
             IsReadOnly = true, IsDocumentEnabled = false, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
