@@ -122,8 +122,12 @@ is what dictation already loads, so the two no longer swap models in memory.
 - The Transcript, Formatted and Summary tabs, and the dashboard's notes box, show their text rendered as Markdown
   (`NotesMarkdown`, `MarkdownPresenter`): headings, bullet and numbered lists, quotes, code, rules, **bold**, *italic*,
   `code`, links as their text, ⚑ markers in the accent, and a short label at the start of a line ("Main idea:") in bold.
-  Line breaks are kept as typed. A click turns the view back into the plain text box with the cursor at that place;
-  typing while reading goes on at the end; leaving the box shows the rendered text again. Right-click on the rendered text
+  Line breaks are kept as typed. Editing is a line at a time, in place (5.6.0): a click opens the line clicked as plain
+  text, its Markdown syntax showing, while every other line stays rendered; when the cursor leaves the line (a click
+  elsewhere, the arrow keys at its ends, Enter, Escape, or leaving the box) it is rendered again. Enter splits the line
+  and carries a list on (Enter on an empty item ends it); Backspace at the start and Delete at the end join lines; a
+  paste of several lines goes in as it is. The plain text box stays hidden as the source of truth. Typing while
+  reading goes on at the end. Right-click on the rendered text
   finds the same place in the plain text (each run carries its source offset), so the jump to the recording still works.
 - At the top of Extended Notes (the landing page and a session), a signal path of its own (`NotesPipeline`): LISTEN (the
   source) → SPEECH (the speech model) → FORMAT and SUMMARY (the AI model). A step lights in the accent, its core pulsing,
