@@ -35,6 +35,7 @@ public partial class DashboardPage : UserControl
         Loaded += async (_, _) => { AttachNotes(); _timer.Start(); await RefreshAsync(); };
         Unloaded += (_, _) => { _timer.Stop(); DetachNotes(); };
         BuildNotesCell();
+        BuildHistoryCell();
         Build();
     }
 
@@ -43,22 +44,6 @@ public partial class DashboardPage : UserControl
     {
         await App.UnloadNowAsync(speech: true, ai: false, voice: false);
         Build(); // the dial now reads "off"
-    }
-
-    /// <summary>The History dial's number: copy the last dictation's AI edit (what the AI wanted to insert); without one, what went in.</summary>
-    void CopyLastDictation()
-    {
-        var last = App.Services.History.Entries.OrderByDescending(x => x.Time).FirstOrDefault();
-        var text = last == null ? "" : last.AiOutput is { Length: > 0 } ai ? ai : last.Final.Length > 0 ? last.Final : last.Transcript;
-        if (text.Length == 0) { ShowToast("Nothing to copy yet: dictate something first."); return; }
-        try { Clipboard.SetText(text); }
-        catch (System.Runtime.InteropServices.ExternalException)
-        {
-            ShowToast("The clipboard is busy; try again in a moment.");
-            return;
-        }
-        var words = text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
-        ShowToast($"Copied the last dictation's {(last!.AiOutput is { Length: > 0 } ? "AI edit" : "text")} ({words:N0} word{(words == 1 ? "" : "s")}, {last.When}) to the clipboard.");
     }
 
     readonly DispatcherTimer _toastTimer = new() { Interval = TimeSpan.FromSeconds(2.5) };
@@ -82,10 +67,8 @@ public partial class DashboardPage : UserControl
     /// <summary>Where each dial leads when clicked: the page that explains or changes what it shows.</summary>
     static string DialPage(string label) => label switch
     {
-        "History" => "History",
         "Dictated today" or "Turnaround" => "Analytics", // the same figures over time
         "Read aloud today" => "ReadAloud",
-        "AI edits kept" => "SpeechToText", // the profiles, whose instructions and safety net decide what is kept
         "Speech model" => "Unloading",
         _ => "Dashboard",
     };
@@ -183,13 +166,6 @@ public partial class DashboardPage : UserControl
             "Turnaround", turnCount == 0 ? "no runs yet with these models loaded"
                 : $"last {turnCount} · {speechModel}{(aiUsed.Length > 0 ? " + " + aiUsed : ", no AI")}, models already loaded", fan: true));
 
-        var kept = usage.AiKeptShare(now);
-        Dials.Children.Add(Dial(kept ?? 0, kept is { } k ? $"{k:P0}" : "—", "AI edits kept", "last 30 days"));
-
-        Dials.Children.Add(Dial(s.HistoryLimit > 0 ? entries.Count / (double)s.HistoryLimit : entries.Count > 0 ? 1 : 0,
-            entries.Count.ToString(), "History", s.HistoryLimit > 0 ? $"of {s.HistoryLimit} kept" : "all kept, no limit",
-            entries.Count > 0 ? CopyLastDictation : null, "Click to copy the last dictation's AI edit"));
-
         if (dictating) Dials.Children.Add(Dial(1, "busy", "Speech model", "dictating now", accent: true));
         else if (!sv.Speech.IsReady) Dials.Children.Add(Dial(0, "off", "Speech model", "loads when you dictate"));
         else if (s.UnloadAfterMinutes <= 0)
@@ -203,6 +179,9 @@ public partial class DashboardPage : UserControl
             Dials.Children.Add(Dial(left / limit, left.TotalMinutes >= 1 ? $"{Math.Ceiling(left.TotalMinutes):0} min" : "<1 min",
                 "Speech model", "until it unloads", UnloadSpeechNow, "Click to unload the speech model now", accent: true));
         }
+
+        // Two meters wide at the right: the last dictation (History), with copy and insert.
+        UpdateHistoryCell(entries, s.HistoryLimit);
 
         // The charts (words per day, output by app) moved to Analytics in 4.2.
     }

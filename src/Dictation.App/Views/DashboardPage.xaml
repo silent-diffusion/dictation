@@ -62,15 +62,22 @@
                     <Border x:Name="NotesCell" Grid.Column="1" Style="{StaticResource DashCellStatic}" Padding="12,10,12,12"/>
                 </Grid>
 
-                <!-- Meters -->
-                <UniformGrid x:Name="Dials" Grid.Row="1" Columns="6" Rows="1"/>
+                <!-- Meters, four of them, and at the right, two meters wide, the last dictation (History) -->
+                <Grid Grid.Row="1">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="4*"/>
+                        <ColumnDefinition Width="2*" MinWidth="240"/>
+                    </Grid.ColumnDefinitions>
+                    <UniformGrid x:Name="Dials" Columns="4" Rows="1"/>
+                    <Border x:Name="HistoryCell" Grid.Column="1" Style="{StaticResource DashCellStatic}" Padding="12,10,12,10"/>
+                </Grid>
                 <!-- The charts (words per day, output by app) live in Analytics since 4.2. -->
             </Grid>
         </Border>
 
         <TextBlock x:Name="Footer" Grid.Row="2" Style="{StaticResource MonoLabel}" Margin="0,8,0,0" TextTrimming="CharacterEllipsis"/>
 
-        <!-- A short note, e.g. after the History number copies the last dictation -->
+        <!-- A short note, e.g. when inserting the last transcription fails -->
         <Border x:Name="Toast" Grid.Row="0" Grid.RowSpan="3" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,34"
                 Padding="18,8" CornerRadius="17" Background="{DynamicResource Ob.Strong}" Opacity="0" IsHitTestVisible="False">
             <TextBlock x:Name="ToastText" FontFamily="{StaticResource Ob.Mono}" FontSize="12" Foreground="{DynamicResource Ob.OnStrong}"
