@@ -59,31 +59,43 @@ public partial class DashboardPage
         DockPanel.SetDock(head, Dock.Top);
         root.Children.Add(head);
 
-        // Bottom: COPY and the insert button, and where the text went
-        var bottom = new DockPanel { Margin = new Thickness(0, 8, 0, 0) };
-        _historyInsert = new Button
-        {
-            Content = "INSERT TRANSCRIPTION INTO THE LAST APP", Style = (Style)FindResource("QuietButton"), FontSize = 10,
-            Padding = new Thickness(12, 4, 12, 4),
-            ToolTip = "Insert the last dictation's transcription (the words as heard) into the app it went to; this window stays in front",
-        };
-        _historyInsert.Click += async (_, _) => await InsertLastTranscriptionAsync();
-        DockPanel.SetDock(_historyInsert, Dock.Left);
-        bottom.Children.Add(_historyInsert);
-        _historyCopy = new Button { Content = "COPY", Style = (Style)FindResource("QuietButton"), FontSize = 10, Padding = new Thickness(12, 4, 12, 4),
-            Margin = new Thickness(8, 0, 0, 0), ToolTip = "Copy the text shown" };
-        _historyCopy.Click += (_, _) => CopyShown();
-        DockPanel.SetDock(_historyCopy, Dock.Left);
-        bottom.Children.Add(_historyCopy);
-        _historyDone = new TextBlock { FontFamily = mono, FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 0, 0),
-            TextTrimming = TextTrimming.CharacterEllipsis, Opacity = 0 };
+        // Bottom: where the text went (for a moment), then the insert button and COPY. COPY always keeps its place at the
+        // right; the insert button takes what is left, its label shortening (then trimming) when the cell is narrow.
+        var bottom = new Grid { Margin = new Thickness(0, 8, 0, 0) };
+        bottom.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        bottom.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        bottom.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        bottom.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        _historyDone = new TextBlock { FontFamily = mono, FontSize = 11, Margin = new Thickness(0, 0, 0, 6),
+            TextTrimming = TextTrimming.CharacterEllipsis, Opacity = 0, Visibility = Visibility.Collapsed };
         _historyDone.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Accent");
+        Grid.SetColumnSpan(_historyDone, 2);
         bottom.Children.Add(_historyDone);
         _historyDoneTimer.Tick += (_, _) =>
         {
             _historyDoneTimer.Stop();
-            _historyDone.BeginAnimation(OpacityProperty, new DoubleAnimation(0, TimeSpan.FromMilliseconds(400)));
+            var fade = new DoubleAnimation(0, TimeSpan.FromMilliseconds(400));
+            fade.Completed += (_, _) => { if (!_historyDoneTimer.IsEnabled) _historyDone.Visibility = Visibility.Collapsed; };
+            _historyDone.BeginAnimation(OpacityProperty, fade);
         };
+        _historyInsertLabel = new TextBlock { Text = InsertLabels[0], TextTrimming = TextTrimming.CharacterEllipsis };
+        _historyInsert = new Button
+        {
+            Content = _historyInsertLabel, Style = (Style)FindResource("QuietButton"), FontSize = 10,
+            Padding = new Thickness(12, 4, 12, 4), HorizontalAlignment = HorizontalAlignment.Left, MinWidth = 0,
+            ToolTip = "Insert the last dictation's transcription (the words as heard) into the app it went to; this window stays in front",
+        };
+        System.Windows.Automation.AutomationProperties.SetName(_historyInsert, InsertLabels[0]);
+        _historyInsert.Click += async (_, _) => await InsertLastTranscriptionAsync();
+        Grid.SetRow(_historyInsert, 1);
+        bottom.Children.Add(_historyInsert);
+        _historyCopy = new Button { Content = "COPY", Style = (Style)FindResource("QuietButton"), FontSize = 10, Padding = new Thickness(12, 4, 12, 4),
+            Margin = new Thickness(8, 0, 0, 0), ToolTip = "Copy the text shown" };
+        _historyCopy.Click += (_, _) => CopyShown();
+        Grid.SetRow(_historyCopy, 1);
+        Grid.SetColumn(_historyCopy, 1);
+        bottom.Children.Add(_historyCopy);
+        bottom.SizeChanged += (_, _) => FitInsertLabel(bottom.ActualWidth);
         DockPanel.SetDock(bottom, Dock.Bottom);
         root.Children.Add(bottom);
 
@@ -96,6 +108,28 @@ public partial class DashboardPage
         root.Children.Add(_historyScroll);
 
         HistoryCell.Child = root;
+    }
+
+    /// <summary>The insert button's label, longest first: the longest that fits the cell is shown.</summary>
+    static readonly string[] InsertLabels = { "INSERT TRANSCRIPTION INTO THE LAST APP", "INSERT INTO LAST APP", "INSERT" };
+    TextBlock _historyInsertLabel = null!;
+
+    /// <summary>Picks the longest label that fits beside COPY in <paramref name="width"/>; the shortest trims if even it doesn't.</summary>
+    void FitInsertLabel(double width)
+    {
+        if (width <= 0) return;
+        var room = width - _historyCopy.ActualWidth - 8 - 26; // COPY, the gap, the insert button's padding and border
+        var probe = new TextBlock { FontFamily = _historyInsertLabel.FontFamily, FontSize = _historyInsert.FontSize, FontWeight = _historyInsert.FontWeight };
+        foreach (var label in InsertLabels)
+        {
+            probe.Text = label;
+            probe.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            if (probe.DesiredSize.Width <= room || label == InsertLabels[^1])
+            {
+                if (_historyInsertLabel.Text != label) _historyInsertLabel.Text = label;
+                return;
+            }
+        }
     }
 
     /// <summary>Brought up to date by <see cref="Build"/>: the count every time, the text only when it changed.</summary>
@@ -176,6 +210,7 @@ public partial class DashboardPage
     /// <summary>The note beside the buttons: where the text went, for a few seconds.</summary>
     void ShowHistoryDone(string message)
     {
+        _historyDone.Visibility = Visibility.Visible;
         _historyDone.Text = message;
         _historyDone.ToolTip = message;
         _historyDone.BeginAnimation(OpacityProperty, new DoubleAnimation(1, TimeSpan.FromMilliseconds(150)));
