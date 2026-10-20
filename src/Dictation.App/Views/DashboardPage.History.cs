@@ -99,10 +99,10 @@ public partial class DashboardPage
     }
 
     /// <summary>Brought up to date by <see cref="Build"/>: the count every time, the text only when it changed.</summary>
-    void UpdateHistoryCell(IReadOnlyList<HistoryEntry> entries, int limit)
+    void UpdateHistoryCell(IReadOnlyList<HistoryEntry> entries, int limit, int days)
     {
         _historyCount.Text = entries.Count.ToString("N0");
-        _historyOf.Text = limit > 0 ? $"OF {limit:N0} KEPT" : "KEPT, NO LIMIT";
+        _historyOf.Text = limit > 0 ? $"OF {limit:N0} KEPT" : days > 0 ? $"KEPT · LAST {HistoryStore.DaysLabel(days).ToUpperInvariant()}" : "KEPT, NO LIMIT";
         var last = entries.OrderByDescending(x => x.Time).FirstOrDefault();
         var text = Shown(last);
         if (ReferenceEquals(last, _historyShown) && text == _historyShownText) return;

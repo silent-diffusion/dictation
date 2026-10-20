@@ -188,8 +188,9 @@ window's edge.
   The **Try it** panel runs a profile on sample text and shows what it changed, so you can tune prompts without dictating; each of its three boxes has a COPY button.
   It follows the profile's switches: with *preview before inserting* the real preview appears, with *read aloud after
   inserting* the result is read to you.
-* **History**: the last 50 dictations (adjustable under *Settings › History*, up to *All of them*), kept in Oberton's data folder so they survive
-  updates. Each has its recording (play it, also at 2×), the Transcription, AI Edit and Inserted boxes (each can be copied),
+* **History**: the last 50 dictations, kept in Oberton's data folder so they survive updates. Under *Settings › History*
+  the text and the recordings each keep either the newest so many (10 to 500) or everything from a recent stretch (the
+  last 24 hours to the last year); the text can also be kept for good, and a recording never outlives its text. Each has its recording (play it, also at 2×), the Transcription, AI Edit and Inserted boxes (each can be copied),
   and the app and window it went into. List them newest first, or grouped by app (each app's group folds away).
 * **Extended Notes** (5.0): for very long sessions, a lecture or a meeting. Pick what to listen to (**Mic**, **Computer
   audio**, which is what the speakers play, for the other people on a video call, or **Both**) and press *Extended notes
@@ -215,13 +216,17 @@ window's edge.
   The speech engine is shared: notes open their own connection to the model already loaded, and no model unloads while a
   session records.
 * **Analytics**: how dictation goes over the last 7, 30 or 90 days, or everything: words dictated, speaking pace, time saved
-  against typing at 40 wpm, turnaround, AI edits kept and words read aloud; the **most corrected** words (what the recognizer
+  against typing at 40 wpm (click the speed to type your own), turnaround, AI edits kept, words read aloud and **time read
+  aloud** (how long the voice really spoke, at the speed each reading was at; counted from 5.10.0 on). Right under them,
+  **Output by app**: *All apps*, then the apps you dictate into with a browser's sites under them (Gmail, YouTube,
+  Outlook…, told from the tab's title; only the site's name is kept, and a title that names no site counts as *Other*).
+  Click an app or a site and the sections below show its words; the page always opens on *All apps*. Then the **most corrected** words (what the recognizer
   heard and what the AI wrote instead, each with *Add to vocabulary*, which adds it to the speech vocabulary hint so the
   recognizer expects it next time); your **most used words** and **common phrases**; the fillers the AI removed; words per day
-  (dictated and read aloud); when you dictate (weekday × hour); how much each profile changes your words; and the apps you
-  dictate into, with a browser's sites under it (Gmail, YouTube, Outlook…, told from the tab's title; only the site's name
-  is kept, and a title that names no site counts as *Other*; sites of dictations made before 5.9.0 are filled in from
-  History where it still has them). Words, phrases, corrections, fillers, hours and profiles come from the **word tally** in `data\words.json`:
+  (dictated and read aloud); when you dictate (weekday × hour); and how much each profile changes your words. Last,
+  **Extended Notes**, kept apart from dictation: sessions, time recorded, words captured (and per minute), your own typed
+  notes, markers, how much of the AI's formatting was kept, the longest sessions (click one to open it) and what they
+  listened to. Words per app are counted from 5.10.0 on, and from the dictations History still had then. Words, phrases, corrections, fillers, hours and profiles come from the **word tally** in `data\words.json`:
   counts only, never sentences, updated after every dictation and seeded once from History. It is on by default; turn it off
   or reset it under *Settings › History*.
 * **Models** (*Settings › Models*): every speech, AI and voice model as a list, showing whether it is downloaded, active and

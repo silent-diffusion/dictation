@@ -59,10 +59,15 @@ public sealed class HistoryStore
     public ObservableCollection<HistoryEntry> Entries { get; } = new();
     public static string Dir => Path.Combine(AppPaths.DataDir, "history");
 
+    readonly System.Windows.Threading.DispatcherTimer _hourly = new() { Interval = TimeSpan.FromHours(1) };
+
     public HistoryStore(SettingsService settings)
     {
         _settings = settings;
         Load();
+        // Kept by age: what has grown too old goes even when nothing new comes in.
+        _hourly.Tick += (_, _) => Prune();
+        _hourly.Start();
     }
 
     void Load()
@@ -97,13 +102,37 @@ public sealed class HistoryStore
         Prune();
     }
 
-    /// <summary>Drop the oldest entries beyond the limit (also when the limit is lowered).</summary>
+    /// <summary>Drop the entries beyond what is kept (by number or by age), and the recordings beyond what is kept of
+    /// them; also when either is lowered, and every hour (for keeping by age).</summary>
     public void Prune()
     {
-        var limit = _settings.Current.HistoryLimit;
-        if (limit <= 0) return; // keep them all
-        while (Entries.Count > limit) Delete(Entries[^1]);
+        var s = _settings.Current;
+        var now = DateTime.Now;
+        if (s.HistoryLimit > 0)
+            while (Entries.Count > s.HistoryLimit) Delete(Entries[^1]);
+        if (s.HistoryDays > 0)
+            foreach (var old in Entries.Where(e => e.Time < now.AddDays(-s.HistoryDays)).ToList()) Delete(old);
+        if (s.AudioLimit <= 0 && s.AudioDays <= 0) return; // recordings: as long as the text
+        for (var i = 0; i < Entries.Count; i++)
+        {
+            var e = Entries[i];
+            var drop = (s.AudioLimit > 0 && i >= s.AudioLimit) || (s.AudioDays > 0 && e.Time < now.AddDays(-s.AudioDays));
+            if (!drop || !e.HasAudio) continue;
+            try { File.Delete(e.AudioPath); }
+            catch (Exception ex) { Log.Warn("Could not delete a History recording: " + ex.Message); }
+        }
     }
+
+    /// <summary>What a keep setting says: "50 dictations", "2 weeks", or "" when everything is kept.</summary>
+    public static string KeepLabel(int count, int days) =>
+        count > 0 ? $"{count} dictation{(count == 1 ? "" : "s")}" : days > 0 ? DaysLabel(days) : "";
+
+    public static string DaysLabel(int days) => days switch
+    {
+        1 => "24 hours", 7 => "week", 14 => "2 weeks", 30 => "month", 90 => "3 months", 180 => "6 months", 365 => "year",
+        _ when days % 7 == 0 => $"{days / 7} weeks",
+        _ => $"{days} days",
+    };
 
     public void Delete(HistoryEntry entry)
     {

@@ -21,6 +21,20 @@ public sealed class TallyDay
     public int[] Hours { get; set; } = new int[24];
     /// <summary>Per profile name: how it was used and how much it edited.</summary>
     public Dictionary<string, ProfileTally> Profiles { get; set; } = new();
+    /// <summary>The same counts per app ("chrome") and per browser site ("chrome › Gmail", see <see cref="WordTally.AppKey"/>),
+    /// so Analytics can show one app's words. Counted from 5.10.0 on (and from what History still had then).</summary>
+    public Dictionary<string, TallyPart> Apps { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+}
+
+/// <summary>One app's (or site's) share of a day of the word tally.</summary>
+public sealed class TallyPart
+{
+    public int Dictations { get; set; }
+    public Dictionary<string, int> Words { get; set; } = new();
+    public Dictionary<string, int> Phrases { get; set; } = new();
+    public Dictionary<string, int> Corrections { get; set; } = new();
+    public Dictionary<string, int> Fillers { get; set; } = new();
+    public int[] Hours { get; set; } = new int[24];
 }
 
 public sealed class ProfileTally
@@ -59,6 +73,7 @@ public sealed class WordTally
 
     public sealed class FileData
     {
+        /// <summary>2: days have <see cref="TallyDay.Apps"/>.</summary>
         public int Version { get; set; } = 1;
         public List<TallyDay> Days { get; set; } = new();
     }
@@ -82,10 +97,33 @@ public sealed class WordTally
         if (loaded == null && seed != null && Enabled)
         {
             foreach (var e in seed.OrderBy(e => e.Time)) Count(e);
+            _data.Version = 2;
+            Compact();
+            Save();
+        }
+        else if (loaded != null && _data.Version < 2)
+        {
+            // Per-app counts are new: fill them in from the dictations History still has (the rest stay in the totals only).
+            if (Enabled)
+                foreach (var e in (seed ?? Enumerable.Empty<HistoryEntry>()).OrderBy(e => e.Time))
+                    if (_data.Days.FirstOrDefault(x => x.Day == e.Time.Date) is { } d) CountApps(d, e, Analyze(e.Transcript, e.AiOutput, e.Final));
+            _data.Version = 2;
             Compact();
             Save();
         }
     }
+
+    /// <summary>The key a dictation's app (and, in a browser, its site) is counted under: "chrome", "chrome › Gmail".</summary>
+    public static string AppKey(string app, string? site = null) => site == null ? app : app + " › " + site;
+
+    /// <summary>The tally of one app or site (<see cref="AppKey"/>), as days of its own (without profiles), so the
+    /// figures below work on it as on the whole.</summary>
+    public static List<TallyDay> ForApp(IEnumerable<TallyDay> days, string key) =>
+        days.Where(d => d.Apps.ContainsKey(key)).Select(d =>
+        {
+            var p = d.Apps[key];
+            return new TallyDay { Day = d.Day, Words = p.Words, Phrases = p.Phrases, Corrections = p.Corrections, Fillers = p.Fillers, Hours = p.Hours };
+        }).ToList();
 
     bool Enabled => _settings?.Current.KeepWordTally ?? true;
 
@@ -151,6 +189,25 @@ public sealed class WordTally
         p0.WordsHeard += item.WordsHeard;
         p0.WordsChanged += item.WordsChanged;
         if (e.FinishSeconds > 0) { p0.FinishSeconds += e.FinishSeconds; p0.FinishCount++; }
+        CountApps(d, e, item);
+    }
+
+    /// <summary>The dictation's words again, under its app, and under its site when it went into a browser.</summary>
+    static void CountApps(TallyDay d, HistoryEntry e, TallyItem item)
+    {
+        var keys = new List<string> { AppKey(e.AppName) };
+        if (WebSites.Site(e.App, e.WindowTitle) is { } site) keys.Add(AppKey(e.AppName, site));
+        foreach (var key in keys)
+        {
+            if (!d.Apps.TryGetValue(key, out var p)) d.Apps[key] = p = new TallyPart();
+            p.Dictations++;
+            foreach (var w in item.Words) Add(p.Words, w);
+            foreach (var x in item.Phrases) Add(p.Phrases, x);
+            foreach (var c in item.Corrections) Add(p.Corrections, c);
+            foreach (var f in item.Fillers) Add(p.Fillers, f);
+            if (p.Hours.Length < 24) p.Hours = new int[24];
+            p.Hours[Math.Clamp(e.Time.Hour, 0, 23)]++;
+        }
     }
 
     static void Add(Dictionary<string, int> d, string key) => d[key] = d.GetValueOrDefault(key) + 1;
@@ -173,8 +230,13 @@ public sealed class WordTally
         var cutoff = DateTime.Today.AddDays(-KeepDays);
         _data.Days.RemoveAll(x => x.Day < cutoff);
         foreach (var d in _data.Days.Where(x => x.Day < DateTime.Today))
+        {
             foreach (var once in d.Phrases.Where(kv => kv.Value < 2).Select(kv => kv.Key).ToList())
                 d.Phrases.Remove(once);
+            foreach (var p in d.Apps.Values)
+                foreach (var once in p.Phrases.Where(kv => kv.Value < 2).Select(kv => kv.Key).ToList())
+                    p.Phrases.Remove(once);
+        }
     }
 
     void Save()

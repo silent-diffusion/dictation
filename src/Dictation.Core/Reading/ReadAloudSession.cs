@@ -55,6 +55,10 @@ public sealed class ReadAloudSession : IWaveProvider, IDisposable
 
     public double Speed { get { lock (_lock) return _speed; } }
     public bool IsPaused { get { lock (_lock) return _paused; } }
+    /// <summary>How long the voice has spoken so far, in real time: the audio played (already at the reading's speed),
+    /// without pauses, waits or the lead-in.</summary>
+    public double SpokenSeconds { get { lock (_lock) return _spoken / (double)WaveFormat.SampleRate; } }
+    long _spoken;
     public bool IsEnded { get { lock (_lock) return _ended; } }
     /// <summary>Playing, but the current sentence's audio isn't ready yet.</summary>
     public bool IsBuffering { get { lock (_lock) return !_ended && _index < _audio.Length && _audio[_index] == null; } }
@@ -301,6 +305,7 @@ public sealed class ReadAloudSession : IWaveProvider, IDisposable
                     Buffer.BlockCopy(audio, _pos * 4, buffer, offset + written * 4, n * 4);
                     _pos += n;
                     written += n;
+                    _spoken += n;
                 }
                 if (_pos >= audio.Length)
                 {

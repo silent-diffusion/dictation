@@ -115,10 +115,18 @@ public sealed class AppSettings
     /// <summary>Keep recent dictations (text, and audio if <see cref="SaveHistoryAudio"/>) in data\history on this PC.
     /// That folder survives app updates.</summary>
     public bool KeepHistory { get; set; } = true;
-    /// <summary>How many recent dictations History keeps; older ones are deleted. 0 = keep them all.</summary>
+    /// <summary>How many recent dictations History keeps; older ones are deleted. 0 = no limit by number.</summary>
     public int HistoryLimit { get; set; } = 50;
+    /// <summary>Or how long History keeps them, in days (0 = no limit by age). One of the two is set, or neither (keep all).</summary>
+    public int HistoryDays { get; set; }
     /// <summary>Keep each dictation's recording (16 kHz WAV, about 2 MB a minute) so it can be played back.</summary>
     public bool SaveHistoryAudio { get; set; } = true;
+    /// <summary>How many of the newest dictations keep their recording, or for how many days (0 and 0 = as long as the
+    /// text). A recording never outlives its text.</summary>
+    public int AudioLimit { get; set; }
+    public int AudioDays { get; set; }
+    /// <summary>The typing speed Analytics' "time saved" is measured against, in words per minute.</summary>
+    public int TypingWpm { get; set; } = 40;
     public HistoryGrouping HistoryGrouping { get; set; } = HistoryGrouping.Chronological;
     /// <summary>Keep the Analytics word tally (data\words.json): counts of words, phrases, corrections and fillers per
     /// day, never sentences. On by default.</summary>
