@@ -86,6 +86,20 @@
             <TextBlock Style="{StaticResource Caption}" Margin="0,6,0,0"
                        Text="Oberton is ink on paper. The accent marks what is live or matters most right now: today's word count, the unload countdown, the word being read, words the AI added, and errors. Each accent has a version for light and for dark paper. Red is not offered: it means the microphone is recording."/>
 
+            <TextBlock Text="TEXT SIZE" Style="{StaticResource FieldLabel}" Margin="0,28,0,6"/>
+            <StackPanel Orientation="Horizontal">
+                <Button x:Name="ZoomOut" Content="A−" Style="{StaticResource QuietButton}" MinWidth="52" Click="ZoomOut_Click"
+                        ToolTip="Smaller (Ctrl+minus)" AutomationProperties.Name="Make the text smaller"/>
+                <TextBlock x:Name="ZoomValue" FontFamily="{StaticResource Ob.Mono}" FontSize="14" FontWeight="Bold" MinWidth="64"
+                           TextAlignment="Center" VerticalAlignment="Center" Margin="8,0"/>
+                <Button x:Name="ZoomIn" Content="A+" Style="{StaticResource QuietButton}" MinWidth="52" Click="ZoomIn_Click"
+                        ToolTip="Larger (Ctrl+plus)" AutomationProperties.Name="Make the text larger"/>
+                <Button Content="RESET" Style="{StaticResource QuietButton}" Margin="12,0,0,0" Click="ZoomReset_Click"
+                        ToolTip="Back to 100% (Ctrl+0)"/>
+            </StackPanel>
+            <TextBlock Style="{StaticResource Caption}" Margin="0,6,0,0"
+                       Text="Everything in this window grows or shrinks together, from 70% to 200%. Anywhere in the app: Ctrl and + makes it larger, Ctrl and − smaller, Ctrl and 0 puts it back to 100%."/>
+
             <TextBlock Text="JAPANESE WORDS" Style="{StaticResource FieldLabel}" Margin="0,28,0,6"/>
             <Border Style="{StaticResource Card}">
                 <CheckBox Style="{StaticResource Switch}" IsChecked="{Binding ShowJapanese}" Margin="18,4">

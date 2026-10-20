@@ -43,6 +43,23 @@ public partial class MainWindow : Window
                 SetSidebar(!_open);
                 e.Handled = true;
             }
+            else if (mods == System.Windows.Input.ModifierKeys.Control
+                     && e.Key is System.Windows.Input.Key.OemPlus or System.Windows.Input.Key.Add)
+            {
+                Zoom(+1);
+                e.Handled = true;
+            }
+            else if (mods == System.Windows.Input.ModifierKeys.Control
+                     && e.Key is System.Windows.Input.Key.OemMinus or System.Windows.Input.Key.Subtract)
+            {
+                Zoom(-1);
+                e.Handled = true;
+            }
+            else if (mods == System.Windows.Input.ModifierKeys.Control && e.Key is System.Windows.Input.Key.D0 or System.Windows.Input.Key.NumPad0)
+            {
+                SetZoom(1);
+                e.Handled = true;
+            }
             else if (e.SystemKey == System.Windows.Input.Key.Left && mods == System.Windows.Input.ModifierKeys.Alt)
             {
                 GoBack();
@@ -50,6 +67,54 @@ public partial class MainWindow : Window
             }
         };
         MouseDown += (_, e) => { if (e.ChangedButton == System.Windows.Input.MouseButton.XButton1) GoBack(); }; // the mouse's back button
+        ApplyZoom(s.Settings.Current.UiScale, show: false);
+        _zoomToast.Tick += (_, _) =>
+        {
+            _zoomToast.Stop();
+            ZoomToast.BeginAnimation(OpacityProperty, new System.Windows.Media.Animation.DoubleAnimation(0, TimeSpan.FromMilliseconds(300)));
+        };
+    }
+
+    // ===== text size: the whole window scaled, 70% to 200% in steps =====
+
+    static readonly double[] ZoomSteps = { 0.7, 0.8, 0.9, 1.0, 1.1, 1.25, 1.4, 1.5, 1.75, 2.0 };
+    public const double MinZoom = 0.7, MaxZoom = 2.0;
+    readonly System.Windows.Threading.DispatcherTimer _zoomToast = new() { Interval = TimeSpan.FromSeconds(1.2) };
+
+    /// <summary>Raised after the text size changes (the Appearance page shows it).</summary>
+    public static event Action<double>? ZoomChanged;
+
+    public double CurrentZoom => RootScale.ScaleX;
+
+    /// <summary>One step larger (+1) or smaller (-1).</summary>
+    public void Zoom(int direction)
+    {
+        var now = CurrentZoom;
+        var next = direction > 0
+            ? ZoomSteps.FirstOrDefault(z => z > now + 0.001, MaxZoom)
+            : ZoomSteps.LastOrDefault(z => z < now - 0.001, MinZoom);
+        SetZoom(next);
+    }
+
+    public void SetZoom(double scale)
+    {
+        ApplyZoom(scale, show: true);
+        var settings = App.Services.Settings;
+        if (Math.Abs(settings.Current.UiScale - CurrentZoom) < 0.001) return;
+        settings.Current.UiScale = CurrentZoom;
+        settings.Save();
+    }
+
+    void ApplyZoom(double scale, bool show)
+    {
+        scale = Math.Clamp(double.IsFinite(scale) && scale > 0 ? scale : 1, MinZoom, MaxZoom);
+        RootScale.ScaleX = RootScale.ScaleY = scale;
+        ZoomChanged?.Invoke(scale);
+        if (!show) return;
+        ZoomText.Text = $"TEXT SIZE {scale:P0}" + (Math.Abs(scale - 1) < 0.001 ? "" : "  //  CTRL+0 RESETS");
+        ZoomToast.BeginAnimation(OpacityProperty, new System.Windows.Media.Animation.DoubleAnimation(1, TimeSpan.FromMilliseconds(120)));
+        _zoomToast.Stop();
+        _zoomToast.Start();
     }
 
     // ===== sidebar: slides away to the left; the menu button morphs ☰ ⇄ ✕ =====

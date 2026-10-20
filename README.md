@@ -115,7 +115,8 @@ the page the whole window. **Back** (after the logo, or next to ☰ while the si
 back button) returns to the page you were on before, Settings sections included; it shows on every page but the dashboard.
 With the sidebar hidden, ☰ and Back sit in a fixed bar across the top of the window, so pages scroll underneath it
 instead of behind floating buttons, and pages with a side menu of their own (Settings, Speech to text) go right up to the
-window's edge.
+window's edge. **Ctrl and +** / **Ctrl and −** make everything in the window larger or smaller (70% to 200%), **Ctrl+0**
+puts it back to 100%; the size is remembered, and *Settings › Appearance* has the same under *Text size*.
 
 * **Hotkey** (default `Ctrl+Space`, change under *Hotkeys*): start/stop. `Ctrl+Alt+P` cycles profiles; `Ctrl+Alt+M` drops a
   marker while an Extended Notes session records.

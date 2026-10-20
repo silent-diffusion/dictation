@@ -47,7 +47,12 @@
     </Window.Resources>
     <!-- One layer, not columns: the sidebar slides off to the left (a transform) while the page's left margin shrinks to
          match, so hiding it is a slide rather than a jump. -->
-    <Grid TextElement.Foreground="{DynamicResource Ob.Text}">
+    <Grid>
+    <!-- Everything below is scaled together by the text size (Ctrl+plus, Ctrl+minus, Ctrl+0) -->
+    <Grid x:Name="Root" TextElement.Foreground="{DynamicResource Ob.Text}">
+        <Grid.LayoutTransform>
+            <ScaleTransform x:Name="RootScale" ScaleX="1" ScaleY="1"/>
+        </Grid.LayoutTransform>
         <!-- Content -->
         <ContentPresenter x:Name="Host" Margin="216,0,0,0"/>
 
@@ -187,5 +192,11 @@
                 </Button.RenderTransform>
             </Button>
         </StackPanel>
+    </Grid>
+        <!-- The text size, shown for a moment after it changes -->
+        <Border x:Name="ZoomToast" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,28" Padding="18,8"
+                CornerRadius="17" Background="{DynamicResource Ob.Strong}" Opacity="0" IsHitTestVisible="False" Panel.ZIndex="10">
+            <TextBlock x:Name="ZoomText" FontFamily="{StaticResource Ob.Mono}" FontSize="12" Foreground="{DynamicResource Ob.OnStrong}"/>
+        </Border>
     </Grid>
 </Window>
