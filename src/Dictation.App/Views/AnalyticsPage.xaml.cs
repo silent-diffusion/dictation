@@ -498,31 +498,49 @@ public partial class AnalyticsPage : UserControl
         var max = apps[0].Count;
         foreach (var (app, count) in apps)
         {
-            var g = new Grid { Height = 26 };
-            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0.8, GridUnitType.Star) });
-            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.6, GridUnitType.Star) });
-            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(44) });
-            g.Children.Add(new TextBlock { Text = app.ToUpper(), FontFamily = Mono, FontSize = 11, VerticalAlignment = VerticalAlignment.Center,
-                TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 0, 10, 0), ToolTip = app });
-            var filled = Math.Max(1, (int)Math.Round(count / (double)max * blocks));
-            var track = new UniformGrid { Rows = 1, Columns = blocks, Height = 10, VerticalAlignment = VerticalAlignment.Center,
-                ToolTip = $"{app}: {count:N0} dictation{(count == 1 ? "" : "s")}" };
-            for (var b = 0; b < blocks; b++)
-            {
-                var block = new Border { BorderThickness = new Thickness(1), Margin = new Thickness(0, 0, 2, 0) };
-                block.SetResourceReference(Border.BorderBrushProperty, b < filled ? "Ob.Strong" : "Ob.Divider");
-                if (b < filled) block.SetResourceReference(Border.BackgroundProperty, "Ob.Strong");
-                track.Children.Add(block);
-            }
-            Grid.SetColumn(track, 1);
-            g.Children.Add(track);
-            var n = new TextBlock { Text = count.ToString("N0"), FontFamily = Mono, FontSize = 11, VerticalAlignment = VerticalAlignment.Center,
-                HorizontalAlignment = HorizontalAlignment.Right };
-            Grid.SetColumn(n, 2);
-            g.Children.Add(n);
-            s.Children.Add(g);
+            s.Children.Add(AppRow(app.ToUpper(), app, count, max, blocks, false));
+            // A browser: its sites under it (the top four, the rest together), each with its own bar.
+            var sites = UsageStore.SitesOf(usage, app);
+            if (sites.Count == 0) continue;
+            var shown = sites.Take(4).ToList();
+            var rest = sites.Skip(4).Sum(x => x.Count) + Math.Max(0, count - sites.Sum(x => x.Count));
+            foreach (var (site, n) in shown) s.Children.Add(AppRow("↳ " + site.ToUpper(), $"{site} in {app}", n, max, blocks, true));
+            if (rest > 0 && shown.Count > 0)
+                s.Children.Add(AppRow("↳ OTHER", sites.Count > 4 ? $"Other sites in {app}" : $"{app}, from before sites were counted", rest, max, blocks, true));
         }
         return Cell(s);
+    }
+
+    /// <summary>One row of Output by app: the name, a bar of blocks, and the count. A site row is indented, its bar lighter.</summary>
+    FrameworkElement AppRow(string label, string app, int count, int max, int blocks, bool site)
+    {
+        var g = new Grid { Height = site ? 22 : 26 };
+        g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0.8, GridUnitType.Star) });
+        g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.6, GridUnitType.Star) });
+        g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(44) });
+        var name = new TextBlock { Text = label, FontFamily = Mono, FontSize = site ? 10 : 11, VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(site ? 12 : 0, 0, 10, 0), ToolTip = app };
+        if (site) name.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Muted");
+        g.Children.Add(name);
+        var filled = Math.Max(1, (int)Math.Round(count / (double)max * blocks));
+        var track = new UniformGrid { Rows = 1, Columns = blocks, Height = site ? 7 : 10, VerticalAlignment = VerticalAlignment.Center,
+            ToolTip = $"{app}: {count:N0} dictation{(count == 1 ? "" : "s")}" };
+        for (var b = 0; b < blocks; b++)
+        {
+            var block = new Border { BorderThickness = new Thickness(1), Margin = new Thickness(0, 0, 2, 0) };
+            var fill = site ? "Ob.Muted" : "Ob.Strong";
+            block.SetResourceReference(Border.BorderBrushProperty, b < filled ? fill : "Ob.Divider");
+            if (b < filled) block.SetResourceReference(Border.BackgroundProperty, fill);
+            track.Children.Add(block);
+        }
+        Grid.SetColumn(track, 1);
+        g.Children.Add(track);
+        var n = new TextBlock { Text = count.ToString("N0"), FontFamily = Mono, FontSize = site ? 10 : 11, VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Right };
+        if (site) n.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Muted");
+        Grid.SetColumn(n, 2);
+        g.Children.Add(n);
+        return g;
     }
 
     // ===== pieces =====

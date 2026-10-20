@@ -4,7 +4,8 @@ using Dictation.Core.Infrastructure;
 namespace Dictation.Core.Session;
 
 /// <summary>
-/// One day of use, as counts only: never any text, audio or window titles. The dashboard is drawn from these, so it
+/// One day of use, as counts only: never any text, audio or window titles (of a browser's tab, only the site's name).
+/// The dashboard is drawn from these, so it
 /// keeps its numbers when History is off, cleared, or trimmed to its limit.
 /// </summary>
 public sealed class UsageDay
@@ -25,6 +26,9 @@ public sealed class UsageDay
     public int WordsRead { get; set; }
     /// <summary>Dictations per app (process name, e.g. "slack"); no window titles.</summary>
     public Dictionary<string, int> Apps { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>For browsers: dictations per site, by browser ("chrome" → "Gmail" → 3). Only the site's name
+    /// (<see cref="WebSites"/>), never the tab's title.</summary>
+    public Dictionary<string, Dictionary<string, int>> Sites { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }
 
 /// <summary>One dictation's turnaround (stop to text in place) and the models behind it.</summary>
@@ -47,6 +51,7 @@ public sealed class UsageStore
 
     public sealed class FileData
     {
+        /// <summary>2: has <see cref="UsageDay.Sites"/> (filled in from History for older days when first loaded).</summary>
         public int Version { get; set; } = 1;
         public List<UsageDay> Days { get; set; } = new();
         /// <summary>The latest turnarounds with the models that produced them (no text), newest last.</summary>
@@ -92,9 +97,25 @@ public sealed class UsageStore
         if (loaded == null && seed != null)
         {
             foreach (var e in seed.OrderBy(e => e.Time)) Count(e);
+            _data.Version = 2;
+            Save();
+        }
+        else if (loaded != null && _data.Version < 2)
+        {
+            // Sites are new: fill them in for the dictations History still has (it keeps their window titles); older
+            // ones stay counted under the browser alone.
+            foreach (var e in seed ?? Enumerable.Empty<HistoryEntry>())
+                if (_data.Days.FirstOrDefault(x => x.Day == e.Time.Date) is { } d) CountSite(d, e);
+            _data.Version = 2;
             Save();
         }
     }
+
+    /// <summary>A browser's sites over these days, most dictated first.</summary>
+    public static IReadOnlyList<(string Site, int Count)> SitesOf(IEnumerable<UsageDay> days, string app) =>
+        days.Where(d => d.Sites.ContainsKey(app)).SelectMany(d => d.Sites[app])
+            .GroupBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase).Select(g => (g.Key, g.Sum(kv => kv.Value)))
+            .OrderByDescending(x => x.Item2).ThenBy(x => x.Key).ToList();
 
     public IReadOnlyList<UsageDay> Days => _data.Days;
 
@@ -119,6 +140,16 @@ public sealed class UsageStore
         }
         var app = e.AppName;
         d.Apps[app] = d.Apps.GetValueOrDefault(app) + 1;
+        CountSite(d, e);
+    }
+
+    /// <summary>A dictation into a browser: which site, by its name only.</summary>
+    static void CountSite(UsageDay d, HistoryEntry e)
+    {
+        if (WebSites.Site(e.App, e.WindowTitle) is not { } site) return;
+        if (!d.Sites.TryGetValue(e.AppName, out var sites))
+            d.Sites[e.AppName] = sites = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        sites[site] = sites.GetValueOrDefault(site) + 1;
     }
 
     /// <summary>Count a text read aloud.</summary>

@@ -51,7 +51,7 @@
 
             <TextBlock Text="DASHBOARD COUNTS" Style="{StaticResource FieldLabel}" Margin="0,24,0,6"/>
             <TextBlock Style="{StaticResource Caption}"
-                       Text="The dashboard keeps its own daily tallies in usage.json next to History: per day, how many dictations and words, seconds spoken, the turnaround, AI edits kept, texts read aloud, and dictations per app (the app's name only). Never any text, audio or window titles. They stay when you delete History or turn it off."/>
+                       Text="The dashboard keeps its own daily tallies in usage.json next to History: per day, how many dictations and words, seconds spoken, the turnaround, AI edits kept, texts read aloud, and dictations per app (the app's name only; in a browser, also the site's name, such as Gmail). Never any text, audio or window titles. They stay when you delete History or turn it off."/>
             <Button Content="RESET DASHBOARD COUNTS…" Style="{StaticResource QuietButton}" HorizontalAlignment="Left" Margin="0,8,0,0"
                     Click="ResetUsage_Click"/>
         </StackPanel>
