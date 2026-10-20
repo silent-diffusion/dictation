@@ -225,7 +225,7 @@ public partial class HistoryPage : UserControl
     async void InsertRaw_Click(object sender, RoutedEventArgs e)
     {
         if (Current == null) return;
-        try { await App.Services.Controller.InsertIntoLastTargetAsync(Current.Transcript); }
+        try { Info.Text = "✓ Inserted into " + await App.Services.Controller.InsertIntoLastTargetAsync(Current.Transcript) + "."; }
         catch (UserFacingException ex) { Info.Text = "⚠ " + ex.Message; }
     }
 }
