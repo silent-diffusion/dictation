@@ -104,8 +104,8 @@ it gets the words (loading the model included) until its edit is done, insert wh
 for at least 1.5 s. The signal path grows with the window. Every step and meter opens its page when clicked (Analytics,
 the profiles, Microphone, Model unloading); the big number on the speech-model meter unloads that model right away. The
 figures come from daily counts in
-`data\usage.json` (dictations, words, seconds spoken, turnaround, AI edits kept, readings and dictations per app name; never
-any text, audio or window titles), so they survive History being trimmed, cleared or off), **Extended Notes**, **Speech to text** (profiles), **Read aloud**, **History**, **Analytics** and **Settings**. Beside the
+`data\usage.json` (dictations, words, seconds spoken, turnaround, AI edits kept, readings and dictations per app name, and for a browser per site name
+such as Gmail or YouTube; never any text, audio or window titles), so they survive History being trimmed, cleared or off), **Extended Notes**, **Speech to text** (profiles), **Read aloud**, **History**, **Analytics** and **Settings**. Beside the
 signal path, the dashboard has an **Extended Notes** cell: a title and a text box you can always type in (the live
 transcript while a session records; between sessions a notepad, which the next session begins with); before a
 session its title's spot is an *Extended notes session* button (its red ring fills once it records; click the dot to stop),
@@ -219,7 +219,9 @@ window's edge.
   heard and what the AI wrote instead, each with *Add to vocabulary*, which adds it to the speech vocabulary hint so the
   recognizer expects it next time); your **most used words** and **common phrases**; the fillers the AI removed; words per day
   (dictated and read aloud); when you dictate (weekday × hour); how much each profile changes your words; and the apps you
-  dictate into. Words, phrases, corrections, fillers, hours and profiles come from the **word tally** in `data\words.json`:
+  dictate into, with a browser's sites under it (Gmail, YouTube, Outlook…, told from the tab's title; only the site's name
+  is kept, and a title that names no site counts as *Other*; sites of dictations made before 5.9.0 are filled in from
+  History where it still has them). Words, phrases, corrections, fillers, hours and profiles come from the **word tally** in `data\words.json`:
   counts only, never sentences, updated after every dictation and seeded once from History. It is on by default; turn it off
   or reset it under *Settings › History*.
 * **Models** (*Settings › Models*): every speech, AI and voice model as a list, showing whether it is downloaded, active and
