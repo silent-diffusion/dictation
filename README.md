@@ -169,8 +169,9 @@ window's edge.
   **Appearance** follows the Windows light/dark setting, or pick Light or Dark, plus an accent color (Cobalt, Teal,
   Signal green, Violet, Amber), each with a version for light and for dark paper. **Layout** places the dictation overlay and the Read aloud player
   (nine positions each) and sets their opacity.
-  **About** explains what Oberton is, how it works and its design language, with the meaning of every Japanese
-  word in the interface.
+  **About** explains what Oberton is, how a dictation works, how Extended Notes works (its four steps, how often each
+  runs, and a 30-minute session drawn on a time line), what Oberton keeps on your PC, and its design language, with the
+  meaning of every Japanese word in the interface.
 * **Design** (4.0): Oberton is drawn like a printed instrument panel: black ink on gray paper, 1px lines, capitalized
   monospaced labels and readouts, rings of dots and block bars for numbers; dark mode is the same sheet inverted. Color is
   a signal: the accent marks what is live or most important (today's count, a countdown, the word being read, words the AI

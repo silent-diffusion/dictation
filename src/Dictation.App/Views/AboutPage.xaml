@@ -93,7 +93,9 @@
                         <Run Text="Press"/>
                         <Run x:Name="DictateKey" Text="Ctrl+Space" Foreground="{DynamicResource Ob.Text}" FontFamily="{StaticResource Ob.Mono}"/><Run Text=", speak, and press it again: cleaned-up text appears at your cursor, in any app. Select text and press"/>
                         <Run x:Name="SpeakKey" Text="Ctrl+Shift+Space" Foreground="{DynamicResource Ob.Text}" FontFamily="{StaticResource Ob.Mono}"/>
-                        <Run Text="to hear it read in a natural voice."/>
+                        <Run Text="to hear it read in a natural voice. For a lecture or a meeting,"/>
+                        <Run Text="Extended Notes" Foreground="{DynamicResource Ob.Text}"/>
+                        <Run Text="listens for as long as it lasts and keeps a transcript, a formatted version and a running summary, with the recording."/>
                     </TextBlock>
                     <TextBlock Style="{StaticResource Body}">
                         <Run Text="The name is German for"/>
@@ -121,38 +123,38 @@
                             <Border Style="{StaticResource Step}" BorderThickness="0">
                                 <StackPanel>
                                     <TextBlock Text="01 LISTEN" Style="{StaticResource StepTitle}"/>
-                                    <TextBlock Style="{StaticResource StepText}" Text="Your microphone is recorded into memory only, never to disk."/>
+                                    <TextBlock Style="{StaticResource StepText}" Text="Your microphone is recorded while the hotkey is on. The recording is kept in History only if you choose to (Settings › History)."/>
                                 </StackPanel>
                             </Border>
                             <Border Style="{StaticResource Step}">
                                 <StackPanel>
                                     <TextBlock Text="02 TRANSCRIBE" Style="{StaticResource StepTitle}"/>
-                                    <TextBlock Style="{StaticResource StepText}" Text="Whisper turns speech into text, on your graphics card if you have one."/>
+                                    <TextBlock Style="{StaticResource StepText}" Text="Whisper turns speech into text as you speak, on your graphics card if you have one."/>
                                 </StackPanel>
                             </Border>
                             <Border Style="{StaticResource Step}">
                                 <StackPanel>
                                     <TextBlock Text="03 TIDY UP" Style="{StaticResource StepTitle}"/>
-                                    <TextBlock Style="{StaticResource StepText}" Text="A small local language model edits the text, following the active profile."/>
+                                    <TextBlock Style="{StaticResource StepText}" Text="A local language model (through Ollama) edits the text, following the active profile's instructions."/>
                                 </StackPanel>
                             </Border>
                             <Border Style="{StaticResource Step}">
                                 <StackPanel>
                                     <TextBlock Text="04 INSERT" Style="{StaticResource StepTitle}"/>
-                                    <TextBlock Style="{StaticResource StepText}" Text="The text is pasted at your cursor, and your clipboard is put back."/>
+                                    <TextBlock Style="{StaticResource StepText}" Text="Finished sentences can appear while you speak; at the end the final text replaces them at your cursor, and your clipboard is put back."/>
                                 </StackPanel>
                             </Border>
                         </UniformGrid>
                     </Border>
                     <TextBlock Style="{StaticResource Body}" Margin="0,12,0,0">
-                        <Run Text="If the AI fails or returns something implausible, your raw words are inserted instead, so a dictation is never lost. Read aloud uses Kokoro, Piper or the voices built into Windows."/>
+                        <Run Text="If the AI fails or its edit strays too far from what you said (the profile's safety net), your own words are inserted instead, so a dictation is never lost. The dashboard's signal path lights each step while it works. Read aloud uses Kokoro, Piper or the voices built into Windows."/>
                         <Run Text="Nothing leaves your PC" Foreground="{DynamicResource Ob.Text}"/>
-                        <Run Text="unless you turn on a cloud model with your own key; the only other network use is the first-run download and checking for updates."/>
+                        <Run Text="unless you turn off Keep everything offline and choose a cloud model; the only other network use is downloading the models and voices you pick, and checking for updates."/>
                     </TextBlock>
                 </StackPanel>
             </Grid>
 
-            <!-- D.2.3 Design language -->
+            <!-- D.2.3 Extended Notes: the four steps, how often each runs, and a session on a time line -->
             <Border Style="{StaticResource Divider}"/>
             <Grid Margin="0,16,0,18">
                 <Grid.ColumnDefinitions>
@@ -160,6 +162,114 @@
                     <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
                 <TextBlock Text="D.2.3" Style="{StaticResource Address}"/>
+                <StackPanel Grid.Column="1">
+                    <DockPanel>
+                        <local:DecorText DockPanel.Dock="Right" Text="記録"/>
+                        <TextBlock Text="HOW EXTENDED NOTES WORKS" Style="{StaticResource FieldLabel}" Margin="0"/>
+                    </DockPanel>
+                    <TextBlock Style="{StaticResource Body}"
+                               Text="A session runs four steps side by side, each on its own rhythm, so the text keeps up with a lecture of any length while the AI only ever reads as much as fits in its memory at once."/>
+                    <Border BorderBrush="{DynamicResource Ob.Border}" BorderThickness="1" Margin="0,10,0,0">
+                        <UniformGrid Columns="4" Rows="1">
+                            <Border Style="{StaticResource Step}" BorderThickness="0">
+                                <StackPanel>
+                                    <TextBlock Text="01 LISTEN" Style="{StaticResource StepTitle}"/>
+                                    <TextBlock Text="ALL THE TIME" Style="{StaticResource StepTitle}" Foreground="{DynamicResource Ob.Accent}" FontWeight="Normal" Margin="0,3,0,0"/>
+                                    <TextBlock Style="{StaticResource StepText}" Text="The microphone, the computer's audio, or both, recorded to the session's folder. Type your own lines in, or press the marker key (⚑) to flag a moment."/>
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource Step}">
+                                <StackPanel>
+                                    <TextBlock Text="02 SPEECH" Style="{StaticResource StepTitle}"/>
+                                    <TextBlock Text="EVERY ~5 SECONDS" Style="{StaticResource StepTitle}" Foreground="{DynamicResource Ob.Accent}" FontWeight="Normal" Margin="0,3,0,0"/>
+                                    <TextBlock Style="{StaticResource StepText}" Text="Whisper adds each finished sentence to the transcript (at the latest after 12 seconds). Phrases it invents in silence are dropped. If the engine restarts, up to 3 minutes of audio wait for it."/>
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource Step}">
+                                <StackPanel>
+                                    <TextBlock Text="03 FORMAT" Style="{StaticResource StepTitle}"/>
+                                    <TextBlock Text="EVERY 110 WORDS · 90 S AT MOST" Style="{StaticResource StepTitle}" Foreground="{DynamicResource Ob.Accent}" FontWeight="Normal" Margin="0,3,0,0"/>
+                                    <TextBlock Style="{StaticResource StepText}" Text="The AI adds punctuation, paragraphs and headings to the new words. An edit that adds more than a tenth new words, keeps under 40% of them, or brings in a number is refused, and the words stay as heard."/>
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource Step}">
+                                <StackPanel>
+                                    <TextBlock Text="04 SUMMARY" Style="{StaticResource StepTitle}"/>
+                                    <TextBlock Text="EVERY ~6 MINUTES · 10 AT MOST" Style="{StaticResource StepTitle}" Foreground="{DynamicResource Ob.Accent}" FontWeight="Normal" Margin="0,3,0,0"/>
+                                    <TextBlock Style="{StaticResource StepText}" Text="Each section of formatted text (about 6,000 characters) is summed up in a sixth of its length; every four summaries fold into one. At Stop: the main idea, three bullets, at most three paragraphs."/>
+                                </StackPanel>
+                            </Border>
+                        </UniformGrid>
+                    </Border>
+                    <!-- A 30-minute session on a time line, drawn in code (AboutPage.xaml.cs) -->
+                    <Border BorderBrush="{DynamicResource Ob.Border}" BorderThickness="1,0,1,1" Padding="12,12,12,8">
+                        <StackPanel>
+                            <TextBlock Text="A 30-MINUTE LECTURE, STEP BY STEP" Style="{StaticResource MonoLabel}"/>
+                            <Viewbox x:Name="NotesTimelineBox" Stretch="Uniform" StretchDirection="Both" Margin="0,8,0,0"
+                                     AutomationProperties.Name="A 30-minute session on a time line: speech every 5 seconds, formatting about every minute, a summary section about every 6 to 7 minutes, the first four summaries folded into one, and the final summary at Stop."/>
+                        </StackPanel>
+                    </Border>
+                    <TextBlock Style="{StaticResource Body}" Margin="0,12,0,0">
+                        <Run Text="Why these sizes:" Foreground="{DynamicResource Ob.Text}"/>
+                        <Run Text="the AI model reads at most 4,096 tokens per request, about 9,400 characters or ten minutes of speech, with room left for its instructions and reply. Summing up in sections, then summaries of summaries, keeps every request inside that window however long the session runs. Nothing is sent to the AI while you dictate, so dictation always comes first."/>
+                    </TextBlock>
+                    <TextBlock Style="{StaticResource Body}">
+                        <Run Text="The model:" Foreground="{DynamicResource Ob.Text}"/>
+                        <Run Text="by default the largest installed one that fits your graphics card's memory (Settings › Models › Extended Notes AI). After a session you can play the recording (made louder, skipping silences), jump from any line to the moment it was said, export it, or click a step at the top of the session to redo it. Extended Notes never counts toward your dictation figures; Analytics shows it in a section of its own."/>
+                    </TextBlock>
+                </StackPanel>
+            </Grid>
+
+            <!-- D.2.4 What it keeps -->
+            <Border Style="{StaticResource Divider}"/>
+            <Grid Margin="0,16,0,18">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="64"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="D.2.4" Style="{StaticResource Address}"/>
+                <StackPanel Grid.Column="1">
+                    <DockPanel>
+                        <local:DecorText DockPanel.Dock="Right" Text="履歴"/>
+                        <TextBlock Text="WHAT IT KEEPS" Style="{StaticResource FieldLabel}" Margin="0"/>
+                    </DockPanel>
+                    <TextBlock Style="{StaticResource Body}"
+                               Text="Everything stays in Oberton's data folder on this PC, outside the program folder, so updates never touch it:"/>
+                    <Grid Margin="0,8,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <TextBlock Text="HISTORY" Style="{StaticResource GlossWhere}"/>
+                        <TextBlock Grid.Column="1" Style="{StaticResource StepText}" Margin="0,6,0,6"
+                                   Text="Each dictation's text, AI edit, app and window, and its recording: by number or by age, text and recordings set apart (Settings › History)."/>
+                        <TextBlock Grid.Row="1" Text="DAILY COUNTS" Style="{StaticResource GlossWhere}"/>
+                        <TextBlock Grid.Row="1" Grid.Column="1" Style="{StaticResource StepText}" Margin="0,6,0,6"
+                                   Text="Numbers only, for the dashboard and Analytics: words, time, turnaround, readings, apps and a browser's site names. Never any text, audio or window titles."/>
+                        <TextBlock Grid.Row="2" Text="WORD TALLY" Style="{StaticResource GlossWhere}"/>
+                        <TextBlock Grid.Row="2" Grid.Column="1" Style="{StaticResource StepText}" Margin="0,6,0,6"
+                                   Text="Counts of the words, phrases, corrections and fillers you dictate, overall and per app. Never whole sentences. Can be turned off."/>
+                        <TextBlock Grid.Row="3" Text="EXTENDED NOTES" Style="{StaticResource GlossWhere}"/>
+                        <TextBlock Grid.Row="3" Grid.Column="1" Style="{StaticResource StepText}" Margin="0,6,0,6"
+                                   Text="Each session's recording, transcript, formatted text and summary, until you delete it, and its own counts, kept apart from dictation."/>
+                    </Grid>
+                </StackPanel>
+            </Grid>
+
+            <!-- D.2.5 Design language -->
+            <Border Style="{StaticResource Divider}"/>
+            <Grid Margin="0,16,0,18">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="64"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="D.2.5" Style="{StaticResource Address}"/>
                 <StackPanel Grid.Column="1">
                     <DockPanel>
                         <local:DecorText DockPanel.Dock="Right" Text="計器"/>
@@ -171,7 +281,7 @@
                     </TextBlock>
                     <TextBlock Style="{StaticResource Body}">
                         <Run Text="Color is a signal, not decoration."/>
-                        <Run Text="The accent color marks what is live" Foreground="{DynamicResource Ob.Accent}"/><Run Text=": today's count, a countdown, the word being read, words the AI added."/>
+                        <Run Text="The accent color marks what is live" Foreground="{DynamicResource Ob.Accent}"/><Run Text=": today's count, a countdown, a step at work (its dot pulses), the word being read, words the AI added."/>
                         <Run Text="Red means the microphone is open" Foreground="{DynamicResource Ob.Text}"/>
                         <Run Text="and appears nowhere else. You can choose the accent under Appearance."/>
                     </TextBlock>
