@@ -62,7 +62,7 @@ public class WebSitesTests
         {
             var e = new HistoryEntry { Time = DateTime.Now, Final = "hi", App = "chrome", WindowTitle = "Inbox - Gmail - Google Chrome" };
             // A file from before sites: the dictation counted, no sites.
-            File.WriteAllText(path, $$"""{"Version":1,"Days":[{"Day":"{{DateTime.Today:yyyy-MM-dd}}T00:00:00","Dictations":1,"Words":1,"Apps":{"chrome":1}}]}""");
+            File.WriteAllText(path, $$$"""{"Version":1,"Days":[{"Day":"{{{DateTime.Today:yyyy-MM-dd}}}T00:00:00","Dictations":1,"Words":1,"Apps":{"chrome":1}}]}""");
             var u = new UsageStore(path, new[] { e });
             Assert.Equal(("Gmail", 1), UsageStore.SitesOf(u.Days, "chrome").Single());
             var again = new UsageStore(path, new[] { e }); // not counted twice
