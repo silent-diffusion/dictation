@@ -23,6 +23,22 @@ public sealed record InsertionTarget(IntPtr Hwnd, uint ProcessId, string Process
     }
 
     public bool IsAlive => Hwnd != IntPtr.Zero && Native.IsWindow(Hwnd);
+
+    /// <summary>The app's own name ("Notepad", "Claude"): its file description, or its process name.</summary>
+    public string DisplayName
+    {
+        get
+        {
+            try
+            {
+                var desc = Process.GetProcessById((int)ProcessId).MainModule?.FileVersionInfo.FileDescription;
+                if (!string.IsNullOrWhiteSpace(desc)) return desc.Trim();
+            }
+            catch { }
+            if (ProcessName.Length == 0) return "the app";
+            return char.ToUpperInvariant(ProcessName[0]) + ProcessName[1..];
+        }
+    }
 }
 
 /// <summary>One way of getting text into another application. Throw on failure so the caller can fall back.</summary>

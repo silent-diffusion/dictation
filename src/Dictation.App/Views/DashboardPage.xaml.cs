@@ -32,10 +32,55 @@ public partial class DashboardPage : UserControl
     {
         InitializeComponent();
         _timer.Tick += async (_, _) => await RefreshAsync();
-        Loaded += async (_, _) => { AttachNotes(); _timer.Start(); await RefreshAsync(); };
-        Unloaded += (_, _) => { _timer.Stop(); DetachNotes(); };
+        Loaded += async (_, _) =>
+        {
+            AttachNotes();
+            App.Services.Controller.StateChanged -= OnDictationState;
+            App.Services.Controller.StateChanged += OnDictationState;
+            _timer.Start();
+            await RefreshAsync();
+        };
+        Unloaded += (_, _) => { _timer.Stop(); DetachNotes(); App.Services.Controller.StateChanged -= OnDictationState; };
+        _holdTimer.Tick += (_, _) => { _holdTimer.Stop(); Build(); };
         BuildNotesCell();
         BuildHistoryCell();
+        Build();
+    }
+
+    /// <summary>A step of dictation began or ended: the signal path shows it at once, not at the next refresh.</summary>
+    void OnDictationState(DictationState state) => Dispatcher.BeginInvoke(() =>
+    {
+        Build();
+        // A step that lit only for an instant stays lit a little longer (see Lit); redrawn when that ends.
+        _holdTimer.Stop();
+        _holdTimer.Start();
+    });
+
+    /// <summary>The shortest time a step of the signal path stays lit, so even a quick one is seen.</summary>
+    static readonly TimeSpan MinLit = TimeSpan.FromSeconds(1.5);
+    readonly DispatcherTimer _holdTimer = new() { Interval = TimeSpan.FromSeconds(1.6) };
+    readonly Dictionary<string, DateTime> _litSince = new();
+
+    /// <summary>Whether a step shows as at work: while it is, and until <see cref="MinLit"/> after it began.</summary>
+    bool Lit(string step, bool busy)
+    {
+        var now = DateTime.Now;
+        if (busy)
+        {
+            if (!_litSince.ContainsKey(step)) _litSince[step] = now;
+            return true;
+        }
+        if (_litSince.TryGetValue(step, out var since) && now - since < MinLit) return true;
+        _litSince.Remove(step);
+        return false;
+    }
+
+    /// <summary>The Unload everything button under the speech meter.</summary>
+    async Task UnloadEverythingAsync()
+    {
+        var msg = await App.UnloadNowAsync(speech: true, ai: true, voice: true);
+        ShowToast(msg);
+        _loadedAi = await App.Services.Llm.LoadedModelsAsync();
         Build();
     }
 
@@ -106,6 +151,12 @@ public partial class DashboardPage : UserControl
 
         // ----- the signal path: microphone → speech recognition → AI cleanup → insert, with read aloud branching off -----
         var dictating = sv.Controller.State != DictationState.Idle;
+        var state = sv.Controller.State;
+        var micOn = Lit("mic", state is DictationState.Starting or DictationState.Recording);
+        var speechOn = Lit("speech", state is DictationState.Starting or DictationState.Recording or DictationState.Transcribing);
+        // The AI lights from the moment the speech model hands it the words (loading the model counts) until its edit is done.
+        var aiOn = p.AutoProcess && Lit("ai", state == DictationState.Processing);
+        var insertOn = Lit("insert", state is DictationState.Inserting or DictationState.Placing);
         var speechModel = SpeechModels.For(p, s.Asr);
         var speechLoaded = string.Equals(sv.Speech.LoadedModel, speechModel, StringComparison.OrdinalIgnoreCase);
         var voiceId = App.VoiceFor(p);
@@ -115,19 +166,22 @@ public partial class DashboardPage : UserControl
         var nodes = new[]
         {
             new PathNode("MIC", string.IsNullOrWhiteSpace(s.MicrophoneName) ? "Default microphone" : s.MicrophoneName!,
-                dictating ? "Recording" : "Ready", dictating ? Dot.Busy : Dot.Ok, () => TheApp.ShowPage("Audio")),
+                micOn ? "Recording" : "Ready", micOn ? Dot.Busy : Dot.Ok, () => TheApp.ShowPage("Audio")),
             new PathNode("SPEECH", speechModel,
-                (s.Asr.Device == "auto" ? "GPU if available" : s.Asr.Device) + " // " + (dictating ? "listening" : speechLoaded ? "loaded" : "not loaded"),
-                dictating ? Dot.Busy : speechLoaded ? Dot.Ok : Dot.Off, () => TheApp.ShowPage("Models")),
+                (s.Asr.Device == "auto" ? "GPU if available" : s.Asr.Device) + " // "
+                    + (state == DictationState.Transcribing ? "transcribing" : speechOn ? "listening" : speechLoaded ? "loaded" : "not loaded"),
+                speechOn ? Dot.Busy : speechLoaded ? Dot.Ok : Dot.Off, () => TheApp.ShowPage("Models")),
             p.AutoProcess
                 ? new PathNode(cloud ? "AI // CLOUD" : "AI", aiModel,
-                    p.Name + " // " + (cloud ? (s.Cloud.KeepOffline ? "blocked offline" : "ready") : aiLoaded ? "loaded" : "not loaded"),
-                    cloud ? (s.Cloud.KeepOffline ? Dot.Busy : Dot.Ok) : aiLoaded ? Dot.Ok : Dot.Off,
+                    p.Name + " // " + (aiOn ? (cloud || aiLoaded ? "editing" : "loading, then editing")
+                        : cloud ? (s.Cloud.KeepOffline ? "blocked offline" : "ready") : aiLoaded ? "loaded" : "not loaded"),
+                    aiOn ? Dot.Busy : cloud ? (s.Cloud.KeepOffline ? Dot.Off : Dot.Ok) : aiLoaded ? Dot.Ok : Dot.Off,
                     () => ((MainWindow)Window.GetWindow(this)!).ShowProfile(p))
                 : new PathNode("AI", "No AI", p.Name + " // raw words", Dot.Off, () => ((MainWindow)Window.GetWindow(this)!).ShowProfile(p)),
             new PathNode("INSERT", s.Insertion switch { InsertionMode.Typing => "Type", InsertionMode.Clipboard => "Paste", _ => "Paste or type" }
                     + (s.TypeWhileSpeaking && !p.ShowPreview ? " // live" : p.ShowPreview ? " // preview" : ""),
-                lastApp == null ? "at the cursor" : "last → " + lastApp, Dot.Ok, () => TheApp.ShowPage("General")),
+                insertOn ? "inserting" : lastApp == null ? "at the cursor" : "last → " + lastApp, insertOn ? Dot.Busy : Dot.Ok,
+                () => TheApp.ShowPage("General")),
         };
         var voice = new PathNode("READ ALOUD", installed ? VoiceCatalog.ShortName(voiceId) : "Not installed",
             windowsVoice ? "ready" : sv.Tts.IsRunning ? "loaded" : installed ? "idle" : "downloads on first use",
@@ -166,18 +220,18 @@ public partial class DashboardPage : UserControl
             "Turnaround", turnCount == 0 ? "no runs yet with these models loaded"
                 : $"last {turnCount} · {speechModel}{(aiUsed.Length > 0 ? " + " + aiUsed : ", no AI")}, models already loaded", fan: true));
 
-        if (dictating) Dials.Children.Add(Dial(1, "busy", "Speech model", "dictating now", accent: true));
-        else if (!sv.Speech.IsReady) Dials.Children.Add(Dial(0, "off", "Speech model", "loads when you dictate"));
+        if (dictating) Dials.Children.Add(Dial(1, "busy", "Speech model", "dictating now", accent: true, footer: UnloadButton()));
+        else if (!sv.Speech.IsReady) Dials.Children.Add(Dial(0, "off", "Speech model", "loads when you dictate", footer: UnloadButton()));
         else if (s.UnloadAfterMinutes <= 0)
             Dials.Children.Add(Dial(1, "on", "Speech model", s.UnloadAfterMinutes < 0 ? "unloads right after use" : "stays loaded",
-                UnloadSpeechNow, "Click to unload the speech model now"));
+                UnloadSpeechNow, "Click to unload the speech model now", footer: UnloadButton()));
         else
         {
             var limit = TimeSpan.FromMinutes(s.UnloadAfterMinutes);
             var left = limit - (now - sv.Controller.LastActivity);
             if (left < TimeSpan.Zero) left = TimeSpan.Zero;
             Dials.Children.Add(Dial(left / limit, left.TotalMinutes >= 1 ? $"{Math.Ceiling(left.TotalMinutes):0} min" : "<1 min",
-                "Speech model", "until it unloads", UnloadSpeechNow, "Click to unload the speech model now", accent: true));
+                "Speech model", "until it unloads", UnloadSpeechNow, "Click to unload the speech model now", accent: true, footer: UnloadButton()));
         }
 
         // Two meters wide at the right: the last dictation (History), with copy and insert.
@@ -187,6 +241,20 @@ public partial class DashboardPage : UserControl
     }
 
     // ===== pieces =====
+
+    /// <summary>UNLOAD EVERYTHING, at the bottom of the speech meter: the speech model, the AI model and the voice.</summary>
+    Button UnloadButton()
+    {
+        var b = new Button
+        {
+            Content = "UNLOAD EVERYTHING", Style = (Style)FindResource("QuietButton"), FontSize = 10, Padding = new Thickness(12, 4, 12, 4),
+            Margin = new Thickness(0, 4, 0, 2), HorizontalAlignment = HorizontalAlignment.Center,
+            ToolTip = "Free the memory of the speech model, the AI model and the Read aloud voice now (they load again when needed)",
+            IsEnabled = App.Services.Controller.State == DictationState.Idle,
+        };
+        b.Click += async (_, _) => await UnloadEverythingAsync();
+        return b;
+    }
 
     FontFamily Mono => (FontFamily)FindResource("Ob.Mono");
     Style Readout => (Style)FindResource("MonoLabel");
@@ -430,6 +498,11 @@ public partial class DashboardPage : UserControl
             core.SetResourceReference(Shape.StrokeProperty, "Ob.Muted");
         }
         else core.SetResourceReference(Shape.FillProperty, n.State == Dot.Busy ? "Ob.Accent" : "Ob.Strong");
+        if (n.State == Dot.Busy)
+        {
+            ring.StrokeThickness = 2;
+            Pulse(core);
+        }
         Canvas.SetLeft(core, 40 - size / 2.0);
         Canvas.SetTop(core, 40 - size / 2.0);
         dial.Children.Add(core);
@@ -477,16 +550,25 @@ public partial class DashboardPage : UserControl
             core.SetResourceReference(Shape.StrokeProperty, "Ob.Track");
         }
         else core.SetResourceReference(Shape.FillProperty, dot == Dot.Busy ? "Ob.Accent" : "Ob.Strong");
+        if (dot == Dot.Busy) Pulse(core);
         g.Children.Add(core);
         return g;
     }
+
+    /// <summary>A step at work: its core breathes, so it reads as live.</summary>
+    static void Pulse(UIElement core) =>
+        core.BeginAnimation(OpacityProperty, new System.Windows.Media.Animation.DoubleAnimation(1, 0.25, TimeSpan.FromSeconds(0.6))
+        {
+            AutoReverse = true, RepeatBehavior = System.Windows.Media.Animation.RepeatBehavior.Forever,
+        });
 
     /// <summary>A meter, drawn at a fixed design size and scaled to its cell: a ring of 32 dots lit to the fraction, or
     /// (<paramref name="fan"/>) a fan of ticks with a needle.</summary>
     /// <param name="valueClick">What clicking the big number does (instead of opening the meter's page), if anything.</param>
     /// <param name="accent">The value changes while you watch: dots and number in the accent.</param>
+    /// <param name="footer">Something shown under the meter, at the bottom of its cell (a button).</param>
     FrameworkElement Dial(double fraction, string value, string label, string sub, Action? valueClick = null, string? valueTip = null,
-        bool accent = false, bool fan = false)
+        bool accent = false, bool fan = false, FrameworkElement? footer = null)
     {
         const double size = 150, cx = 75;
         var canvas = new Grid { Width = size, Height = size };
@@ -528,9 +610,18 @@ public partial class DashboardPage : UserControl
         var card = new Border
         {
             Style = (Style)FindResource("DashCell"), Padding = new Thickness(6),
-            Child = new Viewbox { Stretch = Stretch.Uniform, Child = canvas }, ToolTip = $"{label}: {value} ({sub})",
-            Cursor = Cursors.Hand,
+            ToolTip = $"{label}: {value} ({sub})", Cursor = Cursors.Hand,
         };
+        var meter = new Viewbox { Stretch = Stretch.Uniform, Child = canvas };
+        if (footer == null) card.Child = meter;
+        else
+        {
+            var stack = new DockPanel();
+            DockPanel.SetDock(footer, Dock.Bottom);
+            stack.Children.Add(footer);
+            stack.Children.Add(meter);
+            card.Child = stack;
+        }
         card.MouseLeftButtonUp += (_, _) => TheApp.ShowPage(DialPage(label));
         return card;
     }

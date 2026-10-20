@@ -608,6 +608,19 @@ public sealed class DictationController
         SetState(DictationState.Idle);
     }
 
-    /// <summary>Insert arbitrary text (e.g. a version from History) into the last target.</summary>
-    public Task InsertIntoLastTargetAsync(string text) => _inserter.InsertAsync(text, _target);
+    /// <summary>Insert arbitrary text (e.g. a version from History) into the last target. The window in front when
+    /// asked (Oberton, usually) comes back to the front afterwards, so the text goes in behind it.</summary>
+    /// <returns>The name of the app it went into.</returns>
+    public async Task<string> InsertIntoLastTargetAsync(string text)
+    {
+        var front = Native.GetForegroundWindow();
+        var target = _target;
+        await _inserter.InsertAsync(text, target);
+        if (front != IntPtr.Zero && front != target.Hwnd && Native.IsWindow(front))
+        {
+            await Task.Delay(250); // the paste lands first
+            await _inserter.FocusAsync(new InsertionTarget(front, 0, "", ""));
+        }
+        return target.DisplayName;
+    }
 }

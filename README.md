@@ -95,10 +95,15 @@ The folder keeps its pre-rename name so updates from Local Dictation 1.x keep yo
 The sidebar has seven sections: **Dashboard** (one screen, no scrolling: the signal path, drawn as a diagram of what's active and loaded
 (microphone → speech model → AI model and profile → insert, with read aloud branching off; each node's status, the hotkey and
 the unload countdown), meters for words dictated and words read aloud today, turnaround and the speech model's unload
-countdown, and at the right, two meters wide, **History**: the last dictation's AI edit (or its text, without one) with
-*Copy*, and *Insert transcription into the last app* at the bottom; its title opens History. The signal path grows with
-the window. Every step and meter opens its page when clicked (Analytics, the profiles, Microphone, Model unloading); the
-big number on the speech-model meter unloads that model right away. The figures come from daily counts in
+countdown (with *Unload everything* at its foot: the speech model, the AI model and the voice), and at the right, two
+meters wide, **History**: how many dictations are kept, the last dictation's AI edit (or its text, without one) as large
+as fits (scrolling when long), *Copy*, and *Insert transcription into the last app*, which pastes into that app while
+Oberton stays in front and says where the text went; its title opens History. Each step of the signal path lights (its
+core pulsing) the moment it works: mic and speech while you speak, speech while it transcribes, the AI from the moment
+it gets the words (loading the model included) until its edit is done, insert while it inserts; a quick step stays lit
+for at least 1.5 s. The signal path grows with the window. Every step and meter opens its page when clicked (Analytics,
+the profiles, Microphone, Model unloading); the big number on the speech-model meter unloads that model right away. The
+figures come from daily counts in
 `data\usage.json` (dictations, words, seconds spoken, turnaround, AI edits kept, readings and dictations per app name; never
 any text, audio or window titles), so they survive History being trimmed, cleared or off), **Extended Notes**, **Speech to text** (profiles), **Read aloud**, **History**, **Analytics** and **Settings**. Beside the
 signal path, the dashboard has an **Extended Notes** cell: a title and a text box you can always type in (the live
