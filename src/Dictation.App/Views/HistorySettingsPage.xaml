@@ -22,11 +22,36 @@
                 </StackPanel>
             </Border>
 
-            <TextBlock Text="HOW MANY TO KEEP" Style="{StaticResource FieldLabel}" Margin="0,22,0,6"/>
-            <ComboBox x:Name="LimitBox" Width="200" HorizontalAlignment="Left" DisplayMemberPath="Label" SelectedValuePath="Value"
-                      SelectedValue="{Binding HistoryLimit}" AutomationProperties.Name="How many dictations to keep"/>
+            <TextBlock Text="HOW LONG TO KEEP" Style="{StaticResource FieldLabel}" Margin="0,22,0,6"/>
+            <Border Style="{StaticResource Card}">
+                <Grid Margin="18,12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="240"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                        <TextBlock Text="Text" TextWrapping="Wrap"/>
+                        <TextBlock Text="The dictation itself: what was heard, the AI's edit, and where it went." FontSize="12"
+                                   Foreground="{DynamicResource Ob.Muted}" TextWrapping="Wrap" Margin="0,2,0,0"/>
+                    </StackPanel>
+                    <ComboBox x:Name="TextKeepBox" Grid.Column="1" VerticalAlignment="Center" AutomationProperties.Name="How long to keep the text of dictations"/>
+                    <Border Grid.Row="1" Grid.ColumnSpan="2" Style="{StaticResource Divider}"/>
+                    <StackPanel Grid.Row="2" VerticalAlignment="Center" Margin="0,0,16,0">
+                        <TextBlock Text="Recordings" TextWrapping="Wrap"/>
+                        <TextBlock x:Name="AudioKeepNote" FontSize="12" Foreground="{DynamicResource Ob.Muted}" TextWrapping="Wrap" Margin="0,2,0,0"
+                                   Text="The audio, for playing a dictation back. Never kept longer than its text."/>
+                    </StackPanel>
+                    <ComboBox x:Name="AudioKeepBox" Grid.Row="2" Grid.Column="1" VerticalAlignment="Center"
+                              IsEnabled="{Binding SaveHistoryAudio}" AutomationProperties.Name="How long to keep the recordings of dictations"/>
+                </Grid>
+            </Border>
             <TextBlock Style="{StaticResource Caption}" Margin="0,6,0,0"
-                       Text="The oldest ones are deleted as new ones come in (also right away when you lower this). With &quot;All of them&quot;, nothing is deleted unless you delete it."/>
+                       Text="Keep a number of the newest, or everything from a recent stretch of time. Older ones are deleted as new ones come in, every hour, and right away when you choose less. A recording deleted this way leaves its dictation's text in History."/>
 
             <TextBlock Text="STORED IN" Style="{StaticResource FieldLabel}" Margin="0,18,0,6"/>
             <TextBlock x:Name="FolderText" FontFamily="{StaticResource Ob.Mono}" FontSize="12" TextWrapping="Wrap"/>

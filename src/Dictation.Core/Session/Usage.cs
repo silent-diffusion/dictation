@@ -24,6 +24,8 @@ public sealed class UsageDay
     /// <summary>Texts read aloud, and their words.</summary>
     public int Readings { get; set; }
     public int WordsRead { get; set; }
+    /// <summary>How long the voice actually spoke, in seconds: at the speed each reading was at, pauses left out.</summary>
+    public double SecondsRead { get; set; }
     /// <summary>Dictations per app (process name, e.g. "slack"); no window titles.</summary>
     public Dictionary<string, int> Apps { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     /// <summary>For browsers: dictations per site, by browser ("chrome" → "Gmail" → 3). Only the site's name
@@ -158,6 +160,14 @@ public sealed class UsageStore
         var d = DayOf(when ?? DateTime.Now);
         d.Readings++;
         d.WordsRead += words;
+        Save();
+    }
+
+    /// <summary>Count how long a reading's voice spoke (from 5.10.0 on).</summary>
+    public void RecordReadingTime(double seconds, DateTime? when = null)
+    {
+        if (seconds <= 0) return;
+        DayOf(when ?? DateTime.Now).SecondsRead += seconds;
         Save();
     }
 

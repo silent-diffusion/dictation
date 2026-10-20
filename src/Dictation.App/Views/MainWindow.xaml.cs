@@ -231,6 +231,13 @@ public partial class MainWindow : Window
         if (fullScreen) SetFullScreen(true);
     }
 
+    /// <summary>Extended Notes, with a finished session open (Analytics' longest sessions).</summary>
+    public void OpenNoteSession(Dictation.Core.Notes.NoteSession s)
+    {
+        NavList.SelectedItem = NotesItem;
+        if (Host.Content is NotesPage page) page.Open(s);
+    }
+
     WindowState _stateBeforeFull = WindowState.Normal;
     bool _sidebarBeforeFull = true;
 

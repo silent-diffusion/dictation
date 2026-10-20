@@ -235,7 +235,7 @@ public partial class DashboardPage : UserControl
         }
 
         // Two meters wide at the right: the last dictation (History), with copy and insert.
-        UpdateHistoryCell(entries, s.HistoryLimit);
+        UpdateHistoryCell(entries, s.HistoryLimit, s.HistoryDays);
 
         // The charts (words per day, output by app) moved to Analytics in 4.2.
     }

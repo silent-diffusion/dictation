@@ -2,7 +2,9 @@ using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Media;
+using Dictation.Core.Notes;
 using Dictation.Core.Session;
 
 namespace Dictation.App.Views;
@@ -14,10 +16,14 @@ namespace Dictation.App.Views;
 /// </summary>
 public partial class AnalyticsPage : UserControl
 {
-    /// <summary>Typing speed that "time saved" is measured against.</summary>
-    const double TypingWpm = 40;
+    /// <summary>Typing speed that "time saved" is measured against (changed by clicking it).</summary>
+    static double TypingWpm => Math.Max(1, App.Services.Settings.Current.TypingWpm);
 
     int? _days = 30;
+    /// <summary>The app or site whose words are shown (<see cref="WordTally.AppKey"/>), or null for every app; the page
+    /// always opens on every app.</summary>
+    string? _app;
+    string _appLabel = "";
 
     public AnalyticsPage()
     {
@@ -27,14 +33,19 @@ public partial class AnalyticsPage : UserControl
         {
             App.Services.Words.Changed += OnDataChanged;
             App.Services.Usage.Changed += OnDataChanged;
+            App.Services.NotesStore.Sessions.CollectionChanged += OnSessionsChanged;
+            _app = null;
             Build();
         };
         Unloaded += (_, _) =>
         {
             App.Services.Words.Changed -= OnDataChanged;
             App.Services.Usage.Changed -= OnDataChanged;
+            App.Services.NotesStore.Sessions.CollectionChanged -= OnSessionsChanged;
         };
     }
+
+    void OnSessionsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e) => OnDataChanged();
 
     bool _rebuildQueued;
 
@@ -69,10 +80,14 @@ public partial class AnalyticsPage : UserControl
         TallyNote.Text = tallyOn ? "WORD TALLY // ON // COUNTS ONLY, NEVER SENTENCES" : "WORD TALLY // OFF // TURN IT ON UNDER SETTINGS › HISTORY";
 
         Body.Children.Add(Readouts(usage, today));
+        // Output by app, and the words of the app (or site) picked there: every app unless one is.
+        Body.Children.Add(Row(new[] { 1.0 }, Apps(usage)));
+        var shown = _app == null ? tally : WordTally.ForApp(tally, _app);
         Body.Children.Add(Row(new[] { 1.0, 1.0, 1.0 },
-            Corrections(tally, tallyOn), TopWords(tally, tallyOn), Phrases(tally, tallyOn)));
-        Body.Children.Add(Row(new[] { 1.4, 1.0 }, WordsPerDay(usage, today), Heatmap(tally, tallyOn)));
-        Body.Children.Add(Row(new[] { 1.2, 1.0 }, Profiles(tally, tallyOn), Apps(usage)));
+            Corrections(shown, tallyOn), TopWords(shown, tallyOn), Phrases(shown, tallyOn)));
+        Body.Children.Add(Row(new[] { 1.4, 1.0 }, WordsPerDay(usage, today), Heatmap(shown, tallyOn)));
+        Body.Children.Add(Row(new[] { 1.0 }, Profiles(tally, tallyOn)));
+        AddNotes(today);
     }
 
     // ===== period selector =====
@@ -120,24 +135,83 @@ public partial class AnalyticsPage : UserControl
             }
         }
 
+        // How long the voice actually spoke (at the speed of each reading); counted from 5.10.0 on.
+        var readSeconds = usage.Sum(d => d.SecondsRead);
+        var timedWords = usage.Where(d => d.SecondsRead > 0).Sum(d => d.WordsRead);
+        var readSub = readSeconds >= 30 ? $"real listening time · {timedWords / (readSeconds / 60):0} wpm" : readSeconds > 0 ? "real listening time" : "counted from 5.10.0 on";
+
         var saved = TimeSpan.FromMinutes(Math.Max(0, words / TypingWpm - (seconds + finish) / 60));
         var cells = new[]
         {
             Readout("WORDS DICTATED", words.ToString("N0"), $"in {dictations:N0} dictation{(dictations == 1 ? "" : "s")}", accent: true),
             Readout("SPEAKING PACE", pace is { } p2 ? $"{p2:0} wpm" : "—", paceSub),
-            Readout("TIME SAVED", words == 0 ? "—" : saved.TotalHours >= 1 ? $"{saved.TotalHours:0.0} h" : $"{saved.TotalMinutes:0} min",
-                $"vs typing at {TypingWpm:0} wpm"),
+            Readout("TIME SAVED", words == 0 ? "—" : saved.TotalHours >= 1 ? $"{saved.TotalHours:0.0} h" : $"{saved.TotalMinutes:0} min", TypingSpeed()),
             Readout("TURNAROUND", finishN > 0 ? $"{finish / finishN:0.0} s" : "—", "stop → text in place"),
             Readout("AI EDITS KEPT", aiEdited > 0 ? $"{aiKept / (double)aiEdited:P0}" : "—",
                 aiEdited > 0 ? $"safety net rejected {(aiEdited - aiKept) / (double)aiEdited:P0}" : "no AI edits yet"),
             Readout("READ ALOUD", $"{usage.Sum(d => d.WordsRead):N0} w", $"in {usage.Sum(d => d.Readings):N0} readings"),
+            Readout("TIME READ ALOUD", readSeconds > 0 ? Duration(readSeconds) : "—", readSub),
         };
         var grid = new UniformGrid { Columns = cells.Length, Rows = 1 };
         foreach (var c in cells) grid.Children.Add(c);
         return Framed(grid, top: 0);
     }
 
-    FrameworkElement Readout(string label, string value, string sub, bool accent = false)
+    FrameworkElement Readout(string label, string value, string sub, bool accent = false) => Readout(label, value, Muted(sub, 11), accent);
+
+    /// <summary>"vs typing at 40 wpm" under TIME SAVED: a click turns the number into a box to type another speed.</summary>
+    FrameworkElement TypingSpeed()
+    {
+        var host = new ContentControl();
+        void ShowText()
+        {
+            var t = Muted($"vs typing at {TypingWpm:0} wpm ✎", 11);
+            t.Cursor = Cursors.Hand;
+            t.TextDecorations = TextDecorations.Underline;
+            t.ToolTip = "Click to change the typing speed time saved is measured against";
+            t.MouseLeftButtonUp += (_, e) => { e.Handled = true; ShowEditor(); };
+            host.Content = t;
+        }
+        void ShowEditor()
+        {
+            var row = new StackPanel { Orientation = Orientation.Horizontal };
+            var before = Muted("vs typing at ", 11);
+            before.VerticalAlignment = VerticalAlignment.Center;
+            row.Children.Add(before);
+            var box = new TextBox { Text = TypingWpm.ToString("0"), Width = 52, Height = 24, MinHeight = 0, FontSize = 11, Padding = new Thickness(4, 1, 4, 1),
+                VerticalContentAlignment = VerticalAlignment.Center };
+            System.Windows.Automation.AutomationProperties.SetName(box, "Typing speed, words per minute");
+            row.Children.Add(box);
+            var after = Muted(" wpm", 11);
+            after.VerticalAlignment = VerticalAlignment.Center;
+            row.Children.Add(after);
+            host.Content = row;
+            var done = false;
+            void Commit(bool keep)
+            {
+                if (done) return;
+                done = true;
+                if (keep && int.TryParse(box.Text.Trim(), out var wpm) && wpm is >= 5 and <= 300 && wpm != App.Services.Settings.Current.TypingWpm)
+                {
+                    App.Services.Settings.Current.TypingWpm = wpm;
+                    App.Services.Settings.Save();
+                    Build();
+                }
+                else ShowText();
+            }
+            box.KeyDown += (_, e) =>
+            {
+                if (e.Key == Key.Enter) { e.Handled = true; Commit(true); }
+                else if (e.Key == Key.Escape) { e.Handled = true; Commit(false); }
+            };
+            box.LostKeyboardFocus += (_, _) => Commit(true);
+            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, () => { box.Focus(); box.SelectAll(); });
+        }
+        ShowText();
+        return host;
+    }
+
+    FrameworkElement Readout(string label, string value, FrameworkElement sub, bool accent = false)
     {
         var s = new StackPanel();
         s.Children.Add(new TextBlock { Text = label, Style = (Style)FindResource("MonoLabel"), TextTrimming = TextTrimming.CharacterEllipsis });
@@ -145,21 +219,28 @@ public partial class AnalyticsPage : UserControl
             TextTrimming = TextTrimming.CharacterEllipsis };
         v.SetResourceReference(TextBlock.ForegroundProperty, accent ? "Ob.Accent" : "Ob.Text");
         s.Children.Add(v);
-        s.Children.Add(Muted(sub, 11));
+        s.Children.Add(sub);
         return Cell(s);
     }
 
-    // ===== 02 most corrected, 03 most used words, 04 phrases and fillers =====
+    // ===== 03 most corrected, 04 most used words, 05 phrases and fillers (of the app picked in 02) =====
+
+    /// <summary>A section's right-hand label: its own, or which app or site it is showing.</summary>
+    string Scope(string own) => _app == null ? own : "IN " + _appLabel.ToUpper();
+
+    /// <summary>An empty section's text: its own, or why the app picked has nothing yet.</summary>
+    string Hint(string own) => _app == null ? own
+        : $"Nothing counted for {_appLabel} in this period yet. Words are counted per app from 5.10.0 on, and from the dictations History still had then.";
 
     FrameworkElement Corrections(IReadOnlyList<TallyDay> tally, bool on)
     {
         var s = new StackPanel();
-        s.Children.Add(Head("02 // MOST CORRECTED", "HEARD → WRITTEN"));
+        s.Children.Add(Head("03 // MOST CORRECTED", Scope("HEARD → WRITTEN")));
         var intro = Muted("Words the AI fixes again and again. Add one to the speech vocabulary and the recognizer hears it right next time.", 11.5);
         intro.Margin = new Thickness(0, 0, 0, 8);
         s.Children.Add(intro);
         var top = WordTally.Top(tally, d => d.Corrections, 8);
-        if (!on || top.Count == 0) { s.Children.Add(Empty(on, "Corrections show up here once the AI has fixed the same words a few times.")); return Cell(s); }
+        if (!on || top.Count == 0) { s.Children.Add(Empty(on, Hint("Corrections show up here once the AI has fixed the same words a few times."))); return Cell(s); }
         foreach (var (key, n) in top)
         {
             var parts = key.Split(WordTally.Arrow);
@@ -217,9 +298,9 @@ public partial class AnalyticsPage : UserControl
     FrameworkElement TopWords(IReadOnlyList<TallyDay> tally, bool on)
     {
         var s = new StackPanel();
-        s.Children.Add(Head("03 // MOST USED WORDS", "COMMON WORDS LEFT OUT"));
+        s.Children.Add(Head("04 // MOST USED WORDS", Scope("COMMON WORDS LEFT OUT")));
         var top = WordTally.Top(tally, d => d.Words, 10);
-        if (!on || top.Count == 0) { s.Children.Add(Empty(on, "Your most used words appear here after a few dictations.")); return Cell(s); }
+        if (!on || top.Count == 0) { s.Children.Add(Empty(on, Hint("Your most used words appear here after a few dictations."))); return Cell(s); }
         var max = top[0].Count;
         for (var i = 0; i < top.Count; i++)
         {
@@ -263,9 +344,9 @@ public partial class AnalyticsPage : UserControl
     FrameworkElement Phrases(IReadOnlyList<TallyDay> tally, bool on)
     {
         var s = new StackPanel();
-        s.Children.Add(Head("04 // COMMON PHRASES", "3 TO 4 WORDS"));
+        s.Children.Add(Head("05 // COMMON PHRASES", Scope("3 TO 4 WORDS")));
         var top = WordTally.TopPhrases(tally, 8);
-        if (!on || top.Count == 0) s.Children.Add(Empty(on, "Phrases you say again and again appear here."));
+        if (!on || top.Count == 0) s.Children.Add(Empty(on, Hint("Phrases you say again and again appear here.")));
         else
             foreach (var (phrase, n) in top)
             {
@@ -293,7 +374,8 @@ public partial class AnalyticsPage : UserControl
         var detail = total == 0 ? "None taken out yet." : string.Join(" · ", fillers.Select(f => $"{f.Key} {f.Count:N0}"));
         if (on && total > 0 && _days is { } n2)
         {
-            var before = App.Services.Words.Days(DateTime.Today.AddDays(1 - 2 * n2)).Where(d => d.Day < DateTime.Today.AddDays(1 - n2));
+            IEnumerable<TallyDay> before = App.Services.Words.Days(DateTime.Today.AddDays(1 - 2 * n2)).Where(d => d.Day < DateTime.Today.AddDays(1 - n2));
+            if (_app != null) before = WordTally.ForApp(before, _app);
             var prev = before.Sum(d => d.Fillers.Values.Sum());
             if (prev > 0) detail += $". {(total <= prev ? "Down" : "Up")} {Math.Abs(total - prev) / (double)prev:P0} on the {n2} days before.";
         }
@@ -301,7 +383,7 @@ public partial class AnalyticsPage : UserControl
         return Cell(s);
     }
 
-    // ===== 05 words per day, 06 when you dictate =====
+    // ===== 06 words per day, 07 when you dictate =====
 
     FrameworkElement WordsPerDay(IReadOnlyList<UsageDay> usage, DateTime today)
     {
@@ -321,7 +403,7 @@ public partial class AnalyticsPage : UserControl
             buckets[^1] = ("NOW", buckets[^1].From, buckets[^1].To);
         }
         var unit = _days is 7 or 30 ? "DAY" : _days == 90 ? "WEEK" : "MONTH";
-        var head = Head($"05 // WORDS PER {unit}", "");
+        var head = Head($"06 // WORDS PER {unit}", "");
         var key = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
         void Key(double opacity, string label)
         {
@@ -392,13 +474,13 @@ public partial class AnalyticsPage : UserControl
     FrameworkElement Heatmap(IReadOnlyList<TallyDay> tally, bool on)
     {
         var s = new DockPanel();
-        var head = Head("06 // WHEN YOU DICTATE", "WEEKDAY × HOUR");
+        var head = Head("07 // WHEN YOU DICTATE", Scope("WEEKDAY × HOUR"));
         DockPanel.SetDock(head, Dock.Top);
         s.Children.Add(head);
         var week = WordTally.WeekHours(tally);
         var total = 0;
         foreach (var v in week) total += v;
-        if (!on || total == 0) { s.Children.Add(Empty(on, "Once you have dictated for a while, your busiest hours show here.")); return Cell(s, height: 230); }
+        if (!on || total == 0) { s.Children.Add(Empty(on, Hint("Once you have dictated for a while, your busiest hours show here."))); return Cell(s, height: 230); }
 
         // Two-hour blocks: twelve columns read better than twenty-four.
         var blocks = new int[7, 12];
@@ -444,12 +526,12 @@ public partial class AnalyticsPage : UserControl
         return Cell(s, height: 230);
     }
 
-    // ===== 07 profiles, 08 apps =====
+    // ===== 08 profiles, 02 apps =====
 
     FrameworkElement Profiles(IReadOnlyList<TallyDay> tally, bool on)
     {
         var s = new StackPanel();
-        s.Children.Add(Head("07 // HOW EACH PROFILE EDITS", ""));
+        s.Children.Add(Head("08 // HOW EACH PROFILE EDITS", "EVERY APP"));
         var rows = WordTally.ByProfile(tally);
         if (!on || rows.Count == 0) { s.Children.Add(Empty(on, "Each profile's edits are summed up here after you dictate with it.")); return Cell(s); }
         var g = new Grid();
@@ -490,45 +572,53 @@ public partial class AnalyticsPage : UserControl
     FrameworkElement Apps(IReadOnlyList<UsageDay> usage)
     {
         var s = new StackPanel();
-        s.Children.Add(Head("08 // OUTPUT BY APP", "DICTATIONS"));
+        s.Children.Add(Head("02 // OUTPUT BY APP", "CLICK AN APP OR SITE: THE WORDS BELOW FOLLOW IT"));
         var apps = usage.SelectMany(d => d.Apps).GroupBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
             .Select(g => (App: g.Key, Count: g.Sum(kv => kv.Value))).OrderByDescending(x => x.Count).ThenBy(x => x.App).Take(6).ToList();
         if (apps.Count == 0) { s.Children.Add(Empty(true, "The apps you dictate into appear here.")); return Cell(s); }
-        const int blocks = 20;
-        var max = apps[0].Count;
+        const int blocks = 30;
+        var total = Math.Max(1, usage.Sum(d => d.Dictations));
+        s.Children.Add(AppRow("ALL APPS", "Every app", total, total, blocks, false, null, ""));
         foreach (var (app, count) in apps)
         {
-            s.Children.Add(AppRow(app.ToUpper(), app, count, max, blocks, false));
+            s.Children.Add(AppRow(app.ToUpper(), app, count, total, blocks, false, WordTally.AppKey(app), app));
             // A browser: its sites under it (the top four, the rest together), each with its own bar.
             var sites = UsageStore.SitesOf(usage, app);
             if (sites.Count == 0) continue;
             var shown = sites.Take(4).ToList();
             var rest = sites.Skip(4).Sum(x => x.Count) + Math.Max(0, count - sites.Sum(x => x.Count));
-            foreach (var (site, n) in shown) s.Children.Add(AppRow("↳ " + site.ToUpper(), $"{site} in {app}", n, max, blocks, true));
+            foreach (var (site, n) in shown)
+                s.Children.Add(AppRow("↳ " + site.ToUpper(), $"{site} in {app}", n, total, blocks, true, WordTally.AppKey(app, site), $"{site} in {app}"));
             if (rest > 0 && shown.Count > 0)
-                s.Children.Add(AppRow("↳ OTHER", sites.Count > 4 ? $"Other sites in {app}" : $"{app}, from before sites were counted", rest, max, blocks, true));
+                s.Children.Add(AppRow("↳ OTHER", sites.Count > 4 ? $"Other sites in {app}" : $"{app}, from before sites were counted", rest, total, blocks, true,
+                    null, null));
         }
         return Cell(s);
     }
 
-    /// <summary>One row of Output by app: the name, a bar of blocks, and the count. A site row is indented, its bar lighter.</summary>
-    FrameworkElement AppRow(string label, string app, int count, int max, int blocks, bool site)
+    /// <summary>One row of Output by app: the name, a bar of blocks, and the count. A site row is indented, its bar lighter.
+    /// A row with a <paramref name="label"/> can be clicked to show that app's (or site's) words below; ALL APPS
+    /// (<paramref name="key"/> null, label "") shows everything. The row shown is in the accent.</summary>
+    FrameworkElement AppRow(string text, string tip, int count, int max, int blocks, bool site, string? key, string? label)
     {
-        var g = new Grid { Height = site ? 22 : 26 };
+        var clickable = label != null;
+        var selected = clickable && string.Equals(key, _app, StringComparison.OrdinalIgnoreCase);
+        var g = new Grid { Height = site ? 22 : 26, Background = Brushes.Transparent };
         g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0.8, GridUnitType.Star) });
-        g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.6, GridUnitType.Star) });
-        g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(44) });
-        var name = new TextBlock { Text = label, FontFamily = Mono, FontSize = site ? 10 : 11, VerticalAlignment = VerticalAlignment.Center,
-            TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(site ? 12 : 0, 0, 10, 0), ToolTip = app };
-        if (site) name.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Muted");
+        g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(2.4, GridUnitType.Star) });
+        g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(52) });
+        var name = new TextBlock { Text = (selected ? "▸ " : "") + text, FontFamily = Mono, FontSize = site ? 10 : 11, VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(site ? 12 : 0, 0, 10, 0), ToolTip = tip,
+            FontWeight = selected ? FontWeights.Bold : FontWeights.Normal };
+        name.SetResourceReference(TextBlock.ForegroundProperty, selected ? "Ob.Accent" : site ? "Ob.Muted" : "Ob.Text");
         g.Children.Add(name);
         var filled = Math.Max(1, (int)Math.Round(count / (double)max * blocks));
         var track = new UniformGrid { Rows = 1, Columns = blocks, Height = site ? 7 : 10, VerticalAlignment = VerticalAlignment.Center,
-            ToolTip = $"{app}: {count:N0} dictation{(count == 1 ? "" : "s")}" };
+            ToolTip = $"{tip}: {count:N0} dictation{(count == 1 ? "" : "s")}" };
+        var fill = selected ? "Ob.Accent" : site ? "Ob.Muted" : "Ob.Strong";
         for (var b = 0; b < blocks; b++)
         {
             var block = new Border { BorderThickness = new Thickness(1), Margin = new Thickness(0, 0, 2, 0) };
-            var fill = site ? "Ob.Muted" : "Ob.Strong";
             block.SetResourceReference(Border.BorderBrushProperty, b < filled ? fill : "Ob.Divider");
             if (b < filled) block.SetResourceReference(Border.BackgroundProperty, fill);
             track.Children.Add(block);
@@ -537,11 +627,116 @@ public partial class AnalyticsPage : UserControl
         g.Children.Add(track);
         var n = new TextBlock { Text = count.ToString("N0"), FontFamily = Mono, FontSize = site ? 10 : 11, VerticalAlignment = VerticalAlignment.Center,
             HorizontalAlignment = HorizontalAlignment.Right };
-        if (site) n.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Muted");
+        n.SetResourceReference(TextBlock.ForegroundProperty, selected ? "Ob.Accent" : site ? "Ob.Muted" : "Ob.Text");
         Grid.SetColumn(n, 2);
         g.Children.Add(n);
+        if (!clickable) return g;
+        g.Cursor = Cursors.Hand;
+        g.ToolTip = key == null ? "Show the words of every app" : $"Show the words dictated into {label}";
+        g.MouseEnter += (_, _) => g.SetResourceReference(Panel.BackgroundProperty, "Ob.AccentWash");
+        g.MouseLeave += (_, _) => g.Background = Brushes.Transparent;
+        g.MouseLeftButtonUp += (_, e) =>
+        {
+            e.Handled = true;
+            _app = key;
+            _appLabel = label!;
+            Build();
+        };
         return g;
     }
+
+    // ===== 09 to 11 Extended Notes =====
+
+    void AddNotes(DateTime today)
+    {
+        var store = App.Services.NotesStore;
+        var f = NotesStats.Compute(store.Sessions, _days is { } d ? today.AddDays(1 - d) : null);
+        var ai = store.Usage.Totals(DateTime.Now, _days ?? 0);
+
+        var title = new DockPanel { Margin = new Thickness(0, 26, 0, 0) };
+        var note = new TextBlock { Text = "LECTURES AND MEETINGS // KEPT APART FROM DICTATION", Style = (Style)FindResource("MonoLabel"),
+            VerticalAlignment = VerticalAlignment.Bottom };
+        DockPanel.SetDock(note, Dock.Right);
+        title.Children.Add(note);
+        title.Children.Add(new TextBlock { Text = "09 // EXTENDED NOTES", FontFamily = Mono, FontSize = 13, FontWeight = FontWeights.Bold });
+        Body.Children.Add(title);
+
+        var longest = f.Longest.FirstOrDefault();
+        var cells = new[]
+        {
+            Readout("SESSIONS", f.Sessions.ToString("N0"), f.Sessions > 0 ? $"{Duration(f.Seconds / f.Sessions)} each on average" : "none in this period", accent: true),
+            Readout("TIME RECORDED", f.Seconds > 0 ? Duration(f.Seconds) : "—", longest != null ? $"longest {Duration(longest.Seconds)}" : "lectures, meetings, calls"),
+            Readout("WORDS CAPTURED", f.WordsHeard.ToString("N0"), f.WordsPerMinute is { } w ? $"{w:0} a minute of recording" : "heard by the speech model"),
+            Readout("YOUR OWN NOTES", $"{f.WordsTyped:N0} w", "typed in during sessions"),
+            Readout("MARKERS", f.Markers.ToString("N0"), f.Markers > 0 && f.Seconds > 0 ? $"one every {Duration(f.Seconds / f.Markers)}" : "⚑ moments you marked"),
+            Readout("FORMATTING KEPT", f.Steps > 0 ? $"{f.StepsKept / (double)f.Steps:P0}" : "—",
+                $"{ai.AiRequests:N0} AI step{(ai.AiRequests == 1 ? "" : "s")}, formatting and summing up"),
+        };
+        var grid = new UniformGrid { Columns = cells.Length, Rows = 1 };
+        foreach (var c in cells) grid.Children.Add(c);
+        Body.Children.Add(Framed(grid, top: 8));
+        Body.Children.Add(Row(new[] { 1.4, 1.0 }, LongestSessions(f), NotesSources(f)));
+    }
+
+    FrameworkElement LongestSessions(NotesFigures f)
+    {
+        var s = new StackPanel();
+        s.Children.Add(Head("10 // LONGEST SESSIONS", "CLICK ONE TO OPEN IT"));
+        if (f.Longest.Count == 0) { s.Children.Add(Muted("Your longest Extended Notes sessions appear here.", 12)); return Cell(s); }
+        foreach (var n in f.Longest)
+        {
+            var row = new DockPanel { Background = Brushes.Transparent, Cursor = Cursors.Hand, ToolTip = $"Open \"{n.Title}\"" };
+            var len = new TextBlock { Text = Duration(n.Seconds), FontFamily = Mono, FontSize = 12, FontWeight = FontWeights.Bold,
+                VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 0, 0), Width = 60, TextAlignment = TextAlignment.Right };
+            DockPanel.SetDock(len, Dock.Right);
+            row.Children.Add(len);
+            var words = new TextBlock { Text = $"{NoteSession.Words(n.Transcript):N0} w", FontFamily = Mono, FontSize = 11, VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(10, 0, 0, 0) };
+            words.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Muted");
+            DockPanel.SetDock(words, Dock.Right);
+            row.Children.Add(words);
+            var date = new TextBlock { Text = n.Started.ToString("d MMM").ToUpper(), FontFamily = Mono, FontSize = 10, Width = 56, VerticalAlignment = VerticalAlignment.Center };
+            date.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Muted");
+            DockPanel.SetDock(date, Dock.Left);
+            row.Children.Add(date);
+            var name = new TextBlock { Text = n.Title, FontSize = 13, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
+            row.Children.Add(name);
+            row.MouseEnter += (_, _) => name.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Accent");
+            row.MouseLeave += (_, _) => name.SetResourceReference(TextBlock.ForegroundProperty, "Ob.Text");
+            var session = n;
+            row.MouseLeftButtonUp += (_, e) => { e.Handled = true; (Window.GetWindow(this) as MainWindow)?.OpenNoteSession(session); };
+            s.Children.Add(Ruled(row));
+        }
+        return Cell(s);
+    }
+
+    FrameworkElement NotesSources(NotesFigures f)
+    {
+        var s = new StackPanel();
+        s.Children.Add(Head("11 // WHAT IT LISTENED TO", "BY TIME RECORDED"));
+        if (f.Sessions == 0) { s.Children.Add(Muted("The microphone, the computer's audio, or both: how your sessions split shows here.", 12)); return Cell(s); }
+        var max = Math.Max(1, f.Sources.Values.Max(v => v.Seconds));
+        foreach (var (source, label) in new[] { (Dictation.Core.Notes.NotesSource.Mic, "MICROPHONE"), (Dictation.Core.Notes.NotesSource.Computer, "COMPUTER AUDIO"), (Dictation.Core.Notes.NotesSource.Both, "BOTH") })
+        {
+            var (n, sec) = f.Sources.GetValueOrDefault(source);
+            var g = new Grid { Height = 28 };
+            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.4, GridUnitType.Star) });
+            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(96) });
+            g.Children.Add(new TextBlock { Text = label, FontFamily = Mono, FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
+            g.Children.Add(Meter(sec / max, false, 1));
+            var v = new TextBlock { Text = n == 0 ? "—" : $"{n:N0} · {Duration(sec)}", FontFamily = Mono, FontSize = 11, VerticalAlignment = VerticalAlignment.Center,
+                HorizontalAlignment = HorizontalAlignment.Right };
+            Grid.SetColumn(v, 2);
+            g.Children.Add(v);
+            s.Children.Add(g);
+        }
+        return Cell(s);
+    }
+
+    /// <summary>A length of time the way a readout shows it: 45 s, 12 min, 1.4 h.</summary>
+    static string Duration(double seconds) =>
+        seconds < 60 ? $"{seconds:0} s" : seconds < 3600 ? $"{seconds / 60:0} min" : $"{seconds / 3600:0.0} h";
 
     // ===== pieces =====
 

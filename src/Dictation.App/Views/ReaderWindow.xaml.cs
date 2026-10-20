@@ -480,6 +480,8 @@ public partial class ReaderWindow : Window
     void StopSession()
     {
         _tick.Stop();
+        // How long the voice actually spoke (at whatever speed it read), for Analytics.
+        if (_session is { } done) App.Services.Usage.RecordReadingTime(done.SpokenSeconds);
         _session?.Dispose();
         _session = null;
     }
