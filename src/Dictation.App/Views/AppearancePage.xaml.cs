@@ -17,7 +17,24 @@ public partial class AppearancePage : UserControl
         UpdateSystemHint();
         BuildSchemePicker();
         AutoSave.Hook(this, () => App.Services.Settings.Save());
+        ShowZoom(s.UiScale);
+        Loaded += (_, _) => { MainWindow.ZoomChanged -= ShowZoom; MainWindow.ZoomChanged += ShowZoom; };
+        Unloaded += (_, _) => MainWindow.ZoomChanged -= ShowZoom;
     }
+
+    // ----- text size -----
+
+    void ShowZoom(double scale)
+    {
+        ZoomValue.Text = $"{scale:P0}";
+        ZoomOut.IsEnabled = scale > MainWindow.MinZoom + 0.001;
+        ZoomIn.IsEnabled = scale < MainWindow.MaxZoom - 0.001;
+    }
+
+    MainWindow? Main => Window.GetWindow(this) as MainWindow;
+    void ZoomIn_Click(object sender, RoutedEventArgs e) => Main?.Zoom(+1);
+    void ZoomOut_Click(object sender, RoutedEventArgs e) => Main?.Zoom(-1);
+    void ZoomReset_Click(object sender, RoutedEventArgs e) => Main?.SetZoom(1);
 
     // ----- accent colors (the setting keeps its old name, ColorScheme) -----
 
