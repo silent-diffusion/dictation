@@ -68,7 +68,7 @@ public static class WebSites
         ("LinkedIn", new[] { "LinkedIn" }),
         ("Facebook", new[] { "Facebook" }),
         ("Instagram", new[] { "Instagram" }),
-        ("Reddit", new[] { "Reddit", "reddit" }),
+        ("Reddit", new[] { "Reddit" }),
         ("X", new[] { "X", "Twitter" }),
         ("GitHub", new[] { "GitHub" }),
         ("Jira", new[] { "Jira" }),
@@ -84,7 +84,7 @@ public static class WebSites
 
     static readonly Dictionary<string, string> ByTitle = Known
         .SelectMany(k => k.Titles.Select(t => (t, k.Name)))
-        .ToDictionary(x => x.t, x => x.Name, StringComparer.OrdinalIgnoreCase);
+        .DistinctBy(x => x.t, StringComparer.OrdinalIgnoreCase).ToDictionary(x => x.t, x => x.Name, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The site a dictation into <paramref name="process"/> went to, from its window title; null when the
     /// app isn't a browser.</summary>
