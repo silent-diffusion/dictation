@@ -167,6 +167,10 @@ puts it back to 100%; the size is remembered, and *Settings › Appearance* has 
   even on slower PCs; 6 English voices, each a separate 60 to 120 MB download) and **Windows voices** (the ones installed
   with Windows; nothing to download, more robotic). Kokoro and Piper both run in Oberton's local voice server on this PC.
   A profile can pick its own model and voice, for reading its dictations back and for the hotkey while it is active.
+  Sentences are made in order and played back to back; the voice keeps up to 30 seconds of audio ready ahead, so a long
+  sentence after short ones doesn't leave a gap (Kokoro runs on the processor, at about 1.5x real time on an 8-core laptop).
+  On a PC where the voice is slower than real time, a wait lasts until enough is ready to read on without stopping again
+  soon. Each reading's speed and waits are written to the log.
   Text is read as plain text: Markdown (headings, lists, **bold**, links, tables, code fences) and stray symbols are dropped.
   The ⌄ button shows the whole text, scrolling along as it is read, with its Markdown shown formatted (headings, bullet
   and numbered lists, quotes, code, bold, italic and links) while the voice reads it as plain text. Click any word in that

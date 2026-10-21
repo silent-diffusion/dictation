@@ -5,8 +5,11 @@ using NAudio.Wave;
 namespace Dictation.Core.Reading;
 
 /// <summary>
-/// Plays one text aloud. The text is split into sentences; each is synthesized just before it is needed (a few ahead),
-/// so reading starts almost at once. Skipping works on the timeline of all sentences, using real durations where the
+/// Plays one text aloud. The text is split into sentences, synthesized in order and played back to back; reading starts
+/// as soon as the first is ready, and the voice keeps up to <see cref="BufferAheadSeconds"/> of audio ready ahead, so a
+/// long sentence after short ones (or a busy moment on the PC) doesn't leave a gap. On a PC whose voice is slower than
+/// real time, a wait lasts until enough is ready to read on without stopping again soon (see
+/// <see cref="EnoughReadyLocked"/>): one longer pause rather than a gap at every sentence. Skipping works on the timeline of all sentences, using real durations where the
 /// audio exists and estimates elsewhere. Changing speed re-synthesizes from the current sentence (Kokoro changes pace
 /// without changing pitch). Public members are safe to call from the UI thread; audio runs on NAudio's thread.
 /// It hands NAudio raw bytes (an <see cref="IWaveProvider"/>), not floats: NAudio's float view of its byte buffer is
@@ -15,7 +18,10 @@ namespace Dictation.Core.Reading;
 public sealed class ReadAloudSession : IWaveProvider, IDisposable
 {
     public const double MinSpeed = 0.25, MaxSpeed = 4.0, SpeedStep = 0.1;
-    const int LookAhead = 2;
+    /// <summary>How much audio the voice keeps ready ahead of what is playing, in seconds.</summary>
+    public const double BufferAheadSeconds = 30;
+    /// <summary>The longest a wait on a slow PC lasts to build up audio before reading on, in seconds of audio.</summary>
+    const double MaxCatchUpSeconds = 20;
 
     readonly ISpeechSynthesizer _tts;
     readonly string _voice;
@@ -32,6 +38,12 @@ public sealed class ReadAloudSession : IWaveProvider, IDisposable
     double _resumeAt = -1; // fraction of the current sentence to start from once its audio arrives
     bool _paused, _ended;
     double _secondsPerChar = ReadAloudText.DefaultSecondsPerChar; // at speed 1, learned from the real audio
+    double _realTime = 1.5;      // seconds of audio the voice makes per second, learned as it goes (1.5 until known)
+    bool _starved = true;        // the current sentence wasn't ready when it was needed (true at the start)
+    long _starvedAt;             // when that wait began (Stopwatch ticks), to report waits
+    int _waits;                  // waits after the first words, and how long they took in all
+    double _waitedSeconds;
+    bool _reported;
 
     public ReadAloudSession(string text, ISpeechSynthesizer tts, string voice, double speed)
     {
@@ -194,6 +206,8 @@ public sealed class ReadAloudSession : IWaveProvider, IDisposable
     void SeekLocked(int index, double fraction)
     {
         _index = index;
+        _starved = true; // a jump (or a new speed) may have to wait for audio; that isn't the voice falling behind
+        _starvedAt = 0;
         var audio = _audio[index];
         if (audio != null) { _pos = (int)(fraction * audio.Length); _resumeAt = -1; }
         else { _pos = 0; _resumeAt = fraction; }
@@ -230,14 +244,13 @@ public sealed class ReadAloudSession : IWaveProvider, IDisposable
                 {
                     generation = _generation;
                     speed = _speed;
-                    if (!_ended)
-                        for (var i = _index; i < Math.Min(_audio.Length, _index + 1 + LookAhead); i++)
-                            if (_audio[i] == null) { next = i; break; }
+                    if (!_ended) next = NextToSynthesizeLocked();
                 }
                 if (next < 0) { await _wake.WaitAsync(ct); continue; }
 
+                var clock = System.Diagnostics.Stopwatch.StartNew();
                 var samples = await _tts.SynthesizeAsync(_speakable[next], _voice, speed, ct);
-                Provide(next, samples, generation, speed);
+                Provide(next, samples, generation, speed, clock.Elapsed.TotalSeconds);
             }
         }
         catch (OperationCanceledException) { }
@@ -249,13 +262,47 @@ public sealed class ReadAloudSession : IWaveProvider, IDisposable
         }
     }
 
-    /// <summary>Store a sentence's audio, unless the speed changed since it was requested.</summary>
-    internal void Provide(int index, float[] samples, int generation, double speed)
+    /// <summary>The first sentence from the current one on that has no audio yet, while less than
+    /// <see cref="BufferAheadSeconds"/> is ready ahead; -1 when there is enough (or nothing left).</summary>
+    internal int NextToSynthesizeLocked()
+    {
+        var ahead = 0.0;
+        for (var i = _index; i < _audio.Length; i++)
+        {
+            if (_audio[i] == null) return i == _index || ahead < BufferAheadSeconds ? i : -1;
+            ahead += i == _index ? DurationLocked(i) * (1 - FractionLocked()) : DurationLocked(i);
+            if (ahead >= BufferAheadSeconds) return -1;
+        }
+        return -1;
+    }
+
+    /// <summary>After a wait: whether to read on now. Always, when the voice is faster than real time or everything left
+    /// is ready. Otherwise only once the audio ready ahead will last while the rest is made (the remaining time times
+    /// the share the voice can't keep up with, at most <see cref="MaxCatchUpSeconds"/>), so a slow PC pauses once and
+    /// reads on, instead of stopping at every sentence.</summary>
+    internal bool EnoughReadyLocked()
+    {
+        if (_realTime >= 1) return true;
+        var ready = 0.0;
+        var i = _index;
+        for (; i < _audio.Length && _audio[i] != null; i++)
+            ready += i == _index ? DurationLocked(i) * (1 - FractionLocked()) : DurationLocked(i);
+        if (i >= _audio.Length) return true;
+        var rest = ready;
+        for (var j = i; j < _audio.Length; j++) rest += DurationLocked(j);
+        return ready >= Math.Min(rest * (1 - _realTime), MaxCatchUpSeconds);
+    }
+
+    /// <summary>Store a sentence's audio, unless the speed changed since it was requested. <paramref name="seconds"/>:
+    /// how long making it took (0 when not measured), to learn how fast the voice is on this PC.</summary>
+    internal void Provide(int index, float[] samples, int generation, double speed, double seconds = 0)
     {
         lock (_lock)
         {
             if (generation != _generation) return; // the speed changed meanwhile
             _audio[index] = samples;
+            if (seconds > 0.05 && samples.Length > 0)
+                _realTime = 0.7 * _realTime + 0.3 * (samples.Length / (double)KokoroSpeech.SampleRate / seconds);
             if (speed > 0 && _speakable[index].Length > 20) // learn the voice's pace for better estimates
                 _secondsPerChar = 0.7 * _secondsPerChar + 0.3 * (samples.Length / (double)KokoroSpeech.SampleRate * speed / _speakable[index].Length);
         }
@@ -289,7 +336,22 @@ public sealed class ReadAloudSession : IWaveProvider, IDisposable
             while (written < wanted && !_paused && !_ended)
             {
                 var audio = _audio[_index];
-                if (audio == null) { _leadIn = LeadInSamples; break; } // still being synthesized: a runway once it arrives
+                if (audio == null || _starved && !EnoughReadyLocked())
+                {
+                    // Still being synthesized (or, on a slow PC, not enough ready yet): wait, with a runway once it is.
+                    if (!_starved) { _starved = true; _starvedAt = System.Diagnostics.Stopwatch.GetTimestamp(); }
+                    _leadIn = LeadInSamples;
+                    break;
+                }
+                if (_starved)
+                {
+                    _starved = false;
+                    if (_spoken > 0 && _starvedAt != 0)
+                    {
+                        _waits++;
+                        _waitedSeconds += System.Diagnostics.Stopwatch.GetElapsedTime(_starvedAt).TotalSeconds;
+                    }
+                }
                 if (_leadIn > 0)
                 {
                     var r = Math.Min(_leadIn, wanted - written);
@@ -336,6 +398,13 @@ public sealed class ReadAloudSession : IWaveProvider, IDisposable
 
     public void Dispose()
     {
+        lock (_lock)
+        {
+            if (!_reported && _spoken > 0)
+                Log.Info($"Read aloud: {Sentences.Count} sentence(s), the voice at {_realTime:0.0}x real time; " +
+                         (_waits == 0 ? "no waits" : $"waited {_waits} time(s), {_waitedSeconds:0.0} s in all") + " after the first words");
+            _reported = true;
+        }
         _cts.Cancel();
         try { _output?.Stop(); } catch { }
         _output?.Dispose();

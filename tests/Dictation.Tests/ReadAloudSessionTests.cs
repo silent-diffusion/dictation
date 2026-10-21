@@ -165,4 +165,48 @@ public class ReadAloudJumpTests
         Assert.False(s.IsEnded);
         Assert.Equal((0, 0.0), s.Position);
     }
+
+    const int Rate = 24000;
+    static string Long(char c) => new string(c, 3) + " " + string.Join(" ", Enumerable.Repeat("words that take a while to say", 6)) + ".";
+
+    [Fact]
+    public void The_voice_keeps_thirty_seconds_ready_ahead_not_a_fixed_count()
+    {
+        var s = Session(string.Join(" ", Enumerable.Range(0, 6).Select(i => Long((char)('a' + i)))));
+        Assert.Equal(0, s.NextToSynthesizeLocked());
+        s.Provide(0, new float[Rate * 5], s.Generation, 1.0);
+        s.Provide(1, new float[Rate * 5], s.Generation, 1.0);
+        Assert.Equal(2, s.NextToSynthesizeLocked()); // 10 s ready: keep going (it used to stop at two ahead)
+        s.Provide(2, new float[Rate * 25], s.Generation, 1.0);
+        Assert.Equal(-1, s.NextToSynthesizeLocked()); // 35 s ready: enough
+    }
+
+    [Fact]
+    public void A_slow_voice_waits_until_enough_is_ready_then_reads_on()
+    {
+        var s = Session(string.Join(" ", Enumerable.Range(0, 4).Select(i => Long((char)('a' + i)))));
+        var first = Ramp(Rate);
+        // The voice makes 1 s of audio in 2 s: slower than real time.
+        for (var i = 0; i < 6; i++) s.Provide(0, first, s.Generation, 1.0, seconds: 2.0);
+        var buffer = new byte[LeadIn * 4 + 4000];
+        s.Read(buffer, 0, buffer.Length);
+        AssertQuiet(Floats(buffer, 0, buffer.Length)); // 1 s ready of a long reading: not enough to start
+        s.Provide(1, new float[Rate * 20], s.Generation, 1.0);
+        SkipLeadIn(s);
+        var played = new byte[400];
+        s.Read(played, 0, played.Length);
+        Assert.Equal(first[..100], Floats(played, 0, played.Length)); // enough now: reads on
+    }
+
+    [Fact]
+    public void A_fast_voice_reads_as_soon_as_the_sentence_is_there()
+    {
+        var s = Session(string.Join(" ", Enumerable.Range(0, 4).Select(i => Long((char)('a' + i)))));
+        var first = Ramp(Rate);
+        s.Provide(0, first, s.Generation, 1.0, seconds: 0.3);
+        SkipLeadIn(s);
+        var played = new byte[400];
+        s.Read(played, 0, played.Length);
+        Assert.Equal(first[..100], Floats(played, 0, played.Length));
+    }
 }
