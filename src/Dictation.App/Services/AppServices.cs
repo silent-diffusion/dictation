@@ -37,6 +37,8 @@ public sealed class AppServices
     public DictationController Controller { get; }
     /// <summary>Recent dictations, kept in data\history.</summary>
     public HistoryStore History { get; }
+    /// <summary>History › Run again: a kept dictation transcribed and cleaned up afresh from its recording.</summary>
+    public HistoryRerun Rerun { get; }
     /// <summary>Daily counts for the dashboard (no text), in data\usage.json.</summary>
     public UsageStore Usage { get; }
     /// <summary>Word, phrase and correction counts for Analytics (no sentences), in data\words.json.</summary>
@@ -67,6 +69,9 @@ public sealed class AppServices
         Notes = new NotesRecorder(Settings, Speech, Llm, NotesStore,
             () => Speech.LoadedModel ?? SpeechModels.For(Profiles.Active, Settings.Current.Asr));
         Voices = new SpeechVoices(Tts);
+        // The profile's speech model is loaded for a rerun only when nothing else is using the one loaded now.
+        Rerun = new HistoryRerun(Settings, Speech, Llm, Profiles, History,
+            () => !Notes.NeedsModels && Controller.State == DictationState.Idle);
 
         var d = Application.Current.Dispatcher;
         Speech.StatusChanged += (s, ok) => d.BeginInvoke(() => { Status.Speech = "Speech: " + s; Status.SpeechOk = ok; });

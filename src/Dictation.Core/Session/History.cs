@@ -27,6 +27,12 @@ public sealed class HistoryEntry
     public double Seconds { get; set; }
     /// <summary>From pressing stop until the text was in place (0 for entries from before this was recorded).</summary>
     public double FinishSeconds { get; set; }
+    /// <summary>When it was last run again from its recording (History › Run again); null if never.</summary>
+    public DateTime? RunAgainAt { get; set; }
+    /// <summary>The other version of its text: from before it was run again, or, once that is put back, the rerun's.</summary>
+    public HistoryVersion? Earlier { get; set; }
+    /// <summary>True while the text shown is the one from before the rerun (put back).</summary>
+    public bool ShowingEarlier { get; set; }
     [JsonIgnore] public int Words => (Final.Length > 0 ? Final : Transcript).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
 
     /// <summary>The entry's folder under data\history (entry.json and audio.wav).</summary>
@@ -46,6 +52,18 @@ public sealed class HistoryEntry
         : Time.Date == DateTime.Today.AddDays(-1) ? "Yesterday " + Time.ToString("t")
         : $"{Time:d MMM}, {Time:t}";
     [JsonIgnore] public string Duration => Seconds < 60 ? $"{Seconds:0} s" : $"{(int)(Seconds / 60)}:{(int)Seconds % 60:00} min";
+}
+
+/// <summary>One version of a dictation's text (see <see cref="HistoryEntry.Earlier"/>).</summary>
+public sealed class HistoryVersion
+{
+    public string Transcript { get; set; } = "";
+    public string? AiOutput { get; set; }
+    public string Final { get; set; } = "";
+    public bool SafetyNet { get; set; }
+    public string? Note { get; set; }
+    public string Profile { get; set; } = "";
+    public bool WasInserted { get; set; }
 }
 
 /// <summary>
@@ -100,6 +118,14 @@ public sealed class HistoryStore
         catch (Exception e) { Log.Error("Saving a dictation to History failed", e); }
         Entries.Insert(0, entry);
         Prune();
+    }
+
+    /// <summary>Write a changed entry back to its entry.json (after it was run again).</summary>
+    public void Save(HistoryEntry entry)
+    {
+        if (entry.Folder.Length == 0) return;
+        try { JsonStore.Save(Path.Combine(entry.Folder, "entry.json"), entry); }
+        catch (Exception e) { Log.Error("Saving a changed dictation to History failed", e); }
     }
 
     /// <summary>Drop the entries beyond what is kept (by number or by age), and the recordings beyond what is kept of

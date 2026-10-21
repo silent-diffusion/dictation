@@ -91,6 +91,16 @@ public partial class HistoryPage : UserControl
         if (c == null) return;
 
         TitleText.Text = $"{c.Time:dddd d MMMM}, {c.Time:t}";
+        RunAgainButton.Visibility = c.HasAudio ? Visibility.Visible : Visibility.Collapsed;
+        RunAgainButton.IsEnabled = !_rerunning;
+        RerunRow.Visibility = c.RunAgainAt != null && c.Earlier != null ? Visibility.Visible : Visibility.Collapsed;
+        if (c.RunAgainAt is { } at)
+        {
+            RerunText.Text = c.ShowingEarlier ? $"Run again {at:d MMM}, {at:t}; showing the result from before"
+                                              : $"Run again {at:d MMM}, {at:t}";
+            SwapButton.Content = c.ShowingEarlier ? "USE THE RERUN" : "PUT BACK THE EARLIER RESULT";
+            SwapButton.SetResourceReference(ForegroundProperty, "Ob.Accent");
+        }
         var where = c.WasInserted ? "Inserted into " + c.AppName : "Not inserted (meant for " + c.AppName + ")";
         if (c.WindowTitle.Length > 0) where += " · " + c.WindowTitle;
         WhereText.Text = $"{where}\nProfile: {c.Profile} · {c.Duration} of speech";
@@ -192,6 +202,45 @@ public partial class HistoryPage : UserControl
         if (_seeking || !_player.NaturalDuration.HasTimeSpan) return;
         _player.Position = TimeSpan.FromSeconds(e.NewValue * _player.NaturalDuration.TimeSpan.TotalSeconds);
         UpdateTime();
+    }
+
+    bool _rerunning;
+
+    /// <summary>Run the shown dictation again from its recording (see <see cref="HistoryRerun"/>).</summary>
+    async void RunAgain_Click(object sender, RoutedEventArgs e)
+    {
+        if (Current is not { } c || _rerunning) return;
+        _rerunning = true;
+        RunAgainButton.IsEnabled = false;
+        RunAgainButton.Content = "RUNNING…";
+        var progress = new Progress<string>(m => { if (ReferenceEquals(Current, c)) Info.Text = m; });
+        string message;
+        try { message = "✓ " + await App.Services.Rerun.RunAsync(c, progress); }
+        catch (UserFacingException ex) { message = "⚠ " + ex.Message; }
+        catch (Exception ex)
+        {
+            Log.Error("History: running a dictation again failed", ex);
+            message = "⚠ Running it again failed; the dictation was left as it was. See the log for details.";
+        }
+        finally
+        {
+            _rerunning = false;
+            RunAgainButton.Content = "RUN AGAIN";
+        }
+        _view.Refresh();
+        if (!ReferenceEquals(Current, c)) List.SelectedItem = c;
+        List_SelectionChanged(List, null!);
+        Info.Text = message;
+    }
+
+    void Swap_Click(object sender, RoutedEventArgs e)
+    {
+        if (Current is not { } c) return;
+        App.Services.Rerun.SwapEarlier(c);
+        _view.Refresh();
+        if (!ReferenceEquals(Current, c)) List.SelectedItem = c;
+        List_SelectionChanged(List, null!);
+        Info.Text = c.ShowingEarlier ? "Put back the result from before it was run again." : "Back to the rerun's result.";
     }
 
     void Delete_Click(object sender, RoutedEventArgs e)
