@@ -92,6 +92,10 @@ public interface ITextProcessor
     /// <summary>Free the memory of every local model that is loaded now (they load again when next needed).
     /// Returns how many were unloaded. Never starts the runtime.</summary>
     Task<int> UnloadAllAsync(CancellationToken ct = default);
+    /// <summary>A model that runs from the PC's memory (see <see cref="LocalModel.RunsFromMemory"/>) is let go as soon as
+    /// its work is done, freeing its ~20 GB of RAM: unloaded now, if loaded. Returns whether it was. Never starts the
+    /// runtime; does nothing for any other model (they follow Settings › Model unloading).</summary>
+    Task<bool> ReleaseIfFromMemoryAsync(string? model, CancellationToken ct = default);
     string Status { get; }
     event Action<string, bool>? StatusChanged;
 }
@@ -472,7 +476,7 @@ public sealed class OllamaTextProcessor : ITextProcessor
             ["model"] = model,
             ["stream"] = false,
             ["think"] = false,
-            ["keep_alive"] = _settings.Current.OllamaKeepAlive,
+            ["keep_alive"] = await KeepAliveAsync(model, ct),
             ["options"] = options,
             ["messages"] = messages,
         };
@@ -504,6 +508,45 @@ public sealed class OllamaTextProcessor : ITextProcessor
         var options = new JsonObject { ["num_ctx"] = NumCtx };
         if (await RunsFromMemoryAsync(model, ct)) options["num_gpu"] = 0;
         return options;
+    }
+
+    /// <summary>The most a model that runs from memory stays loaded unused: enough to bridge the steps of a notes
+    /// session or a few dictations in a row, short enough that ~20 GB of RAM isn't held for long by anything that forgot
+    /// to let it go.</summary>
+    public const int FromMemoryKeepMinutes = 5;
+
+    /// <summary>How long Ollama keeps the model loaded after a request: Settings › Model unloading, but never more
+    /// than <see cref="FromMemoryKeepMinutes"/> for a model that runs from memory.</summary>
+    async Task<string> KeepAliveAsync(string model, CancellationToken ct)
+    {
+        var minutes = _settings.Current.UnloadAfterMinutes;
+        if ((minutes == 0 || minutes > FromMemoryKeepMinutes) && await RunsFromMemoryAsync(model, ct)) return FromMemoryKeepMinutes + "m";
+        return _settings.Current.OllamaKeepAlive;
+    }
+
+    public async Task<bool> ReleaseIfFromMemoryAsync(string? model, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(model) || !await RunsFromMemoryAsync(model, ct)) return false;
+        static bool Same(string a, string b) =>
+            string.Equals(a, b, StringComparison.OrdinalIgnoreCase) || string.Equals(a, b + ":latest", StringComparison.OrdinalIgnoreCase);
+        if (!(await LoadedModelsAsync(ct)).Any(n => Same(n, model))) return false;
+        try
+        {
+            // keep_alive 0: Ollama stops the model's runner process, which gives back all of its memory (RAM and GPU).
+            using var resp = await _http.PostAsJsonAsync(Url("/api/generate"), new { model, keep_alive = 0 }, ct);
+            resp.EnsureSuccessStatusCode();
+            // The runner stops a moment later; wait for it, so the log says whether the memory really came back.
+            for (var i = 0; i < 40 && (await LoadedModelsAsync(ct)).Any(n => Same(n, model)); i++) await Task.Delay(250, ct);
+            var gone = !(await LoadedModelsAsync(ct)).Any(n => Same(n, model));
+            if (gone) Log.Info($"LLM {model}: done, unloaded from memory");
+            else Log.Warn($"LLM {model}: asked to unload, but it is still loaded after 10 s");
+            return gone;
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            Log.Warn($"Unloading {model} failed: {e.Message}");
+            return false;
+        }
     }
 
     async Task<bool> RunsFromMemoryAsync(string model, CancellationToken ct)
@@ -635,7 +678,7 @@ public sealed class OllamaTextProcessor : ITextProcessor
             using var resp = await _http.PostAsJsonAsync(Url("/api/chat"),
                 new JsonObject
                 {
-                    ["model"] = model, ["keep_alive"] = _settings.Current.OllamaKeepAlive,
+                    ["model"] = model, ["keep_alive"] = await KeepAliveAsync(model, ct),
                     ["options"] = await LoadOptionsAsync(model, ct), ["messages"] = new JsonArray(),
                 }, ct);
             resp.EnsureSuccessStatusCode();

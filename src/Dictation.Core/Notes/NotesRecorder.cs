@@ -364,6 +364,7 @@ public sealed class NotesRecorder
             _redo = null;
             _store.Save(s);
             StateChanged?.Invoke();
+            _ = ReleaseModelAsync();
         }
     }
 
@@ -618,7 +619,18 @@ public sealed class NotesRecorder
             _userPaused = false;
             Log.Info($"Extended notes: stopped {s.Id} after {TimeSpan.FromSeconds(s.Seconds):h\\:mm\\:ss}");
             StateChanged?.Invoke();
+            _ = ReleaseModelAsync();
         }
+    }
+
+    /// <summary>The session or redo is done: a model that runs from the PC's memory (Qwen3 30B-A3B) is let go at once,
+    /// rather than holding ~20 GB of RAM until it times out. Not while another session or redo has started meanwhile.</summary>
+    async Task ReleaseModelAsync()
+    {
+        var model = _model;
+        if (model == null || NeedsModels) return;
+        try { await _llm.ReleaseIfFromMemoryAsync(model); }
+        catch (Exception e) { Log.Warn("Extended notes: letting the AI model go failed: " + e.Message); }
     }
 
     /// <summary>Oberton is closing: keep everything up to now (and the dashboard draft; no last formatting pass), right away.</summary>

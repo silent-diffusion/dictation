@@ -242,6 +242,9 @@ puts it back to 100%; the size is remembered, and *Settings › Appearance* has 
   ends; they stay loaded while in use), after 1 minute to 4 hours unused (default 30 minutes), or never; or
   right now (*Unload everything*, or the speech model, AI model or Read aloud voice alone). Dictating
   never waits for a model: recording starts at once and the speech model catches up when it has loaded.
+  A model that runs from the PC's memory (Qwen3 30B-A3B) is let go as soon as its work is done: when an Extended
+  Notes session stops or a redone step finishes, it is unloaded at once (its runner stops, so all ~20 GB of RAM comes
+  back), and otherwise it never stays loaded more than 5 minutes unused, whatever the setting.
 * **Cloud AI** (*Settings*): API keys (encrypted for your Windows account) and the *Keep everything offline* switch.
 * If the AI fails, is unreachable, or returns something implausible (empty, summarised, rambling), your **raw words are inserted instead** - dictation is never lost.
 
