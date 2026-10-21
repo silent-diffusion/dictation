@@ -83,9 +83,19 @@
                     <DockPanel>
                         <Button DockPanel.Dock="Right" Content="DELETE" Style="{StaticResource QuietButton}" Click="Delete_Click"
                                 VerticalAlignment="Top"/>
+                        <Button x:Name="RunAgainButton" DockPanel.Dock="Right" Content="RUN AGAIN" Style="{StaticResource QuietButton}"
+                                Click="RunAgain_Click" VerticalAlignment="Top" Margin="0,0,8,0"
+                                ToolTip="Transcribe the recording again with today's speech settings, then clean it up again with its profile. The current result is kept, so it can be put back."/>
                         <StackPanel>
                             <TextBlock x:Name="TitleText" FontFamily="{StaticResource Ob.Mono}" FontSize="16" FontWeight="Bold"/>
                             <TextBlock x:Name="WhereText" Style="{StaticResource Caption}" Margin="0,2,0,0"/>
+                            <WrapPanel x:Name="RerunRow" Margin="0,4,0,0" Visibility="Collapsed">
+                                <TextBlock x:Name="RerunText" Style="{StaticResource Caption}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <Button x:Name="SwapButton" Click="Swap_Click" Cursor="Hand" Padding="0" VerticalAlignment="Center"
+                                        FontFamily="{StaticResource Ob.Mono}" FontSize="11">
+                                    <Button.Template><ControlTemplate TargetType="Button"><ContentPresenter/></ControlTemplate></Button.Template>
+                                </Button>
+                            </WrapPanel>
                         </StackPanel>
                     </DockPanel>
 

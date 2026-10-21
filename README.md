@@ -195,6 +195,10 @@ puts it back to 100%; the size is remembered, and *Settings › Appearance* has 
   The **Try it** panel runs a profile on sample text and shows what it changed, so you can tune prompts without dictating; each of its three boxes has a COPY button.
   It follows the profile's switches: with *preview before inserting* the real preview appears, with *read aloud after
   inserting* the result is read to you.
+* **History › Run again** (5.15): a dictation whose recording is kept can be run again: transcribed afresh with today's
+  speech settings (quiet speech evened out, the vocabulary hint, the profile's speech model unless another must stay
+  loaded), then cleaned up again by its profile. Nothing is inserted and the counts don't change; the result from before
+  is kept, and *Put back the earlier result* switches between the two.
 * **History**: the last 50 dictations, kept in Oberton's data folder so they survive updates. Under *Settings › History*
   the text and the recordings each keep either the newest so many (10 to 500) or everything from a recent stretch (the
   last 24 hours to the last year); the text can also be kept for good, and a recording never outlives its text. Each has its recording (play it, also at 2×), the Transcription, AI Edit and Inserted boxes (each can be copied),
