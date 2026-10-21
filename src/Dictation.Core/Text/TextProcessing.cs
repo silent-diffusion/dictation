@@ -70,8 +70,13 @@ public sealed record LocalModel(string Name, double Billions, long Bytes, string
     /// the processor. Ollama still puts what fits of it on the GPU (the parts every word uses first), the rest stays
     /// in RAM.</summary>
     public bool RunsFromMemory(long? gpuBytes, long? ramBytes) =>
-        IsMixture && (gpuBytes is not { } g || Bytes > g) && ramBytes is { } r && Bytes + MemoryHeadroom <= r
+        IsMixture && HeldInRam(gpuBytes) && ramBytes is { } r && Bytes + MemoryHeadroom <= r
         && ActiveBillions <= MaxActiveBillionsOnProcessor;
+
+    /// <summary>A model too big for the GPU (or, with none, over 8 GB), so most of it is held in the PC's RAM: a
+    /// mixture of experts (<see cref="RunsFromMemory"/>) or an ordinary model such as a 27B, which is then slow, since
+    /// every parameter works on each word. Either is let go as soon as its work is done.</summary>
+    public bool HeldInRam(long? gpuBytes) => gpuBytes is { } g ? Bytes > g : Bytes > 8L * 1024 * 1024 * 1024;
 }
 
 /// <summary>Turns a raw transcript into a processed one according to a profile. Backend-agnostic.</summary>
@@ -93,10 +98,10 @@ public interface ITextProcessor
     /// <summary>Free the memory of every local model that is loaded now (they load again when next needed).
     /// Returns how many were unloaded. Never starts the runtime.</summary>
     Task<int> UnloadAllAsync(CancellationToken ct = default);
-    /// <summary>A model that runs from the PC's memory (see <see cref="LocalModel.RunsFromMemory"/>) is let go as soon as
-    /// its work is done, freeing its ~20 GB of RAM: unloaded now, if loaded. Returns whether it was. Never starts the
-    /// runtime; does nothing for any other model (they follow Settings › Model unloading).</summary>
-    Task<bool> ReleaseIfFromMemoryAsync(string? model, CancellationToken ct = default);
+    /// <summary>A model held in the PC's RAM (see <see cref="LocalModel.HeldInRam"/>) is let go as soon as its work is
+    /// done, freeing its ~20 GB: unloaded now, if loaded. Returns whether it was. Never starts the runtime; does nothing
+    /// for any other model (they follow Settings › Model unloading).</summary>
+    Task<bool> ReleaseIfLargeAsync(string? model, CancellationToken ct = default);
     string Status { get; }
     event Action<string, bool>? StatusChanged;
 }
@@ -321,8 +326,9 @@ public sealed class OllamaTextProcessor : ITextProcessor
     readonly OllamaHost _host;
     readonly CloudCompletion _cloud;
     readonly HttpClient _http = new() { Timeout = Timeout.InfiniteTimeSpan };
-    /// <summary>Which models run from the PC's memory (see <see cref="LocalModel.RunsFromMemory"/>), as found.</summary>
-    readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _fromMemory = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Which models are held in the PC's RAM (<see cref="LocalModel.HeldInRam"/>), and whether as an ordinary
+    /// (dense, slow) model rather than a mixture of experts, as found.</summary>
+    readonly System.Collections.Concurrent.ConcurrentDictionary<string, (bool Large, bool Dense)> _sizes = new(StringComparer.OrdinalIgnoreCase);
     /// <summary>Must be identical for warm-up and real requests, otherwise Ollama reloads the model.</summary>
     const int NumCtx = 4096;
     /// <summary>How much a request can hold (instructions, text and reply together), in tokens.</summary>
@@ -431,9 +437,10 @@ public sealed class OllamaTextProcessor : ITextProcessor
             new JsonObject { ["role"] = "user", ["content"] = text },
         };
         var sw = Stopwatch.StartNew();
-        // Background work on long text: more time than a dictation gets, and more again for a model on the processor
-        // (its first load reads about 19 GB).
-        var floor = await RunsFromMemoryAsync(model, ct) ? 420 : 180;
+        // Background work on long text: more time than a dictation gets, and more again for a model held in RAM (its
+        // first load reads about 19 GB), most of all an ordinary one, whose every parameter works on each word.
+        var size = await SizeAsync(model, ct);
+        var floor = !size.Large ? 180 : size.Dense ? 900 : 420;
         var reply = await ChatAsync(model, messages, maxTokens, Math.Max(floor, _settings.Current.Llm.TimeoutSeconds), ct);
         Log.Info($"llm {model}: asked {text.Length}->{reply.Length} chars in {sw.ElapsedMilliseconds} ms");
         return OutputSanitizer.Clean(reply, text);
@@ -460,7 +467,7 @@ public sealed class OllamaTextProcessor : ITextProcessor
             }
         messages.Add(new JsonObject { ["role"] = "user", ["content"] = $"<transcript>\n{text}\n</transcript>" });
         var content = await ChatAsync(model, messages, Math.Min(4096, text.Length / 2 + 256),
-            Math.Max(await RunsFromMemoryAsync(model, ct) ? 180 : 10, llm.TimeoutSeconds), ct);
+            Math.Max(await SizeAsync(model, ct) is { Large: true } size ? size.Dense ? 300 : 180 : 10, llm.TimeoutSeconds), ct);
         return OutputSanitizer.Clean(content, text);
     }
 
@@ -507,23 +514,23 @@ public sealed class OllamaTextProcessor : ITextProcessor
     /// model too big for the GPU means part on the GPU and the rest in RAM.</summary>
     static JsonObject LoadOptions() => new() { ["num_ctx"] = NumCtx };
 
-    /// <summary>The most a model that runs from memory stays loaded unused: enough to bridge the steps of a notes
+    /// <summary>The most a model held in RAM stays loaded unused: enough to bridge the steps of a notes
     /// session or a few dictations in a row, short enough that ~20 GB of RAM isn't held for long by anything that forgot
     /// to let it go.</summary>
     public const int FromMemoryKeepMinutes = 5;
 
     /// <summary>How long Ollama keeps the model loaded after a request: Settings › Model unloading, but never more
-    /// than <see cref="FromMemoryKeepMinutes"/> for a model that runs from memory.</summary>
+    /// than <see cref="FromMemoryKeepMinutes"/> for a model held in RAM.</summary>
     async Task<string> KeepAliveAsync(string model, CancellationToken ct)
     {
         var minutes = _settings.Current.UnloadAfterMinutes;
-        if ((minutes == 0 || minutes > FromMemoryKeepMinutes) && await RunsFromMemoryAsync(model, ct)) return FromMemoryKeepMinutes + "m";
+        if ((minutes == 0 || minutes > FromMemoryKeepMinutes) && (await SizeAsync(model, ct)).Large) return FromMemoryKeepMinutes + "m";
         return _settings.Current.OllamaKeepAlive;
     }
 
-    public async Task<bool> ReleaseIfFromMemoryAsync(string? model, CancellationToken ct = default)
+    public async Task<bool> ReleaseIfLargeAsync(string? model, CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(model) || !await RunsFromMemoryAsync(model, ct)) return false;
+        if (string.IsNullOrWhiteSpace(model) || !(await SizeAsync(model, ct)).Large) return false;
         static bool Same(string a, string b) =>
             string.Equals(a, b, StringComparison.OrdinalIgnoreCase) || string.Equals(a, b + ":latest", StringComparison.OrdinalIgnoreCase);
         if (!(await LoadedModelsAsync(ct)).Any(n => Same(n, model))) return false;
@@ -546,18 +553,21 @@ public sealed class OllamaTextProcessor : ITextProcessor
         }
     }
 
-    async Task<bool> RunsFromMemoryAsync(string model, CancellationToken ct)
+    async Task<(bool Large, bool Dense)> SizeAsync(string model, CancellationToken ct)
     {
-        if (CloudModels.IsCloud(model) || CloudModels.IsOllamaCloud(model)) return false;
-        if (_fromMemory.TryGetValue(model, out var known)) return known;
+        if (CloudModels.IsCloud(model) || CloudModels.IsOllamaCloud(model)) return (false, false);
+        if (_sizes.TryGetValue(model, out var known)) return known;
         var m = (await ListModelDetailsAsync(ct)).FirstOrDefault(x =>
             string.Equals(x.Name, model, StringComparison.OrdinalIgnoreCase) ||
             string.Equals(x.Name, model + ":latest", StringComparison.OrdinalIgnoreCase));
-        if (m == null) return false; // not installed (yet): ask again next time
-        var fromMemory = m.RunsFromMemory(RuntimeInstaller.GpuMemoryBytes(), LocalModel.SystemRam);
-        if (fromMemory) Log.Info($"LLM {model}: a mixture of experts ({m.ActiveBillions:0.#}B of {m.Billions:0.#}B at work), run from memory, with what fits on the GPU");
-        _fromMemory[model] = fromMemory;
-        return fromMemory;
+        if (m == null) return (false, false); // not installed (yet): ask again next time
+        var size = (m.HeldInRam(RuntimeInstaller.GpuMemoryBytes()), !m.IsMixture);
+        if (size.Item1)
+            Log.Info(m.IsMixture
+                ? $"LLM {model}: a mixture of experts ({m.ActiveBillions:0.#}B of {m.Billions:0.#}B at work), run from memory, with what fits on the GPU"
+                : $"LLM {model}: {m.Billions:0.#}B, too big for the GPU: held in memory with what fits on the GPU, and slow (all of it works on each word)");
+        _sizes[model] = size;
+        return size;
     }
 
     public async Task<IReadOnlyList<string>> ListModelsAsync(CancellationToken ct = default)
@@ -642,7 +652,7 @@ public sealed class OllamaTextProcessor : ITextProcessor
             var vram = m["size_vram"]!.GetValue<double>();
             var pct = size <= 0 ? 0 : (int)Math.Round(100 * vram / size);
             Log.Info($"LLM {model} loaded: {pct}% in GPU memory");
-            if (_fromMemory.TryGetValue(model, out var fromMemory) && fromMemory)
+            if (_sizes.TryGetValue(model, out var sized) && sized.Large)
                 return pct > 0 ? $"Ready · {model} · {pct}% on the GPU, the rest in memory" : $"Ready · {model} · in memory, on the processor (no GPU memory free)";
             return pct >= 90 ? $"Ready · {model} · GPU"
                  : $"Ready · {model} · {pct}% GPU (slower: free up GPU memory or pick a smaller model)";

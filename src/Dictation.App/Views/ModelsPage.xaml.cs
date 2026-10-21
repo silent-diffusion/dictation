@@ -31,6 +31,11 @@ public partial class ModelsPage : UserControl
             "By far the smartest here: the best for Extended Notes' formatting and summaries. A mixture of experts: 30B parameters, " +
             "but only 3B work on each word, so it runs from the PC's memory, with as much of it on the GPU as there is room for. " +
             "Needs 32 GB of RAM. For dictation it is slower (several seconds a paragraph).", "19 GB", MinRamGb: 30),
+        new("qwen3.8:27b-q4_K_M", "Qwen3.8 27B",
+            "The newest and strongest writer here, but an ordinary model: all 27B parameters work on each word. Quick only on a " +
+            "graphics card with 24 GB; with less, most of it runs from the PC's memory on the processor and is very slow " +
+            "(a minute or more for each notes step, several for a summary). Needs 32 GB of RAM. Chosen by hand for " +
+            "Extended Notes (Best on this PC passes it over when it doesn't fit the GPU).", "18 GB", MinRamGb: 30),
     };
 
     CancellationTokenSource? _download;

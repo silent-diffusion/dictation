@@ -214,7 +214,9 @@ puts it back to 100%; the size is remembered, and *Settings › Appearance* has 
   the one to get for notes: 30B parameters, of which only about 3B work on each word, so it runs from RAM (Ollama puts
   as much of it on the GPU as the free GPU memory holds, the rest runs on the processor) and formats and sums up
   far better than the small models, at tens of seconds a step. It can be dictation's model too, but there it is slower
-  (several seconds a paragraph) than the small ones on the GPU.
+  (several seconds a paragraph) than the small ones on the GPU. **Qwen3.8 27B** (18 GB) writes better still, but every
+  one of its parameters works on each word: unless the GPU holds it (24 GB), it is very slow, so it is only used when
+  picked by hand. Any model too big for the GPU is unloaded as soon as a session or a redo is done.
   Extended Notes never count in the dictation statistics; their own daily counts are kept apart in `data\notes\usage.json`
   and shown as a **Usage** strip on the landing page (last 30 days and all time: sessions, time recorded, words heard and
   typed, AI requests, by source). **Pause**, **Full screen** and **Stop** are in the header; dictating into an

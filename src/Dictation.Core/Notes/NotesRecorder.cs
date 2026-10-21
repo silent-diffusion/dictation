@@ -623,13 +623,13 @@ public sealed class NotesRecorder
         }
     }
 
-    /// <summary>The session or redo is done: a model that runs from the PC's memory (Qwen3 30B-A3B) is let go at once,
+    /// <summary>The session or redo is done: a model held in the PC's RAM (Qwen3 30B-A3B, a 27B) is let go at once,
     /// rather than holding ~20 GB of RAM until it times out. Not while another session or redo has started meanwhile.</summary>
     async Task ReleaseModelAsync()
     {
         var model = _model;
         if (model == null || NeedsModels) return;
-        try { await _llm.ReleaseIfFromMemoryAsync(model); }
+        try { await _llm.ReleaseIfLargeAsync(model); }
         catch (Exception e) { Log.Warn("Extended notes: letting the AI model go failed: " + e.Message); }
     }
 
