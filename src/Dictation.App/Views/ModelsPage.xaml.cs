@@ -14,7 +14,8 @@ namespace Dictation.App.Views;
 /// </summary>
 public partial class ModelsPage : UserControl
 {
-    sealed record Option(string Id, string Name, string Description, string Size);
+    /// <param name="MinRamGb">The PC memory it needs (a model that runs from memory), 0 for none.</param>
+    sealed record Option(string Id, string Name, string Description, string Size, double MinRamGb = 0);
 
     static readonly Option[] SpeechModelOptions = Dictation.Core.Speech.SpeechModels.All
         .Select(m => new Option(m.Id, m.Name, m.Description, m.Size)).ToArray();
@@ -26,6 +27,10 @@ public partial class ModelsPage : UserControl
         new("phi4-mini", "Phi-4 mini", "Good at following instructions.", "2.5 GB"),
         new("gemma3:4b", "Gemma 3 4B", "Strong writing for its size.", "3.3 GB"),
         new("qwen2.5:7b", "Qwen 2.5 7B", "Better rewriting (emails, summaries). Needs about 8 GB of GPU memory to be quick.", "4.7 GB"),
+        new("qwen3:30b-a3b-instruct-2507-q4_K_M", "Qwen3 30B-A3B",
+            "By far the smartest here: the best for Extended Notes' formatting and summaries. A mixture of experts: 30B parameters, " +
+            "but only 3B work on each word, so it runs from the PC's memory on the processor and leaves the GPU alone. " +
+            "Needs 32 GB of RAM. For dictation it is slower (several seconds a paragraph).", "19 GB", MinRamGb: 30),
     };
 
     CancellationTokenSource? _download;
@@ -93,6 +98,8 @@ public partial class ModelsPage : UserControl
             if (loaded.Any(n => Same(n, m.Id))) badges.Add(("LOADED", "ok"));
             badges.Add(downloaded ? ("DOWNLOADED", "plain") : ("NOT DOWNLOADED", "outline"));
             var desc = m.Size.Length > 0 ? $"{m.Description} · {m.Size}" : m.Description;
+            var ramGb = LocalModel.SystemRam / (1024.0 * 1024 * 1024);
+            if (m.MinRamGb > 0 && !downloaded && ramGb < m.MinRamGb) desc += $" · this PC has {ramGb:0} GB of RAM: too little";
             LocalList.Children.Add(Row(m.Name, desc, badges, row =>
             {
                 if (!downloaded) return MakeButton("Download", () => DownloadLocalAsync(m, row));

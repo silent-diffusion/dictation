@@ -7,7 +7,8 @@ namespace Dictation.Core.Notes;
 /// Which AI model formats and sums up Extended Notes (Settings › Models, and the Extended Notes start card). The
 /// default is the best one on this PC: the largest installed model that fits in the GPU's memory, since notes run in the
 /// background and gain more from a stronger model than they lose to its speed. A model can also be picked by name, or
-/// the active model (the one dictation uses by default) followed.
+/// the active model (the one dictation uses by default) followed. A mixture-of-experts model (Qwen3 30B-A3B) also fits
+/// when it fits in the PC's memory: only a few billion of its parameters work on each word, so the processor keeps up.
 /// </summary>
 public static class NotesModels
 {
@@ -22,17 +23,18 @@ public static class NotesModels
     public static bool IsChatModel(LocalModel m) =>
         !m.Name.Contains("embed", StringComparison.OrdinalIgnoreCase) && !m.Family.Contains("bert", StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>Whether a model fits: in the GPU's memory when there is one, otherwise small enough for the processor.</summary>
-    public static bool Fits(LocalModel m, long? gpuBytes) =>
-        gpuBytes is { } g ? m.Bytes <= g : m.Billions <= MaxBillionsWithoutGpu;
+    /// <summary>Whether a model fits: in the GPU's memory when there is one, otherwise small enough for the processor;
+    /// or a mixture of experts that runs from the PC's memory (<paramref name="ramBytes"/>, null when not known).</summary>
+    public static bool Fits(LocalModel m, long? gpuBytes, long? ramBytes = null) =>
+        (gpuBytes is { } g ? m.Bytes <= g : m.Billions <= MaxBillionsWithoutGpu) || m.RunsFromMemory(gpuBytes, ramBytes);
 
     /// <summary>The best installed model: the most parameters among those that fit, then the larger file (a finer
     /// quantization); null when none is installed. Never one of Ollama's cloud models: they show in its list like
     /// installed ones (huge, with a tiny file), but they run on ollama.com, so the transcript would leave this PC.</summary>
-    public static LocalModel? PickBest(IEnumerable<LocalModel> installed, long? gpuBytes)
+    public static LocalModel? PickBest(IEnumerable<LocalModel> installed, long? gpuBytes, long? ramBytes = null)
     {
         var chat = installed.Where(m => IsChatModel(m) && !CloudModels.IsOllamaCloud(m.Name)).ToList();
-        return chat.Where(m => Fits(m, gpuBytes))
+        return chat.Where(m => Fits(m, gpuBytes, ramBytes))
                    .OrderByDescending(m => m.Billions).ThenByDescending(m => m.Bytes).ThenBy(m => m.Name, StringComparer.Ordinal)
                    .FirstOrDefault()
                // Nothing fits: the smallest there is, rather than nothing.
@@ -47,7 +49,7 @@ public static class NotesModels
     /// <summary>The model the setting means right now, and why (for the log). A model picked by name that is no longer
     /// installed falls back to the best one; if the models can't be listed, the active model is used.</summary>
     public static async Task<(string Model, string Why)> ResolveAsync(string? setting, string activeModel,
-        Func<Task<IReadOnlyList<LocalModel>>> list, long? gpuBytes)
+        Func<Task<IReadOnlyList<LocalModel>>> list, long? gpuBytes, long? ramBytes = null)
     {
         setting = (setting ?? "").Trim();
         if (string.Equals(setting, Active, StringComparison.OrdinalIgnoreCase)) return (activeModel, "the active model");
@@ -64,8 +66,9 @@ public static class NotesModels
             if (installed.FirstOrDefault(m => Same(m.Name, setting)) is { } chosen) return (chosen.Name, "chosen");
             Log.Warn($"Extended notes: the chosen AI model {setting} isn't installed; using the best one instead");
         }
-        if (PickBest(installed, gpuBytes) is { } best)
-            return (best.Name, gpuBytes is { } g ? $"best on this PC: the largest that fits in {Gb(g)} of GPU memory" : "best on this PC without a GPU");
+        if (PickBest(installed, gpuBytes, ramBytes) is { } best)
+            return (best.Name, best.RunsFromMemory(gpuBytes, ramBytes) ? $"best on this PC: a mixture of experts that runs from {Gb(ramBytes!.Value)} of memory"
+                : gpuBytes is { } g ? $"best on this PC: the largest that fits in {Gb(g)} of GPU memory" : "best on this PC without a GPU");
         return (activeModel, "the active model; no local model is installed");
     }
 

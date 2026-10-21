@@ -8,6 +8,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Dictation.Core.Infrastructure;
 using Dictation.Core.Settings;
+using Dictation.Core.Setup;
 
 namespace Dictation.Core.Text;
 
@@ -34,6 +35,42 @@ public sealed record LocalModel(string Name, double Billions, long Bytes, string
             }
         return Math.Round(bytes / 6e8, 1);
     }
+
+    static readonly Regex ActivePart = new(@"-a(\d+(?:\.\d+)?)b\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    /// <summary>A mixture-of-experts model (Qwen3 30B-A3B, gpt-oss): only a few of its parameters work on each word.</summary>
+    public bool IsMixture => ActivePart.IsMatch(Name) || Family.EndsWith("moe", StringComparison.OrdinalIgnoreCase)
+                             || Family.Equals("gptoss", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The parameters that work on each word, in billions: what decides the speed. All of them for an ordinary
+    /// model; for a mixture of experts the "a3b" in its name, or else about what its family uses.</summary>
+    public double ActiveBillions
+    {
+        get
+        {
+            if (ActivePart.Match(Name) is { Success: true } m &&
+                double.TryParse(m.Groups[1].Value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var a))
+                return a;
+            if (Family.Equals("qwen3moe", StringComparison.OrdinalIgnoreCase)) return Math.Round(Billions * 0.108, 1); // 30.5B, 3.3B at work
+            if (Family.Equals("gptoss", StringComparison.OrdinalIgnoreCase)) return Math.Round(Billions * 0.17, 1);     // 20.9B, 3.6B at work
+            return IsMixture ? Math.Round(Billions * 0.15, 1) : Billions;
+        }
+    }
+
+    /// <summary>What a mixture model leaves free in the PC's memory for Windows, speech and the other apps.</summary>
+    public const long MemoryHeadroom = 10L * 1024 * 1024 * 1024;
+    /// <summary>The most parameters at work per word that the processor alone keeps up with.</summary>
+    public const double MaxActiveBillionsOnProcessor = 4.5;
+
+    /// <summary>The PC's memory (RAM) in bytes.</summary>
+    public static long SystemRam => GC.GetGCMemoryInfo().TotalAvailableMemoryBytes;
+
+    /// <summary>Whether this runs from the PC's memory rather than the graphics card: a mixture of experts too big for
+    /// the GPU (or with none) that fits in RAM with room to spare and has few enough parameters at work to be quick on
+    /// the processor. Ollama is then told to keep it off the GPU, so dictation's model and speech keep the GPU.</summary>
+    public bool RunsFromMemory(long? gpuBytes, long? ramBytes) =>
+        IsMixture && (gpuBytes is not { } g || Bytes > g) && ramBytes is { } r && Bytes + MemoryHeadroom <= r
+        && ActiveBillions <= MaxActiveBillionsOnProcessor;
 }
 
 /// <summary>Turns a raw transcript into a processed one according to a profile. Backend-agnostic.</summary>
@@ -279,6 +316,8 @@ public sealed class OllamaTextProcessor : ITextProcessor
     readonly OllamaHost _host;
     readonly CloudCompletion _cloud;
     readonly HttpClient _http = new() { Timeout = Timeout.InfiniteTimeSpan };
+    /// <summary>Which models run from the PC's memory (see <see cref="LocalModel.RunsFromMemory"/>), as found.</summary>
+    readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _fromMemory = new(StringComparer.OrdinalIgnoreCase);
     /// <summary>Must be identical for warm-up and real requests, otherwise Ollama reloads the model.</summary>
     const int NumCtx = 4096;
     /// <summary>How much a request can hold (instructions, text and reply together), in tokens.</summary>
@@ -387,8 +426,10 @@ public sealed class OllamaTextProcessor : ITextProcessor
             new JsonObject { ["role"] = "user", ["content"] = text },
         };
         var sw = Stopwatch.StartNew();
-        // Background work on long text: more time than a dictation gets.
-        var reply = await ChatAsync(model, messages, maxTokens, Math.Max(180, _settings.Current.Llm.TimeoutSeconds), ct);
+        // Background work on long text: more time than a dictation gets, and more again for a model on the processor
+        // (its first load reads about 19 GB).
+        var floor = await RunsFromMemoryAsync(model, ct) ? 420 : 180;
+        var reply = await ChatAsync(model, messages, maxTokens, Math.Max(floor, _settings.Current.Llm.TimeoutSeconds), ct);
         Log.Info($"llm {model}: asked {text.Length}->{reply.Length} chars in {sw.ElapsedMilliseconds} ms");
         return OutputSanitizer.Clean(reply, text);
     }
@@ -413,7 +454,8 @@ public sealed class OllamaTextProcessor : ITextProcessor
                 messages.Add(new JsonObject { ["role"] = "assistant", ["content"] = o });
             }
         messages.Add(new JsonObject { ["role"] = "user", ["content"] = $"<transcript>\n{text}\n</transcript>" });
-        var content = await ChatAsync(model, messages, Math.Min(4096, text.Length / 2 + 256), Math.Max(10, llm.TimeoutSeconds), ct);
+        var content = await ChatAsync(model, messages, Math.Min(4096, text.Length / 2 + 256),
+            Math.Max(await RunsFromMemoryAsync(model, ct) ? 180 : 10, llm.TimeoutSeconds), ct);
         return OutputSanitizer.Clean(content, text);
     }
 
@@ -422,18 +464,16 @@ public sealed class OllamaTextProcessor : ITextProcessor
         if (_settings.Current.Cloud.KeepOffline && CloudModels.IsOllamaCloud(model))
             throw new UserFacingException($"{model} runs on ollama.com, but \"Keep everything offline\" is on. " +
                                           "Turn it off under Settings › Cloud AI, or pick a model that runs on this PC.");
+        var options = await LoadOptionsAsync(model, ct);
+        options["temperature"] = 0;
+        options["num_predict"] = numPredict;
         var body = new JsonObject
         {
             ["model"] = model,
             ["stream"] = false,
             ["think"] = false,
             ["keep_alive"] = _settings.Current.OllamaKeepAlive,
-            ["options"] = new JsonObject
-            {
-                ["temperature"] = 0,
-                ["num_ctx"] = NumCtx,
-                ["num_predict"] = numPredict,
-            },
+            ["options"] = options,
             ["messages"] = messages,
         };
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -455,6 +495,29 @@ public sealed class OllamaTextProcessor : ITextProcessor
         {
             throw new UserFacingException("Couldn't reach the local AI runtime.", e);
         }
+    }
+
+    /// <summary>The options that decide how a model is loaded; the same for warm-up and real requests, otherwise Ollama
+    /// loads it again. A model that runs from the PC's memory gets no GPU layers.</summary>
+    async Task<JsonObject> LoadOptionsAsync(string model, CancellationToken ct)
+    {
+        var options = new JsonObject { ["num_ctx"] = NumCtx };
+        if (await RunsFromMemoryAsync(model, ct)) options["num_gpu"] = 0;
+        return options;
+    }
+
+    async Task<bool> RunsFromMemoryAsync(string model, CancellationToken ct)
+    {
+        if (CloudModels.IsCloud(model) || CloudModels.IsOllamaCloud(model)) return false;
+        if (_fromMemory.TryGetValue(model, out var known)) return known;
+        var m = (await ListModelDetailsAsync(ct)).FirstOrDefault(x =>
+            string.Equals(x.Name, model, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(x.Name, model + ":latest", StringComparison.OrdinalIgnoreCase));
+        if (m == null) return false; // not installed (yet): ask again next time
+        var fromMemory = m.RunsFromMemory(RuntimeInstaller.GpuMemoryBytes(), LocalModel.SystemRam);
+        if (fromMemory) Log.Info($"LLM {model}: a mixture of experts ({m.ActiveBillions:0.#}B of {m.Billions:0.#}B at work), run from memory on the processor");
+        _fromMemory[model] = fromMemory;
+        return fromMemory;
     }
 
     public async Task<IReadOnlyList<string>> ListModelsAsync(CancellationToken ct = default)
@@ -539,6 +602,7 @@ public sealed class OllamaTextProcessor : ITextProcessor
             var vram = m["size_vram"]!.GetValue<double>();
             var pct = size <= 0 ? 0 : (int)Math.Round(100 * vram / size);
             Log.Info($"LLM {model} loaded: {pct}% in GPU memory");
+            if (_fromMemory.TryGetValue(model, out var fromMemory) && fromMemory) return $"Ready · {model} · in memory, on the processor";
             return pct >= 90 ? $"Ready · {model} · GPU"
                  : $"Ready · {model} · {pct}% GPU (slower: free up GPU memory or pick a smaller model)";
         }
@@ -569,7 +633,11 @@ public sealed class OllamaTextProcessor : ITextProcessor
             SetStatus($"Loading {model}…", false);
             // An empty chat request loads the model into (GPU) memory without generating anything.
             using var resp = await _http.PostAsJsonAsync(Url("/api/chat"),
-                new { model, keep_alive = _settings.Current.OllamaKeepAlive, options = new { num_ctx = NumCtx }, messages = Array.Empty<object>() }, ct);
+                new JsonObject
+                {
+                    ["model"] = model, ["keep_alive"] = _settings.Current.OllamaKeepAlive,
+                    ["options"] = await LoadOptionsAsync(model, ct), ["messages"] = new JsonArray(),
+                }, ct);
             resp.EnsureSuccessStatusCode();
             SetStatus(await DescribeLoadedAsync(model, ct), true);
         }
