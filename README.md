@@ -211,8 +211,8 @@ puts it back to 100%; the size is remembered, and *Settings › Appearance* has 
   The AI model for Extended Notes is its own setting (Settings › Models, or *AI model* on the start card); by default the
   best on this PC, the largest installed model that fits in the GPU's memory, or a mixture-of-experts model that fits in
   the PC's memory with 10 GB to spare. **Qwen3 30B-A3B** (Settings › Models, a 19 GB download, needs 32 GB of RAM) is
-  the one to get for notes: 30B parameters, of which only about 3B work on each word, so it runs on the processor from
-  RAM (Ollama is told to keep it off the GPU, which stays free for speech and dictation's model) and formats and sums up
+  the one to get for notes: 30B parameters, of which only about 3B work on each word, so it runs from RAM (Ollama puts
+  as much of it on the GPU as the free GPU memory holds, the rest runs on the processor) and formats and sums up
   far better than the small models, at tens of seconds a step. It can be dictation's model too, but there it is slower
   (several seconds a paragraph) than the small ones on the GPU.
   Extended Notes never count in the dictation statistics; their own daily counts are kept apart in `data\notes\usage.json`

@@ -67,7 +67,8 @@ public sealed record LocalModel(string Name, double Billions, long Bytes, string
 
     /// <summary>Whether this runs from the PC's memory rather than the graphics card: a mixture of experts too big for
     /// the GPU (or with none) that fits in RAM with room to spare and has few enough parameters at work to be quick on
-    /// the processor. Ollama is then told to keep it off the GPU, so dictation's model and speech keep the GPU.</summary>
+    /// the processor. Ollama still puts what fits of it on the GPU (the parts every word uses first), the rest stays
+    /// in RAM.</summary>
     public bool RunsFromMemory(long? gpuBytes, long? ramBytes) =>
         IsMixture && (gpuBytes is not { } g || Bytes > g) && ramBytes is { } r && Bytes + MemoryHeadroom <= r
         && ActiveBillions <= MaxActiveBillionsOnProcessor;
@@ -468,7 +469,7 @@ public sealed class OllamaTextProcessor : ITextProcessor
         if (_settings.Current.Cloud.KeepOffline && CloudModels.IsOllamaCloud(model))
             throw new UserFacingException($"{model} runs on ollama.com, but \"Keep everything offline\" is on. " +
                                           "Turn it off under Settings › Cloud AI, or pick a model that runs on this PC.");
-        var options = await LoadOptionsAsync(model, ct);
+        var options = LoadOptions();
         options["temperature"] = 0;
         options["num_predict"] = numPredict;
         var body = new JsonObject
@@ -502,13 +503,9 @@ public sealed class OllamaTextProcessor : ITextProcessor
     }
 
     /// <summary>The options that decide how a model is loaded; the same for warm-up and real requests, otherwise Ollama
-    /// loads it again. A model that runs from the PC's memory gets no GPU layers.</summary>
-    async Task<JsonObject> LoadOptionsAsync(string model, CancellationToken ct)
-    {
-        var options = new JsonObject { ["num_ctx"] = NumCtx };
-        if (await RunsFromMemoryAsync(model, ct)) options["num_gpu"] = 0;
-        return options;
-    }
+    /// loads it again. No GPU layer count: Ollama fits as much of the model as the free GPU memory holds, which for a
+    /// model too big for the GPU means part on the GPU and the rest in RAM.</summary>
+    static JsonObject LoadOptions() => new() { ["num_ctx"] = NumCtx };
 
     /// <summary>The most a model that runs from memory stays loaded unused: enough to bridge the steps of a notes
     /// session or a few dictations in a row, short enough that ~20 GB of RAM isn't held for long by anything that forgot
@@ -558,7 +555,7 @@ public sealed class OllamaTextProcessor : ITextProcessor
             string.Equals(x.Name, model + ":latest", StringComparison.OrdinalIgnoreCase));
         if (m == null) return false; // not installed (yet): ask again next time
         var fromMemory = m.RunsFromMemory(RuntimeInstaller.GpuMemoryBytes(), LocalModel.SystemRam);
-        if (fromMemory) Log.Info($"LLM {model}: a mixture of experts ({m.ActiveBillions:0.#}B of {m.Billions:0.#}B at work), run from memory on the processor");
+        if (fromMemory) Log.Info($"LLM {model}: a mixture of experts ({m.ActiveBillions:0.#}B of {m.Billions:0.#}B at work), run from memory, with what fits on the GPU");
         _fromMemory[model] = fromMemory;
         return fromMemory;
     }
@@ -645,7 +642,8 @@ public sealed class OllamaTextProcessor : ITextProcessor
             var vram = m["size_vram"]!.GetValue<double>();
             var pct = size <= 0 ? 0 : (int)Math.Round(100 * vram / size);
             Log.Info($"LLM {model} loaded: {pct}% in GPU memory");
-            if (_fromMemory.TryGetValue(model, out var fromMemory) && fromMemory) return $"Ready · {model} · in memory, on the processor";
+            if (_fromMemory.TryGetValue(model, out var fromMemory) && fromMemory)
+                return pct > 0 ? $"Ready · {model} · {pct}% on the GPU, the rest in memory" : $"Ready · {model} · in memory, on the processor (no GPU memory free)";
             return pct >= 90 ? $"Ready · {model} · GPU"
                  : $"Ready · {model} · {pct}% GPU (slower: free up GPU memory or pick a smaller model)";
         }
@@ -679,7 +677,7 @@ public sealed class OllamaTextProcessor : ITextProcessor
                 new JsonObject
                 {
                     ["model"] = model, ["keep_alive"] = await KeepAliveAsync(model, ct),
-                    ["options"] = await LoadOptionsAsync(model, ct), ["messages"] = new JsonArray(),
+                    ["options"] = LoadOptions(), ["messages"] = new JsonArray(),
                 }, ct);
             resp.EnsureSuccessStatusCode();
             SetStatus(await DescribeLoadedAsync(model, ct), true);
