@@ -277,7 +277,7 @@ public sealed class SidecarSpeechRecognizer : ISpeechRecognizer
         if (!IsReady) throw new UserFacingException(
             _ready ? "The speech engine is not connected." : "The speech model is still loading. Try again in a moment.");
         var asr = _settings.Current.Asr;
-        var msg = JsonSerializer.Serialize(new { type = "start", language = asr.Language, prompt = asr.VocabularyHint, live });
+        var msg = JsonSerializer.Serialize(new { type = "start", language = asr.Language, prompt = asr.VocabularyHint, live, even = asr.EvenOutVolume });
         _final = null;
         _outbox.Writer.TryWrite((false, Encoding.UTF8.GetBytes(msg)));
     }

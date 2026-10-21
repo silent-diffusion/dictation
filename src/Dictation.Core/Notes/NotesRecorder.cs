@@ -196,7 +196,7 @@ public sealed class NotesRecorder
             });
             await client.ConnectAsync(_settings.Current.Asr.Port, CancellationToken.None);
             var asr = _settings.Current.Asr;
-            client.Start(asr.Language, asr.VocabularyHint);
+            client.Start(asr.Language, asr.VocabularyHint, even: asr.EvenOutVolume);
             if (Current == null) { await client.DisposeAsync(); return; }
             int waiting;
             lock (_audioLock)
@@ -409,7 +409,7 @@ public sealed class NotesRecorder
                         await Task.Delay(TimeSpan.FromSeconds(2 * attempt), ct);
                         client = await ConnectForRedoAsync(ct);
                     }
-                    client.Start(asr.Language, prompt.Length > 0 ? prompt : null, live: false, dropPhantoms: true);
+                    client.Start(asr.Language, prompt.Length > 0 ? prompt : null, live: false, dropPhantoms: true, even: asr.EvenOutVolume);
                     reader.Position = (long)(start * format.SampleRate) * format.BlockAlign;
                     var left = (long)((end - start) * format.SampleRate) * format.BlockAlign;
                     while (left > 0)
