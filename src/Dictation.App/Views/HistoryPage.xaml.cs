@@ -14,9 +14,19 @@ namespace Dictation.App.Views;
 /// Recent dictations, kept on disk: the recording (playable, also at 2×), what was heard, what the AI made of it (and
 /// what it changed), and what went in where. Newest first, or grouped by the app the text went into.
 /// </summary>
+/// <summary>An app's header in History's list by app: a row of its own, clicked to fold or unfold the app.</summary>
+public sealed record HistoryAppHeader(string Name, int Count, bool Expanded)
+{
+    public string Sign => Expanded ? "−" : "+";
+}
+
 public partial class HistoryPage : UserControl
 {
-    readonly ListCollectionView _view;
+    /// <summary>What the list shows: the dictations, newest first, or by app (a header, then that app's dictations).</summary>
+    List<object> _rows = new();
+    /// <summary>Apps folded in the list by app (for as long as the page is open).</summary>
+    readonly HashSet<string> _folded = new(StringComparer.OrdinalIgnoreCase);
+    bool _rebuilding;
     readonly MediaPlayer _player = new();
     readonly DispatcherTimer _tick = new() { Interval = TimeSpan.FromMilliseconds(200) };
     bool _playing, _seeking;
@@ -26,10 +36,10 @@ public partial class HistoryPage : UserControl
     {
         InitializeComponent();
         var store = App.Services.History;
-        _view = new ListCollectionView(store.Entries);
-        List.ItemsSource = _view;
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        _rebuilding = true; // the combo box's first selection isn't a change of setting
         GroupingBox.SelectedIndex = App.Services.Settings.Current.HistoryGrouping == HistoryGrouping.ByApp ? 1 : 0;
-        ApplyGrouping();
+        _rebuilding = false;
         store.Entries.CollectionChanged += OnEntriesChanged;
         _player.MediaEnded += (_, _) => StopPlayback();
         _player.MediaOpened += (_, _) => UpdateTime();
@@ -41,7 +51,8 @@ public partial class HistoryPage : UserControl
             ClosePlayer();
         };
         UpdateCount();
-        if (_view.Count > 0) List.SelectedIndex = 0;
+        Rebuild(null);
+        if (clock.ElapsedMilliseconds >= 100) Log.Info($"History page: built in {clock.ElapsedMilliseconds} ms ({store.Entries.Count} dictations)");
     }
 
     HistoryEntry? Current => List.SelectedItem as HistoryEntry;
@@ -49,7 +60,43 @@ public partial class HistoryPage : UserControl
     void OnEntriesChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
     {
         UpdateCount();
-        if (List.SelectedItem == null && _view.Count > 0) List.SelectedIndex = 0;
+        Rebuild(Current);
+    }
+
+    /// <summary>Lay out the rows again (after a change, a fold, or a new order), keeping <paramref name="keep"/> selected
+    /// if it is still shown, else the first dictation.</summary>
+    void Rebuild(HistoryEntry? keep)
+    {
+        var entries = App.Services.History.Entries;
+        var rows = new List<object>(entries.Count + 32);
+        if (App.Services.Settings.Current.HistoryGrouping == HistoryGrouping.ByApp)
+        {
+            // Apps in the order of their newest dictation (the entries are newest first), newest first inside each.
+            foreach (var app in entries.GroupBy(e => e.AppName, StringComparer.OrdinalIgnoreCase))
+            {
+                var open = !_folded.Contains(app.Key);
+                var list = app.ToList();
+                rows.Add(new HistoryAppHeader(app.Key, list.Count, open));
+                if (open) rows.AddRange(list);
+            }
+        }
+        else rows.AddRange(entries);
+        _rows = rows;
+        var select = keep != null && rows.Contains(keep) ? keep : rows.OfType<HistoryEntry>().FirstOrDefault();
+        _rebuilding = true;
+        List.ItemsSource = rows;
+        List.SelectedItem = select;
+        _rebuilding = false;
+        if (select != null) List.ScrollIntoView(select);
+        ShowDetail();
+    }
+
+    /// <summary>A click on an app's header folds or unfolds it.</summary>
+    void Header_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not HistoryAppHeader h) return;
+        if (!_folded.Remove(h.Name)) _folded.Add(h.Name);
+        Rebuild(Current);
     }
 
     void UpdateCount()
@@ -66,23 +113,46 @@ public partial class HistoryPage : UserControl
 
     void Grouping_Changed(object sender, SelectionChangedEventArgs e)
     {
-        if (_view == null) return;
+        if (_rebuilding) return;
         var s = App.Services.Settings;
         s.Current.HistoryGrouping = GroupingBox.SelectedIndex == 1 ? HistoryGrouping.ByApp : HistoryGrouping.Chronological;
         s.Save();
-        ApplyGrouping();
+        Rebuild(Current);
     }
 
-    /// <summary>By app: groups ordered by their newest dictation, newest first inside each (the entries already are).</summary>
-    void ApplyGrouping()
-    {
-        _view.GroupDescriptions.Clear();
-        if (App.Services.Settings.Current.HistoryGrouping == HistoryGrouping.ByApp)
-            _view.GroupDescriptions.Add(new PropertyGroupDescription(nameof(HistoryEntry.AppName)));
-    }
+    HistoryEntry? _shown;
 
     void List_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        if (_rebuilding) return;
+        if (List.SelectedItem is HistoryAppHeader)
+        {
+            // Arrowed onto a header: go on to the next dictation the way the arrow was going.
+            var at = List.SelectedIndex;
+            var from = _shown != null ? _rows.IndexOf(_shown) : -1;
+            var step = from > at ? -1 : 1;
+            var i = at;
+            while (i >= 0 && i < _rows.Count && _rows[i] is not HistoryEntry) i += step;
+            if (i < 0 || i >= _rows.Count) { i = at; while (i >= 0 && i < _rows.Count && _rows[i] is not HistoryEntry) i -= step; }
+            List.SelectedItem = i >= 0 && i < _rows.Count ? _rows[i] : _shown;
+            if (List.SelectedItem != null) List.ScrollIntoView(List.SelectedItem);
+            return;
+        }
+        if (ReferenceEquals(Current, _shown) && Current != null) return;
+        ShowDetail();
+    }
+
+    /// <summary>The selected dictation in full, on the right.</summary>
+    void ShowDetail()
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        try { ShowDetailNow(); }
+        finally { if (clock.ElapsedMilliseconds >= 100) Log.Info($"History page: showing a dictation took {clock.ElapsedMilliseconds} ms"); }
+    }
+
+    void ShowDetailNow()
+    {
+        _shown = Current;
         StopPlayback();
         ClosePlayer();
         var c = Current;
@@ -227,9 +297,7 @@ public partial class HistoryPage : UserControl
             _rerunning = false;
             RunAgainButton.Content = "RUN AGAIN";
         }
-        _view.Refresh();
-        if (!ReferenceEquals(Current, c)) List.SelectedItem = c;
-        List_SelectionChanged(List, null!);
+        Rebuild(c);
         Info.Text = message;
     }
 
@@ -237,9 +305,7 @@ public partial class HistoryPage : UserControl
     {
         if (Current is not { } c) return;
         App.Services.Rerun.SwapEarlier(c);
-        _view.Refresh();
-        if (!ReferenceEquals(Current, c)) List.SelectedItem = c;
-        List_SelectionChanged(List, null!);
+        Rebuild(c);
         Info.Text = c.ShowingEarlier ? "Put back the result from before it was run again." : "Back to the rerun's result.";
     }
 

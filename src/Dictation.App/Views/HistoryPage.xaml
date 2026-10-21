@@ -1,7 +1,8 @@
 <UserControl x:Class="Dictation.App.Views.HistoryPage"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:local="clr-namespace:Dictation.App.Views">
+             xmlns:local="clr-namespace:Dictation.App.Views"
+             xmlns:sess="clr-namespace:Dictation.Core.Session;assembly=Dictation.Core">
     <Grid Margin="32,28,32,24">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -33,40 +34,40 @@
                 <ListBox x:Name="List" BorderThickness="0" Background="Transparent" SelectionChanged="List_SelectionChanged"
                          ItemContainerStyle="{StaticResource RowItem}"
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled" AutomationProperties.Name="Dictations"
-                         VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.IsVirtualizingWhenGrouping="True"
+                         VirtualizingPanel.IsVirtualizing="True"
                          VirtualizingPanel.VirtualizationMode="Recycling" VirtualizingPanel.ScrollUnit="Pixel">
-                    <!-- Only the rows on screen are built, grouped or not: with hundreds of dictations, building every row
-                         (which grouping by app used to do) took seconds each time the page opened. -->
-                    <ListBox.GroupStyle>
-                        <!-- By app: each app is a collapsible section with its name large and its count beside it -->
-                        <GroupStyle>
-                            <GroupStyle.Panel>
-                                <ItemsPanelTemplate><VirtualizingStackPanel/></ItemsPanelTemplate>
-                            </GroupStyle.Panel>
-                            <GroupStyle.ContainerStyle>
-                                <Style TargetType="GroupItem">
-                                    <Setter Property="Template">
-                                        <Setter.Value>
-                                            <ControlTemplate TargetType="GroupItem">
-                                                <Expander IsExpanded="True" Margin="0,6,0,2" Style="{StaticResource NavGroup}">
-                                                    <Expander.Header>
-                                                        <StackPanel Orientation="Horizontal">
-                                                            <TextBlock Text="{Binding Name}" FontSize="12" FontWeight="Bold"
-                                                                       Foreground="{DynamicResource Ob.Text}" VerticalAlignment="Center"/>
-                                                            <TextBlock Text="{Binding ItemCount}" Margin="10,0,0,0" VerticalAlignment="Center"/>
-                                                        </StackPanel>
-                                                    </Expander.Header>
-                                                    <ItemsPresenter Margin="6,2,0,4"/>
-                                                </Expander>
-                                            </ControlTemplate>
-                                        </Setter.Value>
-                                    </Setter>
-                                </Style>
-                            </GroupStyle.ContainerStyle>
-                        </GroupStyle>
-                    </ListBox.GroupStyle>
-                    <ListBox.ItemTemplate>
-                        <DataTemplate>
+                    <!-- A plain list (never a grouped one, which WPF builds in full): only the rows on screen are built,
+                         however many dictations there are. By app, each app's header is a row of its own. -->
+                    <ListBox.Resources>
+                        <!-- By app: the app's name large, its count beside it, + or − to fold it -->
+                        <DataTemplate DataType="{x:Type local:HistoryAppHeader}">
+                            <Button Click="Header_Click" Cursor="Hand" Focusable="False" Margin="-12,-8,-12,-8"
+                                    HorizontalContentAlignment="Stretch" AutomationProperties.Name="{Binding Name}">
+                                <Button.Template>
+                                    <ControlTemplate TargetType="Button">
+                                        <Border x:Name="Bd" Background="{DynamicResource Ob.Subtle}" Padding="12,9,12,7">
+                                            <ContentPresenter/>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Ob.Hover}"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Button.Template>
+                                <DockPanel>
+                                    <TextBlock DockPanel.Dock="Right" Text="{Binding Sign}" FontFamily="{StaticResource Ob.Mono}" FontSize="12"
+                                               Foreground="{DynamicResource Ob.Muted}" VerticalAlignment="Center"/>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="{Binding Name}" FontSize="12" FontWeight="Bold" Foreground="{DynamicResource Ob.Text}"
+                                                   VerticalAlignment="Center"/>
+                                        <TextBlock Text="{Binding Count}" Margin="10,0,0,0" FontFamily="{StaticResource Ob.Mono}" FontSize="10.5"
+                                                   Foreground="{DynamicResource Ob.Muted}" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </DockPanel>
+                            </Button>
+                        </DataTemplate>
+                        <DataTemplate DataType="{x:Type sess:HistoryEntry}">
                             <StackPanel Margin="2,5">
                                 <DockPanel>
                                     <TextBlock DockPanel.Dock="Right" Text="{Binding Duration}" Style="{StaticResource MonoLabel}"/>
@@ -78,7 +79,7 @@
                                            Margin="0,3,0,0"/>
                             </StackPanel>
                         </DataTemplate>
-                    </ListBox.ItemTemplate>
+                    </ListBox.Resources>
                 </ListBox>
             </Border>
             <TextBlock x:Name="EmptyText" Style="{StaticResource Caption}" Margin="16" VerticalAlignment="Top"
