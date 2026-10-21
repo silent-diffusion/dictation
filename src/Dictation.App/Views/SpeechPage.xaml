@@ -39,6 +39,15 @@
             <TextBlock Style="{StaticResource Caption}" Margin="0,4,0,0"
                        Text="Two-letter code such as en, de, es. Leave empty to auto-detect (slightly slower, less reliable for short phrases)."/>
 
+            <TextBlock Text="QUIET SPEECH" Style="{StaticResource FieldLabel}"/>
+            <CheckBox Style="{StaticResource Switch}" IsChecked="{Binding Asr.EvenOutVolume}">
+                <StackPanel>
+                    <TextBlock Text="Even out the volume before transcribing" TextWrapping="Wrap"/>
+                    <TextBlock Style="{StaticResource Caption}" Margin="0,2,0,0" TextWrapping="Wrap"
+                               Text="Brings quiet stretches up to the level of the rest, and finds the words by how far they stand above the room's background noise, so a quiet microphone or turning away from it doesn't lose whole sentences. Silence still gives nothing. On by default; applies to dictation and Extended Notes."/>
+                </StackPanel>
+            </CheckBox>
+
             <TextBlock Text="VOCABULARY HINT" Style="{StaticResource FieldLabel}"/>
             <TextBox Text="{Binding Asr.VocabularyHint, UpdateSourceTrigger=LostFocus}" MaxWidth="560" HorizontalAlignment="Stretch"/>
             <TextBlock Style="{StaticResource Caption}" Margin="0,4,0,0"

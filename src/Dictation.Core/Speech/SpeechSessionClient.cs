@@ -40,11 +40,12 @@ public sealed class SpeechSessionClient : IAsyncDisposable
     bool _live = true;
 
     /// <summary>Begin a session: live (finished pieces every few seconds, the rest when it stops), or not (everything
-    /// sent is decoded at once when it stops). <paramref name="dropPhantoms"/>: leave out Whisper's made-up phrases.</summary>
-    public void Start(string? language, string? prompt, bool live = true, bool dropPhantoms = false)
+    /// sent is decoded at once when it stops). <paramref name="dropPhantoms"/>: leave out Whisper's made-up phrases.
+    /// <paramref name="even"/>: even out quiet speech first (<see cref="Settings.AsrSettings.EvenOutVolume"/>).</summary>
+    public void Start(string? language, string? prompt, bool live = true, bool dropPhantoms = false, bool even = false)
     {
         _live = live;
-        var msg = JsonSerializer.Serialize(new { type = "start", language, prompt, live, drop_phantoms = dropPhantoms });
+        var msg = JsonSerializer.Serialize(new { type = "start", language, prompt, live, drop_phantoms = dropPhantoms, even });
         _outbox.Writer.TryWrite((false, Encoding.UTF8.GetBytes(msg)));
     }
 

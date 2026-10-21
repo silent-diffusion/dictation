@@ -98,6 +98,127 @@ def is_phantom(seg):
     return False
 
 
+# ----- evening out quiet speech -----
+# Whisper's own speech detector (Silero VAD) skips speech that is much quieter than the rest, and Whisper itself hears
+# words far below the loudest part of the audio poorly. A quiet microphone, or turning away from it, then loses whole
+# sentences. So when the session asks for it ("even"), the audio is first levelled (every stretch of speech brought to
+# about the same loudness) and the parts to decode are found by how far they stand above the room's noise floor,
+# which works however quiet the microphone is. Silero, on the levelled audio, only decides whether anything was said
+# at all (so silence still gives nothing, never a made-up "Thank you.").
+
+FRAME = 320                 # 20 ms
+TARGET_DB = -20.0           # where speech is brought to (dBFS, RMS)
+MAX_BOOST_DB = 50.0         # never raise anything more than this
+MAX_CUT_DB = 12.0           # nor lower it more than this
+NOISE_MARGIN_DB = 8.0       # a frame this far above the noise floor counts as speech
+NOISE_CEILING_DB = -55.0    # in the pauses, the noise floor is not raised above this
+
+
+def _frame_db(audio):
+    n = len(audio) // FRAME
+    frames = audio[: n * FRAME].reshape(n, FRAME).astype(np.float64)
+    return 20.0 * np.log10(np.maximum(np.sqrt((frames ** 2).mean(axis=1)), 1e-9))
+
+
+def _noise_floor(rms_db):
+    live = rms_db[rms_db > -90]  # digital silence (before the mic opens) isn't the room's noise
+    return float(np.percentile(live, 10)) if len(live) >= 10 else None
+
+
+def level(audio):
+    """Bring every stretch of speech to about the same loudness, so quiet words aren't lost next to loud ones.
+
+    The gain follows the speech's loudness (over about 0.4 s, so words keep their shape), is held through the pauses
+    but limited there so background noise isn't raised to speech level, and changes smoothly: quickly down for a
+    loud word after a quiet one, slower up. A soft limiter keeps peaks from clipping."""
+    rms_db = _frame_db(audio)
+    n = len(rms_db)
+    floor = _noise_floor(rms_db) if n >= 10 else None
+    if floor is None:
+        return audio
+    speech = rms_db > floor + NOISE_MARGIN_DB
+    if speech.sum() < 5:
+        return audio
+    k = np.ones(21)
+    count = np.convolve(speech.astype(np.float64), k, mode="same")
+    power = np.convolve(np.where(speech, 10 ** (rms_db / 10), 0.0), k, mode="same")
+    local = 10 * np.log10(np.maximum(power, 1e-18) / np.maximum(count, 1))
+    gain = np.where(speech, TARGET_DB - local, np.nan)
+    # Pauses take the gain of the speech before them (at the start, of the first speech).
+    idx = np.where(speech, np.arange(n), -1)
+    np.maximum.accumulate(idx, out=idx)
+    idx[idx < 0] = int(np.argmax(speech))
+    gain = np.clip(gain[idx], -MAX_CUT_DB, MAX_BOOST_DB)
+    gain = np.where(speech, gain, np.minimum(gain, max(0.0, NOISE_CEILING_DB - floor)))
+    smooth = np.empty(n)
+    g = gain[0]
+    for i in range(n):
+        g += (gain[i] - g) * (0.5 if gain[i] < g else 0.15)
+        smooth[i] = g
+    lin = 10 ** (smooth / 20)
+    out = audio.astype(np.float64)
+    out[: n * FRAME] *= np.interp(np.arange(n * FRAME), np.arange(n) * FRAME + FRAME / 2, lin)
+    out[n * FRAME:] *= lin[-1]
+    a = np.abs(out)
+    over = a > 0.9
+    out[over] = np.sign(out[over]) * (0.9 + 0.1 * np.tanh((a[over] - 0.9) / 0.1))
+    return out.astype(np.float32)
+
+
+def speech_regions(audio, gap=0.5, pad=0.2, shortest=0.25):
+    """Where words are being said, in samples: stretches well above the noise floor of the audio as recorded, joined
+    across gaps of up to half a second, a little padding either side; blips shorter than a quarter second left out."""
+    rms_db = _frame_db(audio)
+    floor = _noise_floor(rms_db) if len(rms_db) >= 10 else None
+    if floor is None:
+        return []
+    on = np.concatenate(([False], rms_db > floor + NOISE_MARGIN_DB, [False]))
+    edges = np.flatnonzero(on[1:] != on[:-1])
+    merged = []
+    for a, b in zip(edges[::2], edges[1::2]):
+        if merged and a - merged[-1][1] <= gap * SAMPLE_RATE / FRAME:
+            merged[-1][1] = b
+        else:
+            merged.append([int(a), int(b)])
+    out, p = [], int(pad * SAMPLE_RATE)
+    for a, b in merged:
+        if (b - a) * FRAME < shortest * SAMPLE_RATE:
+            continue
+        s, e = max(0, a * FRAME - p), min(len(audio), b * FRAME + p)
+        if out and s <= out[-1][1]:
+            out[-1] = (out[-1][0], e)
+        else:
+            out.append((s, e))
+    return out
+
+
+def evened(audio):
+    """The audio levelled and cut down to where words are said, with the regions it came from; None when nothing was
+    said (Silero, on the levelled audio, finds less than MIN_SPEECH_SECONDS of speech)."""
+    from faster_whisper.vad import VadOptions, get_speech_timestamps
+    if len(audio) < SAMPLE_RATE * 0.3:
+        return None
+    levelled = level(audio)
+    heard = get_speech_timestamps(levelled, VadOptions(min_silence_duration_ms=400))
+    if sum(t["end"] - t["start"] for t in heard) < MIN_SPEECH_SECONDS * SAMPLE_RATE:
+        return None
+    regions = speech_regions(audio)
+    if not regions:
+        return None
+    return np.concatenate([levelled[s:e] for s, e in regions]), regions
+
+
+def original_time(t, regions):
+    """A time in the joined audio (seconds), as a time in the audio it was cut from."""
+    at, done = t * SAMPLE_RATE, 0
+    for s, e in regions:
+        if at <= done + (e - s):
+            return (s + at - done) / SAMPLE_RATE
+        done += e - s
+    return regions[-1][1] / SAMPLE_RATE
+
+
+
 def sentences(text):
     return [x for x in re.split(r"(?<=[.!?])\s+", (text or "").strip()) if x]
 
@@ -166,8 +287,14 @@ class FasterWhisperEngine:
         text = " ".join(s.text.strip() for s in segs if not (drop_phantoms and is_phantom(s))).strip()
         return text, (getattr(info, "duration_after_vad", None) if vad else None)
 
-    def transcribe(self, audio, final, language, prompt, drop_phantoms=False):
-        raw, speech = self._decode(audio, 5 if final else 1, True, language, prompt, [0.0, 0.2, 0.4], drop_phantoms)
+    def transcribe(self, audio, final, language, prompt, drop_phantoms=False, even=False):
+        vad = True
+        if even:
+            prepared = evened(audio)
+            if prepared is None:
+                return ""  # nothing was said
+            audio, vad = prepared[0], False  # already cut to the speech
+        raw, speech = self._decode(audio, 5 if final else 1, vad, language, prompt, [0.0, 0.2, 0.4], drop_phantoms)
         text = clean(raw)
         if speech is not None and speech < MIN_SPEECH_SECONDS:
             # The VAD heard no speech. Decoding anyway (or retrying without the VAD) is exactly how Whisper
@@ -185,20 +312,26 @@ class FasterWhisperEngine:
                 return ""
         return text if has_content(text) else ""
 
-    def segments(self, audio, language, prompt):
+    def segments(self, audio, language, prompt, even=False):
         """Live mode: [(text, end_seconds)] for each phrase Whisper finds in the audio, silence skipped. A phrase it
         made up rather than heard (see is_phantom) comes back as ("", end), so its audio can still be let go of."""
+        regions = None
+        if even:
+            prepared = evened(audio)
+            if prepared is None:
+                return []
+            audio, regions = prepared
         segs, _ = self.model.transcribe(
             audio,
             language=language or None,
             beam_size=5 if self.device == "cuda" else 1,  # CPU: keep up with speech; the final pass redoes it anyway
-            vad_filter=True,
+            vad_filter=regions is None,
             vad_parameters={"min_silence_duration_ms": 400},
             condition_on_previous_text=False,
             initial_prompt=prompt or None,
             temperature=[0.0, 0.2, 0.4],
         )
-        out = [("" if is_phantom(s) else clean(s.text.strip()), s.end) for s in segs]
+        out = [("" if is_phantom(s) else clean(s.text.strip()), float(original_time(s.end, regions)) if regions else s.end) for s in segs]
         return [(t if has_content(t) else "", e) for t, e in out]
 
 
@@ -243,6 +376,7 @@ class Session:
         self.last_decoded = 0
         self.live = False
         self.drop_phantoms = False
+        self.even = False
         self.committed = 0          # samples already committed (live mode)
         self.committed_text = ""
         self.dropped = 0            # live mode: committed samples already let go of (long sessions stay small)
@@ -286,7 +420,7 @@ class Session:
                     if not self.active:
                         break
                     text = await loop.run_in_executor(
-                        None, self.engine.transcribe, audio, False, self.language, self.prompt)
+                        None, self.engine.transcribe, audio, False, self.language, self.prompt, False, self.even)
                 if self.active and text:
                     await self.send({"type": "partial", "text": text})
             except Exception as e:  # noqa: BLE001
@@ -314,7 +448,7 @@ class Session:
                 async with self.gpu_lock:
                     if not self.active:
                         break
-                    segs = await loop.run_in_executor(None, self.engine.segments, audio, self.language, prompt)
+                    segs = await loop.run_in_executor(None, self.engine.segments, audio, self.language, prompt, self.even)
             except Exception as e:  # noqa: BLE001
                 log.exception("live decode failed")
                 await self.send({"type": "error", "code": "live_failed", "message": str(e)})
@@ -356,6 +490,8 @@ class Session:
         self.live = bool(msg.get("live"))
         # Extended Notes transcribing a recording again, part by part: Whisper's made-up phrases dropped as in live mode.
         self.drop_phantoms = bool(msg.get("drop_phantoms"))
+        # Even out quiet speech before decoding (see evened); Settings › Speech, on by default.
+        self.even = bool(msg.get("even"))
         self.committed, self.committed_text, self.dropped = 0, "", 0
         self.active = True
         self.partial_task = asyncio.create_task(self._live_loop() if self.live else self._partial_loop())
@@ -375,13 +511,13 @@ class Session:
             if len(rest) >= SAMPLE_RATE * 0.3:
                 prompt = self.prompt_for()
                 async with self.gpu_lock:
-                    tail = await loop.run_in_executor(None, self.engine.transcribe, rest, True, self.language, prompt, True)
+                    tail = await loop.run_in_executor(None, self.engine.transcribe, rest, True, self.language, prompt, True, self.even)
                 tail = self.new_text(tail)
             text = (self.committed_text + " " + tail).strip()
         elif len(audio) >= SAMPLE_RATE * 0.3:
             async with self.gpu_lock:
                 text = await loop.run_in_executor(
-                    None, self.engine.transcribe, audio, True, self.language, self.prompt, self.live or self.drop_phantoms)
+                    None, self.engine.transcribe, audio, True, self.language, self.prompt, self.live or self.drop_phantoms, self.even)
             if self.live or self.drop_phantoms:
                 text = collapse_repeats(text)
             tail = text if self.live else ""

@@ -44,6 +44,9 @@ public sealed class AsrSettings
     public string Language { get; set; } = "en";
     /// <summary>Optional hint of names/jargon to bias recognition, e.g. "Kubernetes, Dr. Nguyen".</summary>
     public string VocabularyHint { get; set; } = "";
+    /// <summary>Level the volume before transcribing, and find the speech by how far it stands above the room's noise
+    /// rather than with Whisper's own detector, so quiet stretches next to loud ones aren't dropped.</summary>
+    public bool EvenOutVolume { get; set; } = true;
     public int Port { get; set; } = 8765;
 }
 

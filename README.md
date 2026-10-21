@@ -151,6 +151,11 @@ puts it back to 100%; the size is remembered, and *Settings › Appearance* has 
   back and, where the app shows its caret to Windows, the caret put back where it was). If nothing to type into had the
   cursor (the desktop, the taskbar, a button), the pill says **No place to paste**: click into any text field and the
   text goes in there, or press **Copy to clipboard** (or the hotkey). After two minutes it is copied for you.
+* **Quiet speech isn't lost** (*Settings › Speech › Quiet speech*, on by default): before Whisper hears it, the audio is
+  levelled (each stretch of speech brought to about -20 dBFS, up to +50 dB, with the pauses held near the noise floor),
+  and the parts to decode are found by how far they stand above the room's background noise instead of by Whisper's own
+  detector, which skips speech much quieter than the rest. Silero still decides whether anything was said at all, so
+  silence gives nothing. On recordings from a quiet microphone this turned half-sentences back into whole dictations.
 * **No phantom text**: very short or silent recordings insert nothing, so Whisper's habit of hearing "Thank you." in silence never reaches your document.
 * **Long dictation** is cleaned up a few sentences at a time (small models stay faithful on short passages), and the safety net applies to each piece separately.
 * **Read aloud** (`Ctrl+Shift+Space`): reads the selected text in any app with a natural voice that runs on
