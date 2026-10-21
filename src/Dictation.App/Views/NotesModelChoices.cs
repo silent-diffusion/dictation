@@ -60,7 +60,7 @@ static class NotesModelChoices
         (gpu is { } g ? $"fits in the GPU's memory ({NotesModels.Gb(g)} here)" : $"runs well without a GPU (up to {NotesModels.MaxBillionsWithoutGpu:0.#}B)") +
         (best != null ? $": {best}." : ".") +
         $" A mixture-of-experts model such as Qwen3 30B-A3B counts too when it fits in this PC's memory ({NotesModels.Gb(LocalModel.SystemRam)}): " +
-        "only about 3B of its 30B parameters work on each word, so it runs on the processor and leaves the GPU to dictation. " +
+        "only about 3B of its 30B parameters work on each word, so it runs from memory, with as much of it on the GPU as there is room for. " +
         "It is much better at formatting and summing up, at the cost of speed: a step takes it tens of seconds, which notes have time for. " +
         "A cloud model would send the whole transcript to that service.";
 

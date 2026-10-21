@@ -29,7 +29,7 @@ public partial class ModelsPage : UserControl
         new("qwen2.5:7b", "Qwen 2.5 7B", "Better rewriting (emails, summaries). Needs about 8 GB of GPU memory to be quick.", "4.7 GB"),
         new("qwen3:30b-a3b-instruct-2507-q4_K_M", "Qwen3 30B-A3B",
             "By far the smartest here: the best for Extended Notes' formatting and summaries. A mixture of experts: 30B parameters, " +
-            "but only 3B work on each word, so it runs from the PC's memory on the processor and leaves the GPU alone. " +
+            "but only 3B work on each word, so it runs from the PC's memory, with as much of it on the GPU as there is room for. " +
             "Needs 32 GB of RAM. For dictation it is slower (several seconds a paragraph).", "19 GB", MinRamGb: 30),
     };
 
