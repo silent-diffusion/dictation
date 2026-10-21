@@ -96,5 +96,20 @@ public class NotesModelTests
     }
 
     [Fact]
+    public void A_model_too_big_for_the_gpu_is_held_in_ram()
+    {
+        var dense27 = new LocalModel("qwen3.8:27b-q4_K_M", 27.8, 17 * GB, "qwen35");
+        Assert.True(dense27.HeldInRam(6 * GB));
+        Assert.False(dense27.IsMixture);
+        Assert.False(dense27.RunsFromMemory(6 * GB, 40 * GB)); // all of it works on each word: too slow to be the best
+        Assert.Equal(Qwen7B, NotesModels.PickBest(Installed.Append(dense27), 6 * GB, 40 * GB));
+        Assert.False(dense27.HeldInRam(24 * GB));
+        Assert.True(Qwen30A3.HeldInRam(6 * GB));
+        Assert.False(Qwen7B.HeldInRam(6 * GB));
+        Assert.False(Qwen7B.HeldInRam(null)); // no GPU: only over 8 GB
+        Assert.True(dense27.HeldInRam(null));
+    }
+
+    [Fact]
     public void Gpu_memory_reads_as_gigabytes() => Assert.Equal("6 GB", NotesModels.Gb(6 * GB));
 }
