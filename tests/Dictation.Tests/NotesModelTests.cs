@@ -58,6 +58,43 @@ public class NotesModelTests
             () => Task.FromResult<IReadOnlyList<LocalModel>>(Array.Empty<LocalModel>()), 6 * GB)).Model);
     }
 
+    static readonly LocalModel Qwen30A3 = new("qwen3:30b-a3b-instruct-2507-q4_K_M", 30.5, (long)(17.3 * GB), "qwen3moe");
+
+    [Fact]
+    public void A_mixture_of_experts_counts_its_working_parameters()
+    {
+        Assert.True(Qwen30A3.IsMixture);
+        Assert.Equal(3, Qwen30A3.ActiveBillions);
+        Assert.Equal(3.3, new LocalModel("qwen3:30b", 30.5, 19 * GB, "qwen3moe").ActiveBillions, 1); // no "a3b" in the name
+        Assert.Equal(22, new LocalModel("qwen3:235b-a22b-instruct-2507-q4_K_M", 235, 142 * GB, "qwen3moe").ActiveBillions);
+        Assert.False(Qwen7B.IsMixture);
+        Assert.Equal(7.6, Qwen7B.ActiveBillions);
+        Assert.False(Qwen3_4B.IsMixture); // "-instruct" isn't "-a4b"
+    }
+
+    [Fact]
+    public void A_mixture_runs_from_memory_when_the_pc_has_room()
+    {
+        Assert.True(Qwen30A3.RunsFromMemory(6 * GB, 40 * GB));  // this PC: a 6 GB GPU and 40 GB of RAM
+        Assert.True(Qwen30A3.RunsFromMemory(null, 32 * GB));
+        Assert.False(Qwen30A3.RunsFromMemory(6 * GB, 16 * GB)); // too little RAM
+        Assert.False(Qwen30A3.RunsFromMemory(6 * GB, null));    // RAM not known
+        Assert.False(Qwen30A3.RunsFromMemory(24 * GB, 40 * GB)); // fits the GPU: runs there instead
+        Assert.False(Big.RunsFromMemory(6 * GB, 64 * GB));      // an ordinary 14B on the processor is too slow
+        Assert.False(new LocalModel("qwen3:235b-a22b", 235, 142 * GB, "qwen3moe").RunsFromMemory(6 * GB, 256 * GB)); // 22B at work
+    }
+
+    [Fact]
+    public void With_enough_memory_the_mixture_is_the_best()
+    {
+        var installed = Installed.Append(Qwen30A3).ToArray();
+        Assert.Equal(Qwen30A3, NotesModels.PickBest(installed, 6 * GB, 40 * GB));
+        Assert.Equal(Qwen7B, NotesModels.PickBest(installed, 6 * GB, 16 * GB));
+        Assert.Equal(Qwen7B, NotesModels.PickBest(installed, 6 * GB)); // RAM not known: as before
+        Assert.True(NotesModels.Fits(Qwen30A3, 6 * GB, 40 * GB));
+        Assert.False(NotesModels.Fits(Qwen30A3, 6 * GB, 16 * GB));
+    }
+
     [Fact]
     public void Gpu_memory_reads_as_gigabytes() => Assert.Equal("6 GB", NotesModels.Gb(6 * GB));
 }

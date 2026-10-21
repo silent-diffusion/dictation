@@ -23,7 +23,8 @@ static class NotesModelChoices
         var s = App.Services.Settings.Current;
         var installed = await App.Services.Llm.ListModelDetailsAsync();
         var gpu = await Task.Run(RuntimeInstaller.GpuMemoryBytes); // asks nvidia-smi the first time
-        var best = NotesModels.PickBest(installed, gpu);
+        var ram = LocalModel.SystemRam;
+        var best = NotesModels.PickBest(installed, gpu, ram);
         var choices = new List<Choice>
         {
             new(best != null ? $"Best on this PC · {best.Name}" : "Best on this PC · no local model installed yet", NotesModels.Best),
@@ -31,7 +32,9 @@ static class NotesModelChoices
         };
         choices.AddRange(installed.Where(m => NotesModels.IsChatModel(m) && !CloudModels.IsOllamaCloud(m.Name))
             .OrderByDescending(m => m.Billions).ThenBy(m => m.Name)
-            .Select(m => new Choice($"{m.Name} · {m.Billions:0.#}B" + (NotesModels.Fits(m, gpu) ? "" : " · slow on this PC"), m.Name)));
+            .Select(m => new Choice($"{m.Name} · {m.Billions:0.#}B"
+                + (m.RunsFromMemory(gpu, ram) ? $" ({m.ActiveBillions:0.#}B at work) · runs from memory"
+                   : NotesModels.Fits(m, gpu, ram) ? "" : " · slow on this PC"), m.Name)));
         if (!s.Cloud.KeepOffline)
             choices.AddRange(installed.Where(m => CloudModels.IsOllamaCloud(m.Name)).OrderBy(m => m.Name)
                 .Select(m => new Choice($"{m.Name} · cloud: the transcript goes to ollama.com", m.Name)));
@@ -56,7 +59,10 @@ static class NotesModelChoices
         "dictation needs. Best on this PC is the largest installed model that " +
         (gpu is { } g ? $"fits in the GPU's memory ({NotesModels.Gb(g)} here)" : $"runs well without a GPU (up to {NotesModels.MaxBillionsWithoutGpu:0.#}B)") +
         (best != null ? $": {best}." : ".") +
-        " A cloud model would send the whole transcript to that service.";
+        $" A mixture-of-experts model such as Qwen3 30B-A3B counts too when it fits in this PC's memory ({NotesModels.Gb(LocalModel.SystemRam)}): " +
+        "only about 3B of its 30B parameters work on each word, so it runs on the processor and leaves the GPU to dictation. " +
+        "It is much better at formatting and summing up, at the cost of speed: a step takes it tens of seconds, which notes have time for. " +
+        "A cloud model would send the whole transcript to that service.";
 
     static void OnChanged(object sender, SelectionChangedEventArgs e)
     {

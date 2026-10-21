@@ -215,7 +215,7 @@
                     </TextBlock>
                     <TextBlock Style="{StaticResource Body}">
                         <Run Text="The model:" Foreground="{DynamicResource Ob.Text}"/>
-                        <Run Text="by default the largest installed one that fits your graphics card's memory (Settings › Models › Extended Notes AI). After a session you can play the recording (made louder, skipping silences), jump from any line to the moment it was said, export it, or click a step at the top of the session to redo it. Extended Notes never counts toward your dictation figures; Analytics shows it in a section of its own."/>
+                        <Run Text="by default the largest installed one that fits your graphics card's memory, or a mixture-of-experts model such as Qwen3 30B-A3B that fits in the PC's memory and runs on the processor (Settings › Models › Extended Notes AI). After a session you can play the recording (made louder, skipping silences), jump from any line to the moment it was said, export it, or click a step at the top of the session to redo it. Extended Notes never counts toward your dictation figures; Analytics shows it in a section of its own."/>
                     </TextBlock>
                 </StackPanel>
             </Grid>

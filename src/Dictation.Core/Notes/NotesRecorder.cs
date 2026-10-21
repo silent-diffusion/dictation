@@ -526,7 +526,7 @@ public sealed class NotesRecorder
         var setting = _settings.Current.NotesModel ?? "";
         if (_model != null && setting == _modelFor && DateTime.Now - _modelResolved < TimeSpan.FromMinutes(10)) return _model;
         var (model, why) = await NotesModels.ResolveAsync(setting, _settings.Current.Llm.DefaultModel,
-            () => _llm.ListModelDetailsAsync(), RuntimeInstaller.GpuMemoryBytes());
+            () => _llm.ListModelDetailsAsync(), RuntimeInstaller.GpuMemoryBytes(), LocalModel.SystemRam);
         if (model != _model) Log.Info($"Extended notes: AI model {model} ({why})");
         _model = model;
         _modelFor = setting;

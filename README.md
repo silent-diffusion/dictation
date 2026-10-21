@@ -209,7 +209,12 @@ puts it back to 100%; the size is remembered, and *Settings › Appearance* has 
   While a session records, **⚑ Mark** in the header (or the marker hotkey, default `Ctrl+Alt+M`) drops a time marker
   on its own line in the transcript (the AI keeps it; a right-click on it jumps there; *Everything* exports list them).
   The AI model for Extended Notes is its own setting (Settings › Models, or *AI model* on the start card); by default the
-  best on this PC, the largest installed model that fits in the GPU's memory.
+  best on this PC, the largest installed model that fits in the GPU's memory, or a mixture-of-experts model that fits in
+  the PC's memory with 10 GB to spare. **Qwen3 30B-A3B** (Settings › Models, a 19 GB download, needs 32 GB of RAM) is
+  the one to get for notes: 30B parameters, of which only about 3B work on each word, so it runs on the processor from
+  RAM (Ollama is told to keep it off the GPU, which stays free for speech and dictation's model) and formats and sums up
+  far better than the small models, at tens of seconds a step. It can be dictation's model too, but there it is slower
+  (several seconds a paragraph) than the small ones on the GPU.
   Extended Notes never count in the dictation statistics; their own daily counts are kept apart in `data\notes\usage.json`
   and shown as a **Usage** strip on the landing page (last 30 days and all time: sessions, time recorded, words heard and
   typed, AI requests, by source). **Pause**, **Full screen** and **Stop** are in the header; dictating into an

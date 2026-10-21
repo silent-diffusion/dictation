@@ -1003,7 +1003,8 @@ public partial class NotesPage : UserControl
         {
             var s = App.Services.Settings.Current;
             var gpu = await Task.Run(RuntimeInstaller.GpuMemoryBytes);
-            (_idleModel, _) = await NotesModels.ResolveAsync(s.NotesModel, s.Llm.DefaultModel, () => App.Services.Llm.ListModelDetailsAsync(), gpu);
+            (_idleModel, _) = await NotesModels.ResolveAsync(s.NotesModel, s.Llm.DefaultModel, () => App.Services.Llm.ListModelDetailsAsync(), gpu,
+                Dictation.Core.Text.LocalModel.SystemRam);
         }
         catch (Exception e) { Log.Warn("Extended notes: couldn't work out the AI model: " + e.Message); }
     }
