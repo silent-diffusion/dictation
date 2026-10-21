@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Shapes;
 using System.Windows.Threading;
+using Dictation.Core.Infrastructure;
 using Dictation.Core.Settings;
 
 namespace Dictation.App.Views;
@@ -257,6 +258,7 @@ public partial class MainWindow : Window
             Place(_shut);
             return;
         }
+        var shown = System.Diagnostics.Stopwatch.StartNew();
         Host.Content = tag switch
         {
             "SpeechToText" => new SpeechToTextPage(),
@@ -268,6 +270,12 @@ public partial class MainWindow : Window
         };
         Visit(tag);
         Place(_shut); // fit the new page to the sidebar's state
+        // How long the page took until it was drawn, in the log, so a slow one can be found.
+        Dispatcher.BeginInvoke(() =>
+        {
+            var ms = shown.ElapsedMilliseconds;
+            if (ms >= 150) Log.Info($"Page {tag} took {ms} ms to show");
+        }, System.Windows.Threading.DispatcherPriority.ContextIdle);
     }
 
     /// <summary>Open a section ("Dashboard", "SpeechToText", "ReadAloud", "History", "Analytics") or a settings section by its tag
