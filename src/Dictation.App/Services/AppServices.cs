@@ -54,17 +54,31 @@ public sealed class AppServices
 
     public AppServices()
     {
+        // Each part of starting that takes a while is noted in the log, to find what makes opening slow.
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        long last = 0;
+        void Step(string what)
+        {
+            var now = clock.ElapsedMilliseconds;
+            if (now - last >= 40) Log.Info($"Startup: {what} took {now - last} ms");
+            last = now;
+        }
         Profiles = new ProfileService(Settings);
         Speech = new SidecarSpeechRecognizer(Settings);
         OllamaHost = new OllamaHost(Settings);
         Llm = new OllamaTextProcessor(Settings, OllamaHost);
         Inserter = new TextInserter(Settings);
+        Step("profiles, speech, AI and insertion");
         History = new HistoryStore(Settings);
+        Step($"History ({History.Entries.Count} dictations)");
         Usage = new UsageStore(UsageStore.DefaultPath, History.Entries);
+        Step("dashboard counts");
         Words = new WordTally(WordTally.DefaultPath, History.Entries, Settings);
+        Step("word tally");
         Controller = new DictationController(Mic, Speech, Llm, Inserter, Settings, Profiles, History, Usage, Words);
         Tts = new KokoroSpeech(Settings);
         NotesStore = new NotesStore();
+        Step("Extended Notes sessions");
         // Notes use the speech model already loaded (no reload), else the active profile's.
         Notes = new NotesRecorder(Settings, Speech, Llm, NotesStore,
             () => Speech.LoadedModel ?? SpeechModels.For(Profiles.Active, Settings.Current.Asr));

@@ -27,6 +27,17 @@ public partial class App : Application
     string _lastHotkeys = "", _lastAsr = "";
     bool _quitting;
 
+    /// <summary>The "Oberton · starting" card, from the moment Oberton is opened until its window is drawn.</summary>
+    SplashScreen? _splash;
+    readonly System.Diagnostics.Stopwatch _startClock = System.Diagnostics.Stopwatch.StartNew();
+
+    void CloseSplash()
+    {
+        if (_splash == null) return;
+        try { _splash.Close(TimeSpan.FromMilliseconds(250)); } catch { }
+        _splash = null;
+    }
+
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
@@ -44,6 +55,17 @@ public partial class App : Application
             while (_showEvent.WaitOne()) Dispatcher.BeginInvoke(ShowMain);
         }) { IsBackground = true }.Start();
 
+        // Show at once that Oberton is opening (not when it starts hidden with Windows).
+        if (!e.Args.Contains("--minimized"))
+        {
+            try
+            {
+                _splash = new SplashScreen("Assets/splash.png");
+                _splash.Show(false, true);
+            }
+            catch (Exception ex) { Log.Warn("Couldn't show the start-up card: " + ex.Message); _splash = null; }
+        }
+
         DispatcherUnhandledException += (_, a) =>
         {
             Log.Error("Unhandled UI exception", a.Exception);
@@ -52,14 +74,17 @@ public partial class App : Application
         TaskScheduler.UnobservedTaskException += (_, a) => { Log.Error("Unobserved task exception", a.Exception); a.SetObserved(); };
 
         Log.Info("=== Oberton starting ===");
+        var beforeServices = _startClock.ElapsedMilliseconds;
         Services = new AppServices();
         var s = Services;
+        var servicesMs = _startClock.ElapsedMilliseconds - beforeServices;
         ThemeManager.Apply(s.Settings.Current.Theme, s.Settings.Current.ColorScheme);
         Views.DecorText.Apply(s.Settings.Current.ShowJapanese);
 
         // First run (or an interrupted setup): download the runtimes and models before anything else.
         if (!RuntimeInstaller.IsInstalled)
         {
+            CloseSplash();
             var setup = new SetupWindow();
             if (setup.ShowDialog() != true)
             {
@@ -70,10 +95,23 @@ public partial class App : Application
             }
         }
 
+        var beforeWindows = _startClock.ElapsedMilliseconds;
         Hotkeys = new HotkeyManager();
         _overlay = new OverlayWindow();
         _reader = new ReaderWindow();
         _main = new MainWindow();
+        var windowsMs = _startClock.ElapsedMilliseconds - beforeWindows;
+        var reported = e.Args.Contains("--minimized"); // started hidden: no opening time to report
+        _main.ContentRendered += (_, _) =>
+        {
+            CloseSplash();
+            if (reported) return;
+            reported = true;
+            // How long opening took, from the process starting (the .NET runtime included) to the window being drawn.
+            var total = (DateTime.Now - System.Diagnostics.Process.GetCurrentProcess().StartTime).TotalMilliseconds;
+            Log.Info($"Startup: window drawn {total:0} ms after opening (runtime {total - _startClock.ElapsedMilliseconds:0} ms, " +
+                     $"services {servicesMs} ms, windows {windowsMs} ms, the rest {_startClock.ElapsedMilliseconds - servicesMs - windowsMs} ms)");
+        };
         _tray = new TrayIcon(s.Profiles, () => s.Controller.Toggle(), ShowMain, () => ShowPage("Updates"), Quit);
 
         WireController();
@@ -94,6 +132,7 @@ public partial class App : Application
 
         var minimized = e.Args.Contains("--minimized");
         if (!minimized) ShowMain();
+        else CloseSplash();
 
         // Warm both models in the background so the first hotkey press is instant.
         _ = Task.Run(async () =>

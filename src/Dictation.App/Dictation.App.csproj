@@ -12,7 +12,14 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
     <NoWarn>$(NoWarn);WPF0001</NoWarn> <!-- Fluent ThemeMode is flagged experimental -->
+    <!-- Compiled ahead of time when published, so starting doesn't wait for the app's own code to be compiled. -->
+    <PublishReadyToRun>true</PublishReadyToRun>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Shown the moment Oberton is opened, until its window is drawn -->
+    <Resource Include="Assets\splash.png" />
+  </ItemGroup>
 
   <ItemGroup>
     <Using Remove="System.Windows.Forms" />
