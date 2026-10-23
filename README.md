@@ -319,6 +319,9 @@ Or download models from **Settings › Models**, and pick the active one there (
 * **Small installer, big runtime.** The setup `.exe` (~50 MB) contains only the self-contained .NET app and the Python sidecar script.
   `RuntimeInstaller` downloads pinned versions of standalone CPython, the speech packages (`inference\requirements*.txt`), Ollama and the
   models on first launch. Every step is resumable, and the Python runtime is a plain relocatable folder (no virtualenv, no links).
+* **Opening** shows an *Oberton · starting* card at once (not when it starts hidden with Windows), until the window is
+  drawn. The app is compiled ahead of time when published (ReadyToRun), and each slow step of starting, with the total
+  time to the window, is written to the log.
 * **Updates** come from GitHub Releases: `UpdateService` compares the latest release tag with the app version, downloads the installer and runs it
   silently; the installer replaces only `app\` and restarts the app.
 * **Child processes die with the app** (Windows Job Object), even on a crash.
