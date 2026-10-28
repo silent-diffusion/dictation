@@ -63,12 +63,18 @@ public sealed class LlmSettings
 
 public sealed class AppSettings
 {
-    public string Hotkey { get; set; } = "Ctrl+Space";
-    public string CycleProfileHotkey { get; set; } = "Ctrl+Alt+P";
+    /// <summary>The hotkeys a new install starts with (Settings › Hotkeys; RESET goes back to them).</summary>
+    public const string DefaultHotkey = "Ctrl+D", DefaultCycleProfileHotkey = "Ctrl+Alt+D", DefaultSpeakHotkey = "Ctrl+Space",
+        DefaultNotesMarkerHotkey = "";
+
+    /// <summary>Start and stop dictating.</summary>
+    public string Hotkey { get; set; } = DefaultHotkey;
+    public string CycleProfileHotkey { get; set; } = DefaultCycleProfileHotkey;
     /// <summary>Read the selected text aloud (or offer the clipboard when nothing is selected).</summary>
-    public string SpeakHotkey { get; set; } = "Ctrl+Shift+Space";
-    /// <summary>Drop a time marker into the Extended Notes transcript while a session records (paused or not).</summary>
-    public string NotesMarkerHotkey { get; set; } = "Ctrl+Alt+M";
+    public string SpeakHotkey { get; set; } = DefaultSpeakHotkey;
+    /// <summary>Drop a time marker into the Extended Notes transcript while a session records (paused or not); none
+    /// by default (the session header's ⚑ Mark button does the same).</summary>
+    public string NotesMarkerHotkey { get; set; } = DefaultNotesMarkerHotkey;
     /// <summary>Read aloud's voice, which also picks the model: a Kokoro voice id (af_heart), a Piper voice
     /// ("piper:en_US-lessac-medium") or a Windows voice ("win:Microsoft Zira Desktop").
     /// A profile can pick its own (<see cref="Profile.Voice"/>).</summary>

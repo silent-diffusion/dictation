@@ -18,7 +18,7 @@
 
 | `01 // DICTATE` | `02 // EXTENDED NOTES` | `03 // READ ALOUD` | `04 // STAYS ON YOUR PC` |
 |---|---|---|---|
-| Press **`Ctrl+Space`**, speak, press it again: cleaned-up text appears at your cursor, in any app. | Leave it on through a lecture or a meeting (your mic, the computer's audio, or both): transcript, AI-formatted text and a running summary, with the recording. | Select text, press **`Ctrl+Shift+Space`**: a natural local voice reads it, from 0.25× to 4×. | *Keep everything offline* is on by default. No accounts, analytics or telemetry. |
+| Press **`Ctrl+D`**, speak, press it again: cleaned-up text appears at your cursor, in any app. | Leave it on through a lecture or a meeting (your mic, the computer's audio, or both): transcript, AI-formatted text and a running summary, with the recording. | Select text, press **`Ctrl+Shift+Space`**: a natural local voice reads it, from 0.25× to 4×. | *Keep everything offline* is on by default. No accounts, analytics or telemetry. |
 
 ```
 MIC ──→ SPEECH ──→ AI ──→ INSERT
@@ -63,7 +63,7 @@ with example figures; they are illustrations, not captures of a real session.</i
 | Speech model | `large-v3-turbo` | `small.en` |
 | Typical wait after you stop talking (20 s of speech) | **~1-2.5 s** | **~8 s** (on a recent 8-core laptop CPU) |
 
-Then click into any text field, press **Ctrl+Space**, talk, and press **Ctrl+Space** again.
+Then click into any text field, press **Ctrl+D**, talk, and press **Ctrl+D** again.
 The app lives in the system tray; closing the window keeps it running.
 
 **Requirements:** Windows 10 (1809+) or 11, 64-bit, ~8 GB free disk. An NVIDIA GPU with 6 GB+ is recommended but optional.
@@ -118,8 +118,8 @@ instead of behind floating buttons, and pages with a side menu of their own (Set
 window's edge. **Ctrl and +** / **Ctrl and −** make everything in the window larger or smaller (70% to 200%), **Ctrl+0**
 puts it back to 100%; the size is remembered, and *Settings › Appearance* has the same under *Text size*.
 
-* **Hotkey** (default `Ctrl+Space`, change under *Hotkeys*): start/stop. `Ctrl+Alt+P` cycles profiles; `Ctrl+Alt+M` drops a
-  marker while an Extended Notes session records.
+* **Hotkey** (default `Ctrl+D`, change under *Hotkeys*): start/stop. `Ctrl+Alt+D` cycles profiles. A key to drop a
+  marker while an Extended Notes session records can be set there too (none by default).
 * **Overlay**: a pill, always on top, never steals focus. Small while you talk (timer, level meter, active profile, and
   **✕ Cancel**, which stays until the text is in: while starting, recording, transcribing and tidying up);
   while you speak, the words recognized so far run above it; it grows to show your transcript while the AI tidies it, then shows a small dimmed "Inserted" receipt. Hover it to see it clearly;
@@ -158,7 +158,7 @@ puts it back to 100%; the size is remembered, and *Settings › Appearance* has 
   silence gives nothing. On recordings from a quiet microphone this turned half-sentences back into whole dictations.
 * **No phantom text**: very short or silent recordings insert nothing, so Whisper's habit of hearing "Thank you." in silence never reaches your document.
 * **Long dictation** is cleaned up a few sentences at a time (small models stay faithful on short passages), and the safety net applies to each piece separately.
-* **Read aloud** (`Ctrl+Shift+Space`): reads the selected text in any app with a natural voice that runs on
+* **Read aloud** (`Ctrl+Space`): reads the selected text in any app with a natural voice that runs on
   your PC. With nothing selected, it offers to read your clipboard. The player has play/pause, back and forward 15 seconds,
   slower/faster (click the speed itself for a menu from 0.25× to 4×), the time left, and the sentence being read with the current word highlighted. Pick the voice and the base
   speed under *Read aloud*; changing the speed in the player is remembered for the next reading. Every voice paces itself
@@ -219,7 +219,7 @@ puts it back to 100%; the size is remembered, and *Settings › Appearance* has 
   plays the recording from where your cursor is in the text (1×, 1.5×, 2×, **Skip silences**) with its level brought up
   (mic recordings are quiet), and a right-click in any tab jumps to that moment in the recording; **Export** saves the
   transcript, the formatted text, the summary or everything as .txt, .md or Word (.docx), and the recording (as played) as .wav.
-  While a session records, **⚑ Mark** in the header (or the marker hotkey, default `Ctrl+Alt+M`) drops a time marker
+  While a session records, **⚑ Mark** in the header (or the marker hotkey, if one is set under Settings › Hotkeys) drops a time marker
   on its own line in the transcript (the AI keeps it; a right-click on it jumps there; *Everything* exports list them).
   The AI model for Extended Notes is its own setting (Settings › Models, or *AI model* on the start card); by default the
   best on this PC, the largest installed model that fits in the GPU's memory, or a mixture-of-experts model that fits in

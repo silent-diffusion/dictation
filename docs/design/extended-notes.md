@@ -37,7 +37,7 @@ Agreed with the user on 2026-10-17; design mockup: https://claude.ai/artifact/47
   this moment in the recording* (in the Summary tab, to the section the sentence is about).
 - **Export ▾**: Transcript, Formatted, Summary, or everything, as .txt or .md, or as Word (.docx, written by the app
   itself, no library); and the recording as .wav. *Everything* lists the markers.
-- **Markers** (5.2): **⚑ Mark** in the session header, or the marker hotkey (Settings › Hotkeys, default `Ctrl+Alt+M`),
+- **Markers** (5.2): **⚑ Mark** in the session header, or the marker hotkey (Settings › Hotkeys; none by default),
   appends `⚑ h:mm:ss` on its own line to the Transcript at the moment of the recording, with a time anchor, and keeps
   the marker in session.json. The formatting prompt tells the AI to keep marker lines exactly.
 - **Usage** (5.2): the landing page shows a strip from `data\notes\usage.json`: last 30 days and all time.
