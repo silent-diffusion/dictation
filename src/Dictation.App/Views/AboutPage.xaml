@@ -91,8 +91,8 @@
                     <TextBlock Style="{StaticResource Body}">
                         <Run Text="Oberton is a dictation and read-aloud app for Windows that runs entirely on your PC." Foreground="{DynamicResource Ob.Text}"/>
                         <Run Text="Press"/>
-                        <Run x:Name="DictateKey" Text="Ctrl+Space" Foreground="{DynamicResource Ob.Text}" FontFamily="{StaticResource Ob.Mono}"/><Run Text=", speak, and press it again: cleaned-up text appears at your cursor, in any app. Select text and press"/>
-                        <Run x:Name="SpeakKey" Text="Ctrl+Shift+Space" Foreground="{DynamicResource Ob.Text}" FontFamily="{StaticResource Ob.Mono}"/>
+                        <Run x:Name="DictateKey" Text="Ctrl+D" Foreground="{DynamicResource Ob.Text}" FontFamily="{StaticResource Ob.Mono}"/><Run Text=", speak, and press it again: cleaned-up text appears at your cursor, in any app. Select text and press"/>
+                        <Run x:Name="SpeakKey" Text="Ctrl+Space" Foreground="{DynamicResource Ob.Text}" FontFamily="{StaticResource Ob.Mono}"/>
                         <Run Text="to hear it read in a natural voice. For a lecture or a meeting,"/>
                         <Run Text="Extended Notes" Foreground="{DynamicResource Ob.Text}"/>
                         <Run Text="listens for as long as it lasts and keeps a transcript, a formatted version and a running summary, with the recording."/>

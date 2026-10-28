@@ -33,7 +33,6 @@
             <StackPanel Orientation="Horizontal">
                 <TextBox x:Name="MarkerBox" IsReadOnly="True" Width="240" Padding="8,6" IsReadOnlyCaretVisible="False"
                          PreviewKeyDown="Marker_KeyDown" GotKeyboardFocus="Box_Focus"/>
-                <Button Style="{StaticResource QuietButton}" Content="RESET" Margin="8,0,0,0" Padding="12,6" Click="ResetMarker_Click"/>
                 <Button Style="{StaticResource QuietButton}" Content="CLEAR" Margin="8,0,0,0" Padding="12,6" Click="ClearMarker_Click"/>
             </StackPanel>
             <TextBlock Style="{StaticResource Caption}" Margin="0,6,0,0"
@@ -41,7 +40,7 @@
 
             <TextBlock x:Name="StatusText" Margin="0,16,0,0" TextWrapping="Wrap"/>
             <TextBlock Style="{StaticResource Caption}" Margin="0,16,0,0"
-                       Text="Tip: Ctrl+Space can clash with some editors and input-method switchers. If it doesn't fire, pick another combination such as Ctrl+Alt+D or F9."/>
+                       Text="Tip: a hotkey here is taken from every other app while Oberton runs (Ctrl+D then no longer bookmarks a page in a browser, and Ctrl+Space no longer switches input methods). If one doesn't fire, or you miss what it did, pick another combination such as F9."/>
         </StackPanel>
     </ScrollViewer>
 </UserControl>

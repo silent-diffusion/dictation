@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using Dictation.App.Services;
+using Dictation.Core.Settings;
 
 namespace Dictation.App.Views;
 
@@ -80,13 +81,6 @@ public partial class HotkeysPage : UserControl
         Refresh();
     }
 
-    void ResetMarker_Click(object sender, RoutedEventArgs e)
-    {
-        App.Services.Settings.Current.NotesMarkerHotkey = "Ctrl+Alt+M";
-        App.Services.Settings.Save();
-        Refresh();
-    }
-
     void ClearMarker_Click(object sender, RoutedEventArgs e)
     {
         App.Services.Settings.Current.NotesMarkerHotkey = "";
@@ -96,14 +90,14 @@ public partial class HotkeysPage : UserControl
 
     void ResetSpeak_Click(object sender, RoutedEventArgs e)
     {
-        App.Services.Settings.Current.SpeakHotkey = "Ctrl+Shift+Space";
+        App.Services.Settings.Current.SpeakHotkey = AppSettings.DefaultSpeakHotkey;
         App.Services.Settings.Save();
         Refresh();
     }
 
     void ResetToggle_Click(object sender, RoutedEventArgs e)
     {
-        App.Services.Settings.Current.Hotkey = "Ctrl+Space";
+        App.Services.Settings.Current.Hotkey = AppSettings.DefaultHotkey;
         App.Services.Settings.Save();
         Refresh();
     }
