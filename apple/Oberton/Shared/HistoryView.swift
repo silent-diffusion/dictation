@@ -7,7 +7,6 @@ struct HistoryView: View {
     @EnvironmentObject var nav: Navigator
     @Environment(\.ob) private var ob
     @Environment(\.horizontalSizeClass) private var sizeClass
-    @State private var byApp = false
     @State private var folded: Set<String> = []
 
     var body: some View {
@@ -17,7 +16,7 @@ struct HistoryView: View {
                 Caption(countLine, size: 12.5)
                 Spacer()
                 Readout("Show")
-                ObMenu(options: [(false, "Newest first"), (true, "By app, newest first")], selection: $byApp, width: 230)
+                ObMenu(options: [(false, "Newest first"), (true, "By app, newest first")], selection: $model.settings.historyByApp, width: 230)
             }
             .padding(.top, 12).padding(.bottom, 14)
             if sizeClass == .compact {
@@ -40,13 +39,15 @@ struct HistoryView: View {
 
     private var countLine: String {
         model.history.isEmpty ? "Nothing here yet. Your dictations appear here."
-            : "\(model.history.count) of the last \(model.settings.historyLimit) dictations, kept on this \(Device.noun). Change how many under Settings › History."
+            : model.settings.historyLimit > 0
+                ? "\(model.history.count) of the last \(model.settings.historyLimit) dictations, kept on this \(Device.noun). Change how many under Settings › History."
+                : "\(model.history.count) dictations, all kept on this \(Device.noun). Change this under Settings › History."
     }
 
     private var list: some View {
         PageScroll {
             LazyVStack(spacing: 0) {
-                if byApp {
+                if model.settings.historyByApp {
                     ForEach(groups, id: \.0) { app, entries in
                         Button {
                             if folded.contains(app) { folded.remove(app) } else { folded.insert(app) }

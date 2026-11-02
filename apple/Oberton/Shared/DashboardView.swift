@@ -452,7 +452,7 @@ struct HistoryCell: View {
                 Spacer()
                 VStack(alignment: .trailing, spacing: 0) {
                     Text(model.history.count.formatted()).font(Ob.mono(28, .bold)).foregroundStyle(hover ? ob.accent : ob.ink)
-                    Readout("of \(model.settings.historyLimit) kept", size: 10)
+                    Readout(model.settings.historyLimit > 0 ? "of \(model.settings.historyLimit) kept" : "kept, no limit", size: 10)
                 }
             }
             .contentShape(Rectangle())

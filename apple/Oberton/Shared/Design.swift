@@ -36,7 +36,7 @@ struct Palette {
 }
 
 private struct PaletteKey: EnvironmentKey {
-    static let defaultValue = Palette(dark: false, accentChoice: .cobalt)
+    static let defaultValue = Palette(dark: false, accentChoice: .violet)
 }
 
 private struct ShowJapaneseKey: EnvironmentKey {

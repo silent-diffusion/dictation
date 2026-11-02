@@ -212,7 +212,8 @@ private struct HistorySettingsSection: View {
                     Caption("The dictation itself: what was heard, the AI's edit, and where it went.", size: 12)
                 }
                 Spacer()
-                ObMenu(options: [10, 25, 50, 100, 200, 500].map { ($0, "The newest \($0)") }, selection: $model.settings.historyLimit, width: 240)
+                ObMenu(options: [(0, "Everything (never delete)")] + [10, 25, 50, 100, 200, 500].map { ($0, "The newest \($0)") },
+                       selection: $model.settings.historyLimit, width: 240)
             }
             .padding(EdgeInsets(top: 12, leading: 18, bottom: 12, trailing: 18))
             .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))

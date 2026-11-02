@@ -77,9 +77,12 @@ final class AppModel: ObservableObject {
         } else {
             words = WordTally()
         }
-        if AppleIntelligenceBackend.unavailableReason != nil, settings.defaultModel == .appleOnDevice, settingsFile.load() == nil {
-            // A device without Apple Intelligence starts on Raw rather than failing every dictation.
-            settings.activeProfileID = BuiltInProfiles.rawID
+        if settingsFile.load() == nil {
+            // A new install starts on Grammar & Clarity (as on Windows since 5.18), or on Raw on a device without Apple
+            // Intelligence rather than failing every dictation. Existing installs keep their own.
+            settings.activeProfileID = AppleIntelligenceBackend.unavailableReason != nil && settings.defaultModel == .appleOnDevice
+                ? BuiltInProfiles.rawID
+                : profiles.first { $0.name == BuiltInProfiles.defaultName }?.id
         }
         transcriber.onText = { [weak self] in self?.liveText = $0 }
         transcriber.onLevel = { [weak self] in self?.level = $0 }

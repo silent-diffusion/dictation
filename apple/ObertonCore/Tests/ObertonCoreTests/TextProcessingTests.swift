@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import ObertonCore
 
@@ -64,8 +65,32 @@ import Testing
         #expect(s.contains("Be careful.") && s.contains("Do not remove filler words") && s.contains("single paragraph") && s.contains("only the processed text"))
     }
     @Test func builtInsMatchWindows() {
-        #expect(BuiltInProfiles.create().map(\.name) == ["Light Cleanup", "Grammar & Clarity", "Natural Phrasing", "Custom", "Raw"])
-        #expect(BuiltInProfiles.create()[0].prompt.contains("conservative dictation editor"))
+        let all = BuiltInProfiles.create()
+        #expect(all.map(\.name) == ["Light Cleanup", "Grammar & Clarity", "AI Parsing Formatter", "Email Formatter", "Raw"])
+        #expect(all[0].prompt.contains("conservative dictation editor"))
+        #expect(all.contains { $0.name == BuiltInProfiles.defaultName })
+        // Built-ins use the install's own AI model, so none needs one this device doesn't have.
+        #expect(all.allSatisfy { $0.model == nil })
+        #expect(all.map(\.maxChangeRatio).prefix(4) == [0.4, 0.5, 0.6, 0.6])
+        let email = all.first { $0.name == "Email Formatter" }
+        #expect(email?.rewriteWhole == true && email?.showPreview == true)
+        #expect(all.last?.id == BuiltInProfiles.rawID && all.last?.isRaw == true)
+        // The 5.18 prompts: no em dashes or ellipses.
+        #expect(all.prefix(2).allSatisfy { $0.prompt.contains("\"—\"") && $0.prompt.contains("\"...\"") })
+    }
+    @Test func defaultsMatchWindows518() {
+        let s = AppSettings()
+        #expect(s.ttsBaseSpeed == 1.75 && s.overlayOpacity == 0.9 && s.overlayPosition == .bottomLeft)
+        #expect(s.accent == .violet && !s.sidebarCollapsed && s.typingWPM == 35)
+        #expect(s.historyLimit == 0 && s.historyByApp && s.keepHistory)
+        // Kept different on purpose: Apple Intelligence, and Ollama's own port.
+        #expect(s.defaultModel == .appleOnDevice && s.ollamaEndpoint == "http://127.0.0.1:11434")
+        #expect((s.hotkey, s.cycleProfileHotkey, s.speakHotkey) == ("Ctrl+D", "Ctrl+Alt+D", "Ctrl+Space"))
+    }
+    @Test func olderSettingsKeepTheirOwnValues() throws {
+        let old = #"{"historyLimit": 50, "accent": "cobalt", "sidebarCollapsed": true, "typingWPM": 40}"#
+        let s = try JSONDecoder().decode(AppSettings.self, from: Data(old.utf8))
+        #expect(s.historyLimit == 50 && s.accent == .cobalt && s.sidebarCollapsed && s.typingWPM == 40)
     }
     @Test func modelIDsRoundTrip() {
         #expect(ModelID("ollama:qwen2.5:3b") == ModelID(provider: .ollama, name: "qwen2.5:3b"))

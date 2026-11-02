@@ -62,26 +62,30 @@ public struct AppSettings: Codable, Sendable, Equatable {
     public var vocabularyHint = ""
     public var activeProfileID: String?
     public var showOverlay = true
-    public var overlayPosition = OverlayPosition.bottomCenter
-    public var overlayOpacity = 0.88
+    /// Bottom left at 90% (the Windows defaults since 5.18). The Read aloud player shares the overlay, its place and opacity.
+    public var overlayPosition = OverlayPosition.bottomLeft
+    public var overlayOpacity = 0.9
     /// Read aloud: an AVSpeechSynthesisVoice identifier (nil = the system's default voice) and base speed (0.5–2).
     public var ttsVoice: String?
-    public var ttsBaseSpeed = 1.0
+    public var ttsBaseSpeed = 1.75
     /// After a dictation is inserted, put the user's own clipboard back.
     public var restoreClipboard = true
     public var keepHistory = true
-    public var historyLimit = 50
+    /// How many recent dictations History keeps; 0 = all of them (the default since Windows 5.18).
+    public var historyLimit = 0
+    /// History lists dictations by app (newest first within each) rather than in one list.
+    public var historyByApp = true
     /// Keep the Analytics word tally (words.json): counts of words, phrases, corrections and fillers, never sentences.
     public var keepWordTally = true
     public var maxRecordingSeconds = 600.0
-    public var typingWPM = 40
+    public var typingWPM = 35
     public var cloud = CloudSettings()
     public var theme = AppTheme.system
-    public var accent = AccentChoice.cobalt
+    public var accent = AccentChoice.violet
     /// Show the small decorative Japanese words beside labels (倍音, 設定…). Off hides every one of them.
     public var showJapanese = true
-    /// The main window's sidebar is folded away, so the page fills the window (the Windows default since 4.2.2).
-    public var sidebarCollapsed = true
+    /// The main window's sidebar is folded away, so the page fills the window (open by default, as on Windows since 5.18).
+    public var sidebarCollapsed = false
     /// The size of everything in the main window, 1 = as designed (Cmd+plus, Cmd+minus, Cmd+0).
     public var uiScale = 1.0
     /// The dashboard notepad: a text box that is always there to type in.
@@ -99,7 +103,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
         take(.language, &language); take(.vocabularyHint, &vocabularyHint); take(.activeProfileID, &activeProfileID)
         take(.showOverlay, &showOverlay); take(.overlayPosition, &overlayPosition); take(.overlayOpacity, &overlayOpacity)
         take(.ttsVoice, &ttsVoice); take(.ttsBaseSpeed, &ttsBaseSpeed); take(.restoreClipboard, &restoreClipboard)
-        take(.keepHistory, &keepHistory); take(.historyLimit, &historyLimit); take(.keepWordTally, &keepWordTally); take(.maxRecordingSeconds, &maxRecordingSeconds)
+        take(.keepHistory, &keepHistory); take(.historyLimit, &historyLimit); take(.historyByApp, &historyByApp); take(.keepWordTally, &keepWordTally); take(.maxRecordingSeconds, &maxRecordingSeconds)
         take(.typingWPM, &typingWPM); take(.cloud, &cloud)
         take(.theme, &theme); take(.accent, &accent); take(.showJapanese, &showJapanese)
         take(.sidebarCollapsed, &sidebarCollapsed); take(.uiScale, &uiScale); take(.notepad, &notepad)

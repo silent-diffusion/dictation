@@ -254,7 +254,7 @@ private struct SubLine: View {
     var body: some View { Text(text).font(Ob.sans(11)).foregroundStyle(ob.muted).lineLimit(2).fixedSize(horizontal: false, vertical: true) }
 }
 
-/// "vs typing at 40 wpm ✎" under TIME SAVED: a click turns the number into a box to type another speed.
+/// "vs typing at 35 wpm ✎" under TIME SAVED: a click turns the number into a box to type another speed.
 private struct TypingSpeed: View {
     @Binding var wpm: Int
     @State private var editing = false
