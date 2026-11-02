@@ -3,7 +3,7 @@ import SwiftUI
 
 /// The main window's sections, as in the Windows sidebar.
 enum Section: String, CaseIterable, Hashable {
-    case dashboard, speechToText, readAloud, history, settings
+    case dashboard, speechToText, readAloud, history, analytics, settings
 
     var title: String {
         switch self {
@@ -11,6 +11,7 @@ enum Section: String, CaseIterable, Hashable {
         case .speechToText: "Speech to text"
         case .readAloud: "Read aloud"
         case .history: "History"
+        case .analytics: "Analytics"
         case .settings: "Settings"
         }
     }
@@ -21,6 +22,7 @@ enum Section: String, CaseIterable, Hashable {
         case .speechToText: "口述"
         case .readAloud: "読上"
         case .history: "履歴"
+        case .analytics: "分析"
         case .settings: "設定"
         }
     }
@@ -204,6 +206,7 @@ struct RootView: View {
         case .speechToText: SpeechToTextView()
         case .readAloud: ReadAloudView()
         case .history: HistoryView()
+        case .analytics: AnalyticsView()
         case .settings: SettingsView()
         }
     }
@@ -297,6 +300,7 @@ extension Section {
         case .speechToText: "mic"
         case .readAloud: "speaker.wave.2"
         case .history: "text.alignleft"
+        case .analytics: "chart.bar.xaxis"
         case .settings: "gearshape"
         }
     }

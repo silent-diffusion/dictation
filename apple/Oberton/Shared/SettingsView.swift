@@ -197,6 +197,7 @@ private struct HistorySettingsSection: View {
     @Environment(\.ob) private var ob
     @State private var confirmClear = false
     @State private var confirmReset = false
+    @State private var confirmResetTally = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -227,12 +228,23 @@ private struct HistorySettingsSection: View {
             FieldLabel("Dashboard counts")
             Caption("The meters on the dashboard come from daily counts (numbers only, never text), so they survive History being cleared.", size: 12.5)
             Button("Reset dashboard counts…") { confirmReset = true }.buttonStyle(.quiet).padding(.top, 10)
+            FieldLabel("Word tally")
+            SwitchCard {
+                ObSwitch("Keep a word tally for Analytics",
+                         detail: "Counts of the words and phrases you dictate, the words the AI corrects and the fillers it removes, saved in words.json. Counts only, never sentences.",
+                         isOn: $model.settings.keepWordTally)
+            }
+            Button("Reset word tally…") { confirmResetTally = true }.buttonStyle(.quiet).padding(.top, 10)
+                .disabled(model.words.days.isEmpty)
         }
         .confirmationDialog("Delete every dictation in History?", isPresented: $confirmClear) {
             Button("Delete all history", role: .destructive) { model.clearHistory() }
         }
         .confirmationDialog("Reset the dashboard counts?", isPresented: $confirmReset) {
             Button("Reset counts", role: .destructive) { model.resetUsage() }
+        }
+        .confirmationDialog("Forget every word, phrase and correction counted for Analytics?", isPresented: $confirmResetTally) {
+            Button("Reset word tally", role: .destructive) { model.resetWordTally() }
         }
     }
 }

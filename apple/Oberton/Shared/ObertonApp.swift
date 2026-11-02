@@ -145,9 +145,11 @@ enum Snapshots {
     static func write(to dir: String, model: AppModel) {
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         model.settings.sidebarCollapsed = false
+        model.seedSnapshotData()
         let pages: [(String, Place)] = [
             ("dashboard", Place()), ("profiles", Place(section: .speechToText)), ("readaloud", Place(section: .readAloud)),
-            ("history", Place(section: .history)), ("settings-appearance", Place(section: .settings, settings: .appearance)),
+            ("history", Place(section: .history)), ("analytics", Place(section: .analytics)),
+            ("settings-appearance", Place(section: .settings, settings: .appearance)), ("settings-history", Place(section: .settings, settings: .history)),
             ("settings-models", Place(section: .settings, settings: .models)), ("settings-layout", Place(section: .settings, settings: .layout)),
             ("settings-about", Place(section: .settings, settings: .about)),
         ]
@@ -155,14 +157,16 @@ enum Snapshots {
             var s = model.settings
             s.theme = dark ? .dark : .light
             for (name, place) in pages {
-                let view = RootView(start: place).environmentObject(model).obertonTheme(s).frame(width: 1200, height: 780)
-                let r = ImageRenderer(content: view)
-                r.scale = 2
-                if let img = r.nsImage, let tiff = img.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
-                   let png = rep.representation(using: .png, properties: [:]) {
-                    try? png.write(to: URL(fileURLWithPath: dir).appending(path: "\(name)-\(dark ? "dark" : "light").png"))
-                }
+                // Analytics is long: drawn taller so every section shows.
+                let view = RootView(start: place).environmentObject(model).obertonTheme(s).frame(width: 1200, height: name == "analytics" ? 1500 : 780)
+                save(view, to: dir, name: "\(name)-\(dark ? "dark" : "light")")
             }
+            // Analytics at iPhone width, its cells stacked.
+            var phone = s
+            phone.sidebarCollapsed = true
+            let narrow = AnalyticsView().environmentObject(model).environmentObject(Navigator()).environment(\.horizontalSizeClass, .compact)
+                .obertonTheme(phone).frame(width: 390, height: 2900).background(Palette(dark: dark, accentChoice: s.accent).paper)
+            save(narrow, to: dir, name: "analytics-phone-\(dark ? "dark" : "light")")
         }
         let overlay = VStack(spacing: 16) {
             ReceiptCard(entry: HistoryEntry(transcription: "um so the plan for friday is we ship the beta to the uh first ten testers and then we collect feedback",
@@ -179,6 +183,15 @@ enum Snapshots {
             try? png.write(to: URL(fileURLWithPath: dir).appending(path: "overlay.png"))
         }
         NSApp.terminate(nil)
+    }
+
+    private static func save(_ view: some View, to dir: String, name: String) {
+        let r = ImageRenderer(content: view)
+        r.scale = 2
+        if let img = r.nsImage, let tiff = img.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
+           let png = rep.representation(using: .png, properties: [:]) {
+            try? png.write(to: URL(fileURLWithPath: dir).appending(path: "\(name).png"))
+        }
     }
 }
 #endif

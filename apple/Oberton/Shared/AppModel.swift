@@ -43,6 +43,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var pending: HistoryEntry?
     @Published var ollamaModels: [String] = []
     @Published private(set) var usage: UsageLog
+    /// The Analytics word tally (words.json): counts only, never sentences.
+    @Published private(set) var words: WordTally
     /// The last dictation that went in, for the overlay's receipt (shown when the pill is clicked).
     @Published var receipt: HistoryEntry?
 
@@ -53,16 +55,28 @@ final class AppModel: ObservableObject {
     private let profilesFile = JSONFile<[Profile]>("profiles.json")
     private let historyFile = JSONFile<[HistoryEntry]>("history.json")
     private let usageFile = JSONFile<UsageLog>("usage.json")
+    private let wordsFile = JSONFile<WordTally>("words.json")
     private let transcriber = LiveTranscriber()
     private var work: Task<Void, Never>?
     private var limitTimer: Timer?
     private var stoppedAt: Date?
 
     init() {
-        settings = settingsFile.load() ?? AppSettings()
+        let loadedSettings = settingsFile.load() ?? AppSettings(), history = historyFile.load() ?? []
+        settings = loadedSettings
         profiles = profilesFile.load() ?? BuiltInProfiles.create()
-        history = historyFile.load() ?? []
+        self.history = history
         usage = usageFile.load() ?? UsageLog()
+        if let loaded = wordsFile.load() {
+            words = loaded
+        } else if loadedSettings.keepWordTally {
+            // The first time: seed the tally from what History already has, so Analytics doesn't start empty.
+            let seeded = WordTally(seed: history)
+            words = seeded
+            if !Self.snapshotMode { wordsFile.save(seeded) }
+        } else {
+            words = WordTally()
+        }
         if AppleIntelligenceBackend.unavailableReason != nil, settings.defaultModel == .appleOnDevice, settingsFile.load() == nil {
             // A device without Apple Intelligence starts on Raw rather than failing every dictation.
             settings.activeProfileID = BuiltInProfiles.rawID
@@ -223,6 +237,10 @@ final class AppModel: ObservableObject {
         usage.recordDictation(words: entry.words, seconds: entry.seconds, turnaround: entry.turnaroundSeconds,
                               usedAI: entry.aiEdit != nil, keptAI: entry.aiEdit != nil && entry.warning == nil, app: entry.appName)
         usageFile.save(usage)
+        if settings.keepWordTally {
+            words.record(entry)
+            wordsFile.save(words)
+        }
         guard settings.keepHistory else { return }
         history.insert(entry, at: 0)
         if settings.historyLimit > 0, history.count > settings.historyLimit { history.removeLast(history.count - settings.historyLimit) }
@@ -243,6 +261,72 @@ final class AppModel: ObservableObject {
         usage = UsageLog()
         usageFile.save(usage)
     }
+
+    /// Forget the word tally (Settings › History).
+    func resetWordTally() {
+        words = WordTally()
+        wordsFile.save(words)
+    }
+
+    /// Whether a word is in the speech vocabulary hint (Settings › Speech recognition).
+    func inVocabulary(_ word: String) -> Bool { Vocabulary.contains(settings.vocabularyHint, word) }
+
+    /// Add a word to the speech vocabulary hint, so the recognizer expects it from the next dictation on (Analytics'
+    /// "Add to vocabulary").
+    func addToVocabulary(_ word: String) {
+        settings.vocabularyHint = Vocabulary.adding(word, to: settings.vocabularyHint)
+    }
+
+    /// The debug snapshots run outside the sandbox: they must never write to the real data folder.
+    static var snapshotMode: Bool { ProcessInfo.processInfo.environment["OBERTON_SNAPSHOT"] != nil }
+
+    #if DEBUG
+    /// Snapshot mode only: made-up counts so the Analytics charts aren't empty. Kept in memory, never saved.
+    func seedSnapshotData() {
+        guard Self.snapshotMode else { return }
+        let cal = Calendar.current, now = Date()
+        var log = UsageLog(), tally = WordTally()
+        let apps = ["Mail", "Slack", "Notes", "Safari", "Xcode"]
+        let profiles = ["Light Cleanup", "Formal", "Raw", "Bullet notes"]
+        let samples: [(String, String)] = [
+            ("um so the overton release goes out on friday", "The Oberton release goes out on Friday."),
+            ("can you go ahead and send the release notes to the team", "Can you go ahead and send the release notes to the team?"),
+            ("i think uh we should move the standup to ten", "I think we should move the standup to ten."),
+            ("make sure that the cooper netties cluster is up", "Make sure that the Kubernetes cluster is up."),
+            ("let's go ahead and merge the pull request you know after review", "Let's go ahead and merge the pull request after review."),
+            ("the quarterly report is basically done", "The quarterly report is done."),
+            ("ping jessica about the design review tomorrow", "Ping Jessica about the design review tomorrow."),
+            ("make sure that the swift ui preview builds", "Make sure that the SwiftUI preview builds."),
+        ]
+        var rng = SystemRandomNumberGenerator()
+        for back in 0..<120 {
+            let day = cal.date(byAdding: .day, value: -back, to: now)!
+            let weekend = UsageLog.weekdayRow(day) >= 5
+            let n = back == 0 ? 6 : Int.random(in: weekend ? 0...3 : 2...11, using: &rng)
+            for k in 0..<n {
+                let hour = [8, 9, 9, 10, 11, 13, 14, 14, 15, 16, 17, 21][Int.random(in: 0..<12, using: &rng)]
+                let time = cal.date(bySettingHour: hour, minute: k % 60, second: 0, of: day)!
+                let (heard, edit) = samples.randomElement(using: &rng)!
+                let profile = profiles[Int.random(in: 0..<(k % 3 == 0 ? 4 : 2), using: &rng)]
+                let raw = profile == "Raw"
+                let rejected = !raw && Int.random(in: 0..<12, using: &rng) == 0
+                var e = HistoryEntry(transcription: heard, aiEdit: raw ? nil : rejected ? heard : edit, inserted: raw || rejected ? heard : edit,
+                                     profileName: profile, model: nil, appName: apps[min(Int.random(in: 0..<7, using: &rng), 4)],
+                                     seconds: Double.random(in: 3...9, using: &rng), turnaroundSeconds: Double.random(in: 0.6...2.2, using: &rng),
+                                     warning: rejected ? "Safety net" : nil)
+                e.date = time
+                log.recordDictation(words: e.words * 6, seconds: e.seconds * 5, turnaround: e.turnaroundSeconds, usedAI: !raw, keptAI: !raw && !rejected,
+                                    app: e.appName, on: time)
+                tally.record(e, now: now)
+            }
+            if Int.random(in: 0..<3, using: &rng) > 0 {
+                log.recordReading(words: Int.random(in: 80...900, using: &rng), seconds: Double.random(in: 30...300, using: &rng), on: day)
+            }
+        }
+        usage = log
+        words = tally
+    }
+    #endif
 
     func clearHistory() {
         history = []

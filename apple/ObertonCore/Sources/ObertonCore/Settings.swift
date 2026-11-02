@@ -71,6 +71,8 @@ public struct AppSettings: Codable, Sendable, Equatable {
     public var restoreClipboard = true
     public var keepHistory = true
     public var historyLimit = 50
+    /// Keep the Analytics word tally (words.json): counts of words, phrases, corrections and fillers, never sentences.
+    public var keepWordTally = true
     public var maxRecordingSeconds = 600.0
     public var typingWPM = 40
     public var cloud = CloudSettings()
@@ -97,7 +99,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
         take(.language, &language); take(.vocabularyHint, &vocabularyHint); take(.activeProfileID, &activeProfileID)
         take(.showOverlay, &showOverlay); take(.overlayPosition, &overlayPosition); take(.overlayOpacity, &overlayOpacity)
         take(.ttsVoice, &ttsVoice); take(.ttsBaseSpeed, &ttsBaseSpeed); take(.restoreClipboard, &restoreClipboard)
-        take(.keepHistory, &keepHistory); take(.historyLimit, &historyLimit); take(.maxRecordingSeconds, &maxRecordingSeconds)
+        take(.keepHistory, &keepHistory); take(.historyLimit, &historyLimit); take(.keepWordTally, &keepWordTally); take(.maxRecordingSeconds, &maxRecordingSeconds)
         take(.typingWPM, &typingWPM); take(.cloud, &cloud)
         take(.theme, &theme); take(.accent, &accent); take(.showJapanese, &showJapanese)
         take(.sidebarCollapsed, &sidebarCollapsed); take(.uiScale, &uiScale); take(.notepad, &notepad)
