@@ -51,13 +51,14 @@ public class UnloadingTests
         Assert.Equal(keepAlive, new AppSettings { UnloadAfterMinutes = minutes }.OllamaKeepAlive);
 
     [Fact]
-    public void History_keeps_50_with_audio_by_default()
+    public void History_keeps_all_text_and_a_week_of_audio_by_default()
     {
         var s = new AppSettings();
-        Assert.Equal(50, s.HistoryLimit);
+        Assert.Equal((0, 0), (s.HistoryLimit, s.HistoryDays));
         Assert.True(s.KeepHistory);
         Assert.True(s.SaveHistoryAudio);
-        Assert.Equal(HistoryGrouping.Chronological, s.HistoryGrouping);
+        Assert.Equal((0, 7), (s.AudioLimit, s.AudioDays));
+        Assert.Equal(HistoryGrouping.ByApp, s.HistoryGrouping);
     }
 }
 

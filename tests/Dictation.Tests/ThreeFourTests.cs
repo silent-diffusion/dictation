@@ -144,7 +144,8 @@ public class VoiceTests
         var p = new Profile();
         Assert.Null(p.Voice);
         Assert.False(p.LiveTyping); // without AI, words are pasted as they are heard unless the profile says type
-        Assert.Null(new AppSettings().ReaderPosition); // the player follows the dictation overlay by default
+        Assert.Equal(OverlayPosition.TopRight, new AppSettings().ReaderPosition); // top right, the overlay bottom left
+        Assert.Equal(OverlayPosition.BottomLeft, new AppSettings().OverlayPosition);
     }
 }
 

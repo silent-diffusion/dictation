@@ -44,10 +44,13 @@ public sealed class ProfileService
     {
         _settings = settings;
         var loaded = JsonStore.Load<List<Profile>>(_path);
-        foreach (var p in loaded is { Count: > 0 } ? loaded : BuiltInProfiles.Create()) Profiles.Add(p);
+        var fresh = loaded is not { Count: > 0 };
+        foreach (var p in fresh ? BuiltInProfiles.Create() : loaded!) Profiles.Add(p);
         var s = settings.Current;
+        // A new install starts with Grammar & Clarity as the default (and active) profile.
+        if (fresh) s.DefaultProfileId = s.ActiveProfileId = Profiles.FirstOrDefault(p => p.Name == BuiltInProfiles.DefaultName)?.Id;
         // Built-ins added in later versions (with a fixed id) show up once for existing users, too.
-        var changed = loaded is not { Count: > 0 };
+        var changed = fresh;
         foreach (var p in BuiltInProfiles.Create().Where(p => BuiltInProfiles.FixedIds.Contains(p.Id)))
         {
             if (s.BuiltInProfilesAdded.Contains(p.Id)) continue;
@@ -132,6 +135,8 @@ public sealed class ProfileService
 public static class BuiltInProfiles
 {
     public const string RawId = "builtin-raw";
+    /// <summary>The profile a new install starts with.</summary>
+    public const string DefaultName = "Grammar & Clarity";
     /// <summary>Built-ins with a fixed id; older ones got random ids when they were created.</summary>
     public static readonly IReadOnlySet<string> FixedIds = new HashSet<string> { RawId };
 
@@ -152,8 +157,8 @@ public static class BuiltInProfiles
                 Remove accidental repeated words and obvious abandoned fragments when doing so does not change the meaning.
                 Correct spelling, capitalization, punctuation, and clear grammatical errors.
                 Preserve the speaker's vocabulary, sentence structure, and natural voice wherever possible.
-                Preserve deliberate repetition, emphasis, and meaningful self-corrections.
                 Do not summarize, add details, invent information, or rewrite for style.
+                Never use "—" or "..."
                 If a phrase is ambiguous, leave it unchanged rather than guessing.
                 Return only the cleaned transcript.
                 """,
@@ -161,38 +166,75 @@ public static class BuiltInProfiles
         },
         new Profile
         {
-            Name = "Grammar & Clarity",
+            Name = DefaultName,
             Description = "Fixes grammar and awkward constructions more firmly, keeping your meaning and voice.",
             Prompt = """
-                You are a careful copy editor working on a dictated transcript. Correct grammar, agreement, tense, word choice errors, and awkward or run-on sentence construction so the text is clear and correct.
-                Remove filler words, false starts, accidental repetitions, and abandoned fragments.
-                Fix spelling, capitalization, and punctuation. Split run-on sentences where needed.
+                You are a careful copy editor working on a dictated transcript. Correct grammar, agreement, tense, word choice errors, and run-on sentences. Remove filler words, false starts, accidental repetitions, and abandoned fragments. Fix spelling, capitalization, and punctuation. Split run-on sentences where needed.
+
                 Keep the speaker's meaning, vocabulary, and tone. Keep every fact, name, number, and opinion exactly as stated.
-                Do not summarize, add information, or change what is being said. You may lightly reorder words within a sentence only when needed for clarity.
-                If something is ambiguous, leave it as spoken rather than guessing.
+
+                Do not use "—"
+                Do not use any ellipses "..."
+                Do not summarize, add information, or take away information.
+
+                Make the text clear and correct.
+
                 Return only the edited text.
                 """,
             MaxChangeRatio = 0.5,
         },
         new Profile
         {
-            Name = "Natural Phrasing",
-            Description = "Makes spoken language read like written language while keeping the meaning and tone.",
+            Name = "AI Parsing Formatter",
+            Description = "Turns a spoken stream of thought into clear, organized instructions for an AI assistant.",
             Prompt = """
-                You are editing a dictated transcript so that it reads naturally as written text, as if the speaker had typed it carefully.
-                Remove filler words, false starts, repetitions, and verbal tics. Convert spoken constructions into natural written phrasing, and tidy sentence flow and punctuation.
-                Preserve the speaker's meaning, intent, tone, and level of formality. Keep all facts, names, numbers, and opinions exactly as stated.
-                Never summarize, never add information that was not said, and never drop meaningful content.
-                If something is ambiguous, keep it as spoken rather than guessing.
-                Return only the rewritten text.
+                You are an editor who turns a spoken stream of thought into clear, well-organized instructions for an AI assistant (for example a coding assistant or chat assistant). You do NOT carry out the instructions yourself; you only rewrite them.
+
+                Rewrite the transcript as a direct, actionable request:
+                - Start with one or two sentences stating the overall goal.
+                - Then list the specific changes or actions as a numbered list, in a logical order. Group related points together and merge duplicates.
+                - When the speaker corrects themselves ("no wait", "actually", "scratch that"), keep only the final version of what they want.
+                - Put constraints, preferences, and things to avoid in a short "Constraints:" list after the actions, if there are any.
+                - If the speaker is unsure about something or asks a question, keep it as a clearly marked question rather than turning it into an instruction.
+                - Write in plain, direct, imperative language ("Add…", "Change…", "Remove…"). Remove filler words, rambling, thinking out loud, and repetition.
+
+                Strict rules:
+                - Preserve every technical detail exactly as spoken: file names, function names, settings, values, numbers, error messages, and product names.
+                - Never add requirements, steps, or assumptions the speaker did not express, and never drop one they did.
+                - Do not answer the request, write code, or comment on it.
+                - If something is ambiguous, keep the speaker's wording rather than guessing.
+
+                Return only the rewritten instructions.
                 """,
             MaxChangeRatio = 0.6,
         },
         new Profile
         {
-            Name = "Custom",
-            Description = "Write your own instructions.",
-            Prompt = CustomPrompt,
+            Name = "Email Formatter",
+            Description = "Turns dictation into a clear, professional email, shown for a look before it goes in.",
+            Prompt = """
+                You are an editor who turns dictated speech into a clear, professional business email.
+
+                Rewrite the transcript as a well-structured email in business-professional language:
+                - Start with a greeting. If the speaker names the recipient, use their name (for example "Hi Sarah,"); otherwise use "Hello,".
+                - Open with the main point or purpose of the email in the first sentence or two.
+                - Organize the rest into short, focused paragraphs. Use a bulleted list only when the speaker lists several items, steps, or dates.
+                - Use polite, confident, concise wording. Replace casual or slang phrasing with professional equivalents, and remove filler words, false starts, repetition, and rambling.
+                - If the speaker asks for something, state the request clearly, including any deadline they mention.
+                - End with a brief, appropriate closing line (for example "Please let me know if you have any questions.")
+
+                Strict rules:
+                - Keep every fact, name, number, date, time, and commitment exactly as the speaker stated it.
+                - Never invent details, names, promises, or information that was not said.
+                - Do not add a subject line, a signature, or placeholders such as [Your Name].
+                - Do not invent new information. All of the references and questions should come from the transcribed text.
+                - If something is unclear, keep the speaker's wording rather than guessing.
+                - Always start with an introduction greeting line, and then every idea should start its own line.
+
+                Return only the email text.
+                """,
+            ShowPreview = true,
+            RewriteWhole = true,
             MaxChangeRatio = 0.6,
         },
         new Profile
