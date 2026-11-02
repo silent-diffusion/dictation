@@ -1,0 +1,28 @@
+name: Apple
+
+on:
+  push:
+    branches: [main]
+    paths: ['apple/**', '.github/workflows/apple.yml']
+  pull_request:
+    paths: ['apple/**', '.github/workflows/apple.yml']
+
+jobs:
+  build-and-test:
+    runs-on: macos-26
+    defaults:
+      run:
+        working-directory: apple
+    steps:
+      - uses: actions/checkout@v5
+      - name: Use the newest Xcode
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          xcodebuild -version
+      - name: Test the core
+        run: swift test --package-path ObertonCore
+      # No signing in CI: the development team lives in Local.xcconfig, which isn't in the repo.
+      - name: Build for macOS
+        run: xcodebuild -project Oberton.xcodeproj -scheme Oberton -destination 'generic/platform=macOS' -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
+      - name: Build for iOS Simulator
+        run: xcodebuild -project Oberton.xcodeproj -scheme Oberton -destination 'generic/platform=iOS Simulator' -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
