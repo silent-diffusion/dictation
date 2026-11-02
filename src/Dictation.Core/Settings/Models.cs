@@ -92,6 +92,9 @@ public sealed class AppSettings
     /// <summary>Ids of built-in profiles already offered, so one added in an update appears once and stays deleted
     /// if the user deletes it.</summary>
     public List<string> BuiltInProfilesAdded { get; set; } = new();
+    /// <summary>Setup has picked the speech model and device for this PC's hardware. False only for settings created
+    /// new (no settings.json yet); files from before 5.18.1 lack it and read as true, so a repair keeps their choices.</summary>
+    public bool ModelsChosen { get; set; } = true;
     public int TtsPort { get; set; } = 8766;
     public string? MicrophoneName { get; set; }
     public string? ActiveProfileId { get; set; }

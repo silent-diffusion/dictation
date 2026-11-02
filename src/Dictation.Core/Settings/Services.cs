@@ -5,13 +5,17 @@ namespace Dictation.Core.Settings;
 
 public sealed class SettingsService
 {
-    readonly string _path = Path.Combine(AppPaths.DataDir, "settings.json");
+    readonly string _path;
     public AppSettings Current { get; private set; }
     public event Action? Changed;
 
-    public SettingsService()
+    public SettingsService() : this(Path.Combine(AppPaths.DataDir, "settings.json")) { }
+
+    internal SettingsService(string path)
     {
-        Current = JsonStore.Load<AppSettings>(_path) ?? new AppSettings();
+        _path = path;
+        // New settings wait for setup to choose models for the hardware (other services may save them before it runs).
+        Current = JsonStore.Load<AppSettings>(_path) ?? new AppSettings { ModelsChosen = false };
         Current.AppOverrides = new Dictionary<string, InsertionMode>(Current.AppOverrides, StringComparer.OrdinalIgnoreCase);
         EnforceLocalEndpoint();
     }
