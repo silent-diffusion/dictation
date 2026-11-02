@@ -105,6 +105,16 @@ public sealed class RuntimeInstaller
     public static (string Whisper, string Llm, string Device) DefaultsFor(bool gpu) =>
         gpu ? ("large-v3-turbo", "qwen2.5:3b", "auto") : ("small.en", "qwen2.5:3b", "cpu");
 
+    /// <summary>Sets the models for the hardware once, on the first setup of new settings; a repair, or settings from an
+    /// earlier setup, keep the user's own choices. True if anything was set.</summary>
+    internal static bool ChooseModels(AppSettings s, bool gpu)
+    {
+        if (s.ModelsChosen) return false;
+        (s.Asr.Model, s.Llm.DefaultModel, s.Asr.Device) = DefaultsFor(gpu);
+        s.ModelsChosen = true;
+        return true;
+    }
+
     /// <summary>Rough download size in GB, for the welcome text.</summary>
     public static double EstimatedDownloadGb(bool gpu) => gpu ? 5.5 : 3.0;
 
@@ -113,17 +123,8 @@ public sealed class RuntimeInstaller
         Directory.CreateDirectory(AppPaths.RuntimeDir);
         Directory.CreateDirectory(WhisperDir);
         var gpu = HasNvidiaGpu();
-        var firstRun = !File.Exists(Marker);
-        var (whisperDefault, llmDefault, device) = DefaultsFor(gpu);
         var s = _settings.Current;
-        // Only choose models on the very first setup; a repair keeps the user's own choices.
-        if (firstRun && !File.Exists(Path.Combine(AppPaths.DataDir, "settings.json")))
-        {
-            s.Asr.Model = whisperDefault;
-            s.Asr.Device = device;
-            s.Llm.DefaultModel = llmDefault;
-            _settings.Save();
-        }
+        if (ChooseModels(s, gpu)) _settings.Save();
         Log.Info($"Runtime setup starting (NVIDIA GPU: {gpu}, speech model {s.Asr.Model}, AI model {s.Llm.DefaultModel})");
 
         // 1. uv (Python installer)
