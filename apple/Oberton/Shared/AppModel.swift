@@ -42,6 +42,9 @@ final class AppModel: ObservableObject {
     /// The dictation waiting in the preview (profiles with "preview before inserting").
     @Published private(set) var pending: HistoryEntry?
     @Published var ollamaModels: [String] = []
+    @Published private(set) var usage: UsageLog
+    /// The last dictation that went in, for the overlay's receipt (shown when the pill is clicked).
+    @Published var receipt: HistoryEntry?
 
     let reader = ReadAloudPlayer()
     weak var platform: PlatformServices?
@@ -49,6 +52,7 @@ final class AppModel: ObservableObject {
     private let settingsFile = JSONFile<AppSettings>("settings.json")
     private let profilesFile = JSONFile<[Profile]>("profiles.json")
     private let historyFile = JSONFile<[HistoryEntry]>("history.json")
+    private let usageFile = JSONFile<UsageLog>("usage.json")
     private let transcriber = LiveTranscriber()
     private var work: Task<Void, Never>?
     private var limitTimer: Timer?
@@ -58,12 +62,28 @@ final class AppModel: ObservableObject {
         settings = settingsFile.load() ?? AppSettings()
         profiles = profilesFile.load() ?? BuiltInProfiles.create()
         history = historyFile.load() ?? []
+        usage = usageFile.load() ?? UsageLog()
         if AppleIntelligenceBackend.unavailableReason != nil, settings.defaultModel == .appleOnDevice, settingsFile.load() == nil {
             // A device without Apple Intelligence starts on Raw rather than failing every dictation.
             settings.activeProfileID = BuiltInProfiles.rawID
         }
         transcriber.onText = { [weak self] in self?.liveText = $0 }
         transcriber.onLevel = { [weak self] in self?.level = $0 }
+        reader.onFinishedReading = { [weak self] words, seconds in
+            guard let self else { return }
+            self.usage.recordReading(words: words, seconds: seconds)
+            self.usageFile.save(self.usage)
+        }
+    }
+
+    /// Whether the active profile's AI can run right now (for the status dots).
+    var aiReady: Bool {
+        let id = processor.model(for: activeProfile)
+        switch id.provider {
+        case .apple: return AppleIntelligenceBackend.unavailableReason == nil
+        case .ollama: return ollamaModels.contains(id.name)
+        case .anthropic, .openai: return !settings.cloud.keepOffline && KeyStore.get(id.provider) != nil
+        }
     }
 
     var activeProfile: Profile {
@@ -164,6 +184,7 @@ final class AppModel: ObservableObject {
         do {
             let receipt = try await platform?.insert(entry.inserted) ?? "Done"
             record(entry)
+            self.receipt = entry
             phase = .done(entry.warning ?? receipt)
             if readBackRequested { reader.read(entry.inserted, voice: voice ?? settings.ttsVoice, speed: settings.ttsBaseSpeed) }
         } catch {
@@ -198,6 +219,10 @@ final class AppModel: ObservableObject {
     var lastEntry: HistoryEntry? { history.first }
 
     private func record(_ entry: HistoryEntry) {
+        // The daily counts are kept whether or not History is.
+        usage.recordDictation(words: entry.words, seconds: entry.seconds, turnaround: entry.turnaroundSeconds,
+                              usedAI: entry.aiEdit != nil, keptAI: entry.aiEdit != nil && entry.warning == nil, app: entry.appName)
+        usageFile.save(usage)
         guard settings.keepHistory else { return }
         history.insert(entry, at: 0)
         if settings.historyLimit > 0, history.count > settings.historyLimit { history.removeLast(history.count - settings.historyLimit) }
@@ -207,6 +232,16 @@ final class AppModel: ObservableObject {
     func deleteHistory(_ ids: Set<HistoryEntry.ID>) {
         history.removeAll { ids.contains($0.id) }
         historyFile.save(history)
+    }
+
+    /// Put a text into the app the last dictation went to (History's "Insert transcription into the last app").
+    func insertIntoLastApp(_ text: String) async -> String {
+        do { return try await platform?.insert(text) ?? "" } catch { return error.localizedDescription }
+    }
+
+    func resetUsage() {
+        usage = UsageLog()
+        usageFile.save(usage)
     }
 
     func clearHistory() {
@@ -240,5 +275,21 @@ final class AppModel: ObservableObject {
     func refreshOllama() async {
         guard let url = try? OllamaBackend.validated(settings.ollamaEndpoint) else { ollamaModels = []; return }
         ollamaModels = await OllamaBackend.installedModels(endpoint: url)
+    }
+}
+
+extension AppModel.Phase {
+    var label: String {
+        switch self {
+        case .idle: "Ready"
+        case .starting: "Starting…"
+        case .recording: "Listening"
+        case .transcribing: "Transcribing…"
+        case .processing: "Tidying up…"
+        case .preview: "Preview"
+        case .inserting: "Inserting…"
+        case .done(let s): s
+        case .failed(let s): s
+        }
     }
 }

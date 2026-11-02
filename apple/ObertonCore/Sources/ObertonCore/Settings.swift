@@ -6,6 +6,35 @@ public enum OverlayPosition: String, Codable, CaseIterable, Sendable {
     case topLeft, topCenter, topRight, middleLeft, center, middleRight, bottomLeft, bottomCenter, bottomRight
 }
 
+/// System follows the device's light/dark setting; Light and Dark override it.
+public enum AppTheme: String, Codable, CaseIterable, Sendable { case system, light, dark }
+
+/// The accent laid over the paper, as on Windows: color is a signal (what is live or matters most), never decoration.
+public enum AccentChoice: String, Codable, CaseIterable, Sendable {
+    case cobalt, teal, signalGreen, violet, amber
+
+    public var title: String {
+        switch self {
+        case .cobalt: "Cobalt"
+        case .teal: "Teal"
+        case .signalGreen: "Signal green"
+        case .violet: "Violet"
+        case .amber: "Amber"
+        }
+    }
+
+    /// The version for light paper and for dark paper, as RGB hex (Services/ThemeManager.cs).
+    public var hex: (light: UInt32, dark: UInt32) {
+        switch self {
+        case .cobalt: (0x2340FF, 0x7F8DFF)
+        case .teal: (0x00747C, 0x3CD2D9)
+        case .signalGreen: (0x00875A, 0x3BE0A2)
+        case .violet: (0x6A2CF5, 0xB39BFF)
+        case .amber: (0x9A6500, 0xFFC233)
+        }
+    }
+}
+
 public struct CloudSettings: Codable, Sendable, Equatable {
     /// The master switch: while on, nothing is sent to a cloud model, whatever a profile selects.
     public var keepOffline = true
@@ -45,6 +74,16 @@ public struct AppSettings: Codable, Sendable, Equatable {
     public var maxRecordingSeconds = 600.0
     public var typingWPM = 40
     public var cloud = CloudSettings()
+    public var theme = AppTheme.system
+    public var accent = AccentChoice.cobalt
+    /// Show the small decorative Japanese words beside labels (倍音, 設定…). Off hides every one of them.
+    public var showJapanese = true
+    /// The main window's sidebar is folded away, so the page fills the window (the Windows default since 4.2.2).
+    public var sidebarCollapsed = true
+    /// The size of everything in the main window, 1 = as designed (Cmd+plus, Cmd+minus, Cmd+0).
+    public var uiScale = 1.0
+    /// The dashboard notepad: a text box that is always there to type in.
+    public var notepad = ""
 
     public init() {}
 
@@ -60,6 +99,8 @@ public struct AppSettings: Codable, Sendable, Equatable {
         take(.ttsVoice, &ttsVoice); take(.ttsBaseSpeed, &ttsBaseSpeed); take(.restoreClipboard, &restoreClipboard)
         take(.keepHistory, &keepHistory); take(.historyLimit, &historyLimit); take(.maxRecordingSeconds, &maxRecordingSeconds)
         take(.typingWPM, &typingWPM); take(.cloud, &cloud)
+        take(.theme, &theme); take(.accent, &accent); take(.showJapanese, &showJapanese)
+        take(.sidebarCollapsed, &sidebarCollapsed); take(.uiScale, &uiScale); take(.notepad, &notepad)
     }
 }
 

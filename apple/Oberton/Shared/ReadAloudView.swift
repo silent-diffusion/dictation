@@ -2,83 +2,89 @@ import AVFoundation
 import ObertonCore
 import SwiftUI
 
+/// READ ALOUD 読上 (ReadAloudPage.xaml).
 struct ReadAloudView: View {
     @EnvironmentObject var model: AppModel
+    @Environment(\.ob) private var ob
+    @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var text = ""
 
     var body: some View {
-        Form {
-            Section {
-                PlayerView(player: model.reader)
-                TextEditor(text: $text).frame(minHeight: 120)
+        PageScroll {
+            VStack(alignment: .leading, spacing: 0) {
+                PageTitle(title: "Read aloud", japanese: "読上", readout: "Voice // on this \(Device.noun)",
+                          summary: intro)
+                // Status: the voice, and a way to hear it.
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("\(voiceName) is ready").font(Ob.sans(13.5, .semibold))
+                        Text("A voice of this \(Device.noun)'s own; nothing to download.").font(Ob.sans(12)).foregroundStyle(ob.muted)
+                    }
+                    Spacer()
+                    Button("Try it") {
+                        model.reader.read("Select any text and press the shortcut to hear it read aloud.", voice: model.settings.ttsVoice,
+                                          speed: model.settings.ttsBaseSpeed)
+                    }
+                    .buttonStyle(.primary)
+                }
+                .padding(EdgeInsets(top: 14, leading: 18, bottom: 14, trailing: 18))
+                .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
+                .padding(.top, 16)
+
+                FieldLabel("Voice")
+                ObMenu(options: [(String?.none, "System voice")] + ReadAloudPlayer.voices.map { (Optional($0.identifier), label($0)) },
+                       selection: $model.settings.ttsVoice, width: 380)
+                Caption("Used unless a profile picks its own voice. More natural voices: System Settings › Accessibility › Spoken Content › System voice › Manage Voices (the Enhanced and Premium ones).",
+                        size: 12.5).padding(.top, 8)
+
+                FieldLabel("Base speed")
+                ObSlider(value: $model.settings.ttsBaseSpeed, range: 0.25...4, step: 0.05, format: { String(format: "%.2f×", $0) },
+                         width: sizeClass == .compact ? 200 : 300)
+                Caption("The speed each reading starts at. The player's − and + change it for that reading.", size: 12.5).padding(.top, 8)
+
+                #if os(macOS)
+                FieldLabel("Player opacity")
+                ObSlider(value: $model.settings.overlayOpacity, range: 0.3...1, step: 0.01, format: { "\(Int(($0 * 100).rounded()))%" })
+                FieldLabel("How to use it")
+                Caption("Select text, then press \(model.settings.speakHotkey). With nothing selected, Oberton reads your clipboard. Press the shortcut again (or ✕) to stop. Change the shortcut under Hotkeys.")
+                #endif
+
+                FieldLabel("Read something")
+                TextEditor(text: $text)
+                    .font(Ob.sans(14)).scrollContentBackground(.hidden).padding(8)
+                    .frame(minHeight: 110)
+                    .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
                 HStack {
                     Button("Read this") { model.reader.read(text, voice: model.settings.ttsVoice, speed: model.settings.ttsBaseSpeed) }
-                        .disabled(text.isEmpty)
+                        .buttonStyle(.primary).disabled(text.isEmpty)
                     Button("Read the clipboard") {
                         if let s = model.platform?.clipboardText() { text = s; model.reader.read(s, voice: model.settings.ttsVoice, speed: model.settings.ttsBaseSpeed) }
                     }
+                    .buttonStyle(.quiet)
                 }
-                #if os(macOS)
-                Text("Or select text in any app and press \(model.settings.speakHotkey).").font(.caption).foregroundStyle(.secondary)
+                .padding(.top, 10)
+                #if os(iOS)
+                ReaderCard(player: model.reader, opacity: 1).padding(.top, 16)
                 #endif
             }
-            Section("Voice") {
-                Picker("Voice", selection: $model.settings.ttsVoice) {
-                    Text("System default").tag(String?.none)
-                    ForEach(ReadAloudPlayer.voices, id: \.identifier) { v in
-                        Text(v.name + (v.quality == .premium ? " · Premium" : v.quality == .enhanced ? " · Enhanced" : "")).tag(Optional(v.identifier))
-                    }
-                }
-                LabeledContent("Speed") {
-                    Slider(value: $model.settings.ttsBaseSpeed, in: 0.5...2, step: 0.05)
-                    Text(String(format: "%.2g×", model.settings.ttsBaseSpeed)).monospacedDigit().frame(width: 44)
-                }
-                Text("More natural voices: System Settings › Accessibility › Spoken Content › System voice › Manage Voices (Enhanced and Premium).")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-        }
-        .formStyle(.grouped)
-        .navigationTitle("Read aloud")
-    }
-}
-
-/// Play/pause, back to the sentence start, speed, and the text with the current word highlighted (click a word to jump).
-struct PlayerView: View {
-    @ObservedObject var player: ReadAloudPlayer
-
-    var body: some View {
-        if player.isSpeaking {
-            VStack(alignment: .leading, spacing: 10) {
-                PanelLabel(title: "Reading aloud", japanese: "読上")
-                ScrollView { Text(highlighted).frame(maxWidth: .infinity, alignment: .leading) }
-                    .frame(maxHeight: 140)
-                HStack(spacing: 16) {
-                    Button { player.togglePause() } label: { Image(systemName: player.isPaused ? "play.fill" : "pause.fill") }
-                        .accessibilityLabel(player.isPaused ? "Play" : "Pause")
-                    Button { player.setSpeed(player.speed - 0.25) } label: { Image(systemName: "minus") }.accessibilityLabel("Slower")
-                    Menu(String(format: "%.2g×", player.speed)) {
-                        ForEach([0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4], id: \.self) { s in
-                            Button(String(format: "%.2g×", s)) { player.setSpeed(s) }
-                        }
-                    }
-                    .fixedSize()
-                    Button { player.setSpeed(player.speed + 0.25) } label: { Image(systemName: "plus") }.accessibilityLabel("Faster")
-                    Spacer()
-                    Button { player.stop() } label: { Image(systemName: "stop.fill") }.accessibilityLabel("Stop")
-                }
-                .buttonStyle(.borderless)
-            }
-            .padding()
-            .background(RoundedRectangle(cornerRadius: 10).strokeBorder(.separator))
+            .frame(maxWidth: 760, alignment: .leading)
+            .padding(sizeClass == .compact ? EdgeInsets(top: 16, leading: 16, bottom: 16, trailing: 16) : EdgeInsets(top: 32, leading: 40, bottom: 40, trailing: 40))
         }
     }
 
-    private var highlighted: AttributedString {
-        var s = AttributedString(player.text)
-        if let r = player.spokenRange, let range = Range(r, in: s) {
-            s[range].foregroundColor = .accentColor
-            s[range].backgroundColor = .accentColor.opacity(0.15)
-        }
-        return s
+    private var intro: String {
+        #if os(macOS)
+        "Select text in any app and press \(model.settings.speakHotkey) to hear it. The voices run on this Mac."
+        #else
+        "Paste or type text below to hear it. The voices run on this iPhone."
+        #endif
+    }
+
+    private var voiceName: String {
+        ReadAloudPlayer.voices.first { $0.identifier == model.settings.ttsVoice }?.name ?? "The system voice"
+    }
+
+    private func label(_ v: AVSpeechSynthesisVoice) -> String {
+        v.name + (v.quality == .premium ? " · Premium" : v.quality == .enhanced ? " · Enhanced" : "")
     }
 }

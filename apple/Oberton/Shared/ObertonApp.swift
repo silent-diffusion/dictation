@@ -14,9 +14,11 @@ struct ObertonApp: App {
     #if os(macOS)
     var body: some Scene {
         WindowGroup("Oberton", id: "main") {
-            ContentView().environmentObject(model)
+            MainWindowContent().environmentObject(model)
         }
-        .defaultSize(width: 980, height: 700)
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 1200, height: 780)
+        .windowResizability(.contentMinSize)
 
         MenuBarExtra("Oberton", systemImage: "waveform") {
             MenuBarContent().environmentObject(model)
@@ -25,7 +27,7 @@ struct ObertonApp: App {
     #else
     var body: some Scene {
         WindowGroup("Oberton", id: "main") {
-            ContentView()
+            MainWindowContent()
                 .environmentObject(model)
                 .task {
                     model.platform = platform
@@ -35,6 +37,46 @@ struct ObertonApp: App {
     }
     #endif
 }
+
+/// The main window: the shell, themed from Settings; on iPhone the dictation pill and receipt float over it.
+struct MainWindowContent: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        RootView()
+            #if os(macOS)
+            .frame(minWidth: 960, minHeight: 600)
+            #else
+            .overlay(alignment: .bottom) { PhoneOverlay() }
+            #endif
+            .obertonTheme(model.settings)
+    }
+}
+
+#if os(iOS)
+struct PhoneOverlay: View {
+    @EnvironmentObject var model: AppModel
+    @State private var showReceipt = false
+
+    var body: some View {
+        VStack(spacing: 10) {
+            if model.phase == .preview, let pending = model.pending {
+                ReceiptCard(entry: pending, preview: true) { model.cancel() }.frame(maxWidth: 360)
+            } else if showReceipt, let r = model.receipt {
+                ReceiptCard(entry: r) { showReceipt = false }.frame(maxWidth: 360)
+            }
+            if !model.liveText.isEmpty, [.recording, .transcribing, .processing].contains(model.phase) { LiveWords(text: model.liveText) }
+            if model.phase != .idle && model.phase != .preview {
+                OverlayPill { if case .done = model.phase { showReceipt = true } }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 8)
+        .scaleEffect(0.92)
+        .animation(.easeOut(duration: 0.2), value: model.phase)
+    }
+}
+#endif
 
 #if os(macOS)
 import AppKit
@@ -49,6 +91,9 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
     private var overlay: OverlayController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["OBERTON_SNAPSHOT"] != nil { Snapshots.write(to: ProcessInfo.processInfo.environment["OBERTON_SNAPSHOT"]!, model: model); return }
+        #endif
         model.platform = platform
         overlay = OverlayController(model: model)
         registerHotkeys()
@@ -89,6 +134,51 @@ struct MenuBarContent: View {
             NSApp.activate()
         }
         Button("Quit Oberton") { NSApp.terminate(nil) }.keyboardShortcut("q")
+    }
+}
+#endif
+
+#if DEBUG && os(macOS)
+/// Draws each page to a PNG and quits (OBERTON_SNAPSHOT=<folder>), to check the design without a screen recording.
+@MainActor
+enum Snapshots {
+    static func write(to dir: String, model: AppModel) {
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        model.settings.sidebarCollapsed = false
+        let pages: [(String, Place)] = [
+            ("dashboard", Place()), ("profiles", Place(section: .speechToText)), ("readaloud", Place(section: .readAloud)),
+            ("history", Place(section: .history)), ("settings-appearance", Place(section: .settings, settings: .appearance)),
+            ("settings-models", Place(section: .settings, settings: .models)), ("settings-layout", Place(section: .settings, settings: .layout)),
+            ("settings-about", Place(section: .settings, settings: .about)),
+        ]
+        for dark in [false, true] {
+            var s = model.settings
+            s.theme = dark ? .dark : .light
+            for (name, place) in pages {
+                let view = RootView(start: place).environmentObject(model).obertonTheme(s).frame(width: 1200, height: 780)
+                let r = ImageRenderer(content: view)
+                r.scale = 2
+                if let img = r.nsImage, let tiff = img.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
+                   let png = rep.representation(using: .png, properties: [:]) {
+                    try? png.write(to: URL(fileURLWithPath: dir).appending(path: "\(name)-\(dark ? "dark" : "light").png"))
+                }
+            }
+        }
+        let overlay = VStack(spacing: 16) {
+            ReceiptCard(entry: HistoryEntry(transcription: "um so the plan for friday is we ship the beta to the uh first ten testers and then we collect feedback",
+                                            aiEdit: "The plan for Friday is to ship the beta to the first ten testers, and then collect feedback.",
+                                            inserted: "The plan for Friday is to ship the beta to the first ten testers, and then collect feedback.",
+                                            profileName: "Light Cleanup", model: nil, appName: "Mail", seconds: 14, turnaroundSeconds: 1.2, warning: nil)) {}
+            LiveWords(text: "so the plan for friday is we ship the beta to the first ten testers and")
+        }
+        .padding(30).background(Color(hex: 0xC9C7C1)).environmentObject(model).obertonTheme(model.settings)
+        let r = ImageRenderer(content: overlay)
+        r.scale = 2
+        if let img = r.nsImage, let tiff = img.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
+           let png = rep.representation(using: .png, properties: [:]) {
+            try? png.write(to: URL(fileURLWithPath: dir).appending(path: "overlay.png"))
+        }
+        NSApp.terminate(nil)
     }
 }
 #endif
