@@ -14,3 +14,10 @@ __pycache__/
 *.err
 # Claude Code worktrees and local state
 .claude/
+
+# Apple (Xcode) build output
+apple/build/
+apple/ObertonCore/.build/
+*.xcuserstate
+xcuserdata/
+apple/Local.xcconfig

@@ -1,0 +1,4 @@
+// Signing. The development team is personal, so it lives in Local.xcconfig, which git ignores:
+//   DEVELOPMENT_TEAM = <your team ID>
+// Copy Local.xcconfig.example to Local.xcconfig and fill it in. Without it, Xcode asks for a team when signing.
+#include? "Local.xcconfig"
