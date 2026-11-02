@@ -14,7 +14,7 @@ using Dictation.Core.Text;
 namespace Dictation.App.Views;
 
 /// <summary>
-/// The pill (bottom center of the screen by default; the position is a setting). Small while you talk; it grows only when it has text to show
+/// The pill (bottom left of the screen by default; the position is a setting). Small while you talk; it grows only when it has text to show
 /// (the cleanup, a preview, a receipt, a message). It is created with WS_EX_NOACTIVATE so it can never take
 /// keyboard focus away from the application being dictated into. It can be dragged anywhere (see <see cref="WindowDrag"/>).
 /// </summary>

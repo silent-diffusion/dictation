@@ -97,8 +97,13 @@ public class PromptTests
     public void Built_in_profiles_match_the_spec()
     {
         var names = BuiltInProfiles.Create().Select(p => p.Name).ToArray();
-        Assert.Equal(new[] { "Light Cleanup", "Grammar & Clarity", "Natural Phrasing", "Custom", "Raw" }, names);
+        Assert.Equal(new[] { "Light Cleanup", "Grammar & Clarity", "AI Parsing Formatter", "Email Formatter", "Raw" }, names);
         Assert.Contains("conservative dictation editor", BuiltInProfiles.Create()[0].Prompt);
+        Assert.Contains(BuiltInProfiles.Create(), p => p.Name == BuiltInProfiles.DefaultName);
+        // Built-ins use the install's own AI model, so none needs a model a new install hasn't downloaded.
+        Assert.All(BuiltInProfiles.Create(), p => Assert.True(string.IsNullOrEmpty(p.Model)));
+        var email = BuiltInProfiles.Create().Single(p => p.Name == "Email Formatter");
+        Assert.True(email.RewriteWhole && email.ShowPreview);
     }
 }
 

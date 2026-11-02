@@ -18,7 +18,7 @@
 
 | `01 // DICTATE` | `02 // EXTENDED NOTES` | `03 // READ ALOUD` | `04 // STAYS ON YOUR PC` |
 |---|---|---|---|
-| Press **`Ctrl+D`**, speak, press it again: cleaned-up text appears at your cursor, in any app. | Leave it on through a lecture or a meeting (your mic, the computer's audio, or both): transcript, AI-formatted text and a running summary, with the recording. | Select text, press **`Ctrl+Shift+Space`**: a natural local voice reads it, from 0.25× to 4×. | *Keep everything offline* is on by default. No accounts, analytics or telemetry. |
+| Press **`Ctrl+D`**, speak, press it again: cleaned-up text appears at your cursor, in any app. | Leave it on through a lecture or a meeting (your mic, the computer's audio, or both): transcript, AI-formatted text and a running summary, with the recording. | Select text, press **`Ctrl+Space`**: a natural local voice reads it, from 0.25× to 4×. | *Keep everything offline* is on by default. No accounts, analytics or telemetry. |
 
 ```
 MIC ──→ SPEECH ──→ AI ──→ INSERT
@@ -71,7 +71,8 @@ The app lives in the system tray; closing the window keeps it running.
 ### Updating
 
 *Settings → Updates → Check for updates* (or the tray menu). If there's a newer release it downloads the installer
-and updates in place; your settings, profiles and downloaded models are kept. You can also turn on *Check for updates when Oberton starts*.
+and updates in place; your settings, profiles and downloaded models are kept. *Check for updates when Oberton starts* is on by default
+(turn it off there to make no network request at all unless you ask).
 
 ### Uninstalling
 
@@ -177,8 +178,8 @@ puts it back to 100%; the size is remembered, and *Settings › Appearance* has 
   view to have the voice jump there, forwards or backwards. The player's opacity is a setting under *Read aloud*.
 * **Settings**: grouped into Dictation, Models & AI, Look & feel and App; each group folds away (remembered).
   **Appearance** follows the Windows light/dark setting, or pick Light or Dark, plus an accent color (Cobalt, Teal,
-  Signal green, Violet, Amber), each with a version for light and for dark paper. **Layout** places the dictation overlay and the Read aloud player
-  (nine positions each) and sets their opacity.
+  Signal green, Violet, Amber; Violet by default), each with a version for light and for dark paper. **Layout** places the dictation overlay
+  (bottom left by default) and the Read aloud player (top right by default), nine positions each, and sets their opacity.
   **About** explains what Oberton is, how a dictation works, how Extended Notes works (its four steps, how often each
   runs, and a 30-minute session drawn on a time line), what Oberton keeps on your PC, and its design language, with the
   meaning of every Japanese word in the interface.
@@ -188,7 +189,8 @@ puts it back to 100%; the size is remembered, and *Settings › Appearance* has 
   added, errors), and red means the microphone is recording, nowhere else. The small Japanese words beside some labels
   (倍音 overtone, 計器 instrument, 口述 dictation, 読上 reading aloud, 履歴 history, 設定 settings, 概要 about, 録音 recording,
   処理中 processing, 挿入 insertion) are decoration only and hidden from screen readers.
-* **Profiles** (*Speech to text*): *Light Cleanup*, *Grammar & Clarity*, *Natural Phrasing*, *Custom*, *Raw* (no AI: the recognizer's words,
+* **Profiles** (*Speech to text*): *Light Cleanup*, *Grammar & Clarity* (the default), *AI Parsing Formatter* (turns rambling speech into
+  a clear numbered request for an AI assistant), *Email Formatter* (a professional email, previewed before it goes in), *Raw* (no AI: the recognizer's words,
   with the seams between live pieces fixed), plus your own. Edit the prompt, pick a model (only models downloaded to this PC are listed, plus cloud models once
   they are set up), pick its models in one *Models* card: a speech-to-text (Whisper) model, the AI model and a Read aloud model and voice (downloaded ones only; a profile with
   its own speech model loads it when you switch to it, and recording starts right away meanwhile), toggle
@@ -203,10 +205,10 @@ puts it back to 100%; the size is remembered, and *Settings › Appearance* has 
   speech settings (quiet speech evened out, the vocabulary hint, the profile's speech model unless another must stay
   loaded), then cleaned up again by its profile. Nothing is inserted and the counts don't change; the result from before
   is kept, and *Put back the earlier result* switches between the two.
-* **History**: the last 50 dictations, kept in Oberton's data folder so they survive updates. Under *Settings › History*
+* **History**: every dictation's text, and recordings for a week, by default, kept in Oberton's data folder so they survive updates. Under *Settings › History*
   the text and the recordings each keep either the newest so many (10 to 500) or everything from a recent stretch (the
   last 24 hours to the last year); the text can also be kept for good, and a recording never outlives its text. Each has its recording (play it, also at 2×), the Transcription, AI Edit and Inserted boxes (each can be copied),
-  and the app and window it went into. List them newest first, or grouped by app (each app's group folds away).
+  and the app and window it went into. List them grouped by app (the default; each app's group folds away) or newest first.
 * **Extended Notes** (5.0): for very long sessions, a lecture or a meeting. Pick what to listen to (**Mic**, **Computer
   audio**, which is what the speakers play, for the other people on a video call, or **Both**) and press *Extended notes
   session*. Four plain text tabs:
@@ -238,7 +240,7 @@ puts it back to 100%; the size is remembered, and *Settings › Appearance* has 
   The speech engine is shared: notes open their own connection to the model already loaded, and no model unloads while a
   session records.
 * **Analytics**: how dictation goes over the last 7, 30 or 90 days, or everything: words dictated, speaking pace, time saved
-  against typing at 40 wpm (click the speed to type your own), turnaround, AI edits kept, words read aloud and **time read
+  against typing at 35 wpm (click the speed to type your own), turnaround, AI edits kept, words read aloud and **time read
   aloud** (how long the voice really spoke, at the speed each reading was at; counted from 5.10.0 on). Right under them,
   **Output by app**: *All apps*, then the apps you dictate into with a browser's sites under them (Gmail, YouTube,
   Outlook…, told from the tab's title; only the site's name is kept, and a title that names no site counts as *Other*).
@@ -276,7 +278,7 @@ Or download models from **Settings › Models**, and pick the active one there (
 
 * Speech recognition and the language model run locally. Whisper runs with `HF_HUB_OFFLINE=1`; the Ollama endpoint must be loopback (other values are rejected) and Ollama's cloud features are disabled.
 * A dictation's audio is held in memory while it runs. What is kept on disk, all under `%LOCALAPPDATA%\LocalDictation\data`
-  and only for you: **History** (the last 50 dictations by default, with their recordings when *Save audio* is on, the app's
+  and only for you: **History** (every dictation by default, with their recordings for a week when *Save audio* is on, the app's
   name and window title; adjustable or off under *Settings › History*), **Extended Notes** sessions (transcripts and the
   recording, until you delete them; a louder playback copy of an opened session sits in `%TEMP%\oberton-notes` and is
   removed with the session or by the uninstaller), the daily **usage counts** (numbers only, never text) and the dashboard
@@ -286,7 +288,7 @@ Or download models from **Settings › Models**, and pick the active one there (
 * *Keep everything offline* (on by default) blocks the cloud providers and Ollama's own cloud models. With it off, a profile
   with a cloud model sends that profile's dictations to it, and Extended Notes send their text to the default AI model,
   whichever that is.
-* Network access happens only for: the first-run download, and checking for updates (when you click it, or at startup if you enable that).
+* Network access happens only for: the first-run download, and checking for updates (when you click it, and at startup unless you turn that off).
   The update check is a plain request for this repository's public release list.
 
 ---

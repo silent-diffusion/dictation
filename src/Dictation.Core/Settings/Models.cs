@@ -80,16 +80,13 @@ public sealed class AppSettings
     /// A profile can pick its own (<see cref="Profile.Voice"/>).</summary>
     public string TtsVoice { get; set; } = "af_heart";
     /// <summary>Default reading speed, 0.5 to 2.0. The reader's +/− buttons change it for one reading only.</summary>
-    public double TtsBaseSpeed { get; set; } = 1.0;
+    public double TtsBaseSpeed { get; set; } = 1.75;
     /// <summary>Opacity of the Read aloud player's background (its text stays fully opaque). 0.3 to 1.</summary>
-    public double ReaderOpacity { get; set; } = 0.94;
+    public double ReaderOpacity { get; set; } = 0.9;
     /// <summary>The player shows the whole text (scrolling along) instead of the current sentence only.</summary>
     public bool ReaderExpanded { get; set; }
     /// <summary>The main window's sidebar is folded away, so the page fills the window.</summary>
-    public bool SidebarCollapsed { get; set; } = true;
-    /// <summary>Set once the sidebar has started closed after the 4.2.2 update, so existing installs (saved as open)
-    /// switch to the new default once; after that the user's own choice is kept.</summary>
-    public bool SidebarClosedByDefault { get; set; }
+    public bool SidebarCollapsed { get; set; }
     /// <summary>Settings groups folded away on the Settings page (by name, e.g. "ModelsGroup").</summary>
     public List<string> CollapsedSettingsGroups { get; set; } = new();
     /// <summary>Ids of built-in profiles already offered, so one added in an update appears once and stays deleted
@@ -99,51 +96,52 @@ public sealed class AppSettings
     public string? MicrophoneName { get; set; }
     public string? ActiveProfileId { get; set; }
     public string? DefaultProfileId { get; set; }
-    public bool StartWithWindows { get; set; }
+    public bool StartWithWindows { get; set; } = true;
     public bool MinimizeToTray { get; set; } = true;
     public bool ShowOverlay { get; set; } = true;
     public AppTheme Theme { get; set; } = AppTheme.System;
-    public ColorScheme ColorScheme { get; set; } = ColorScheme.Ember;
+    public ColorScheme ColorScheme { get; set; } = ColorScheme.Violet;
     /// <summary>Show the small decorative Japanese words beside labels (倍音, 設定…). Off hides every one of them.</summary>
     public bool ShowJapanese { get; set; } = true;
     /// <summary>The size of everything in the main window, 1 = as designed (Ctrl+plus, Ctrl+minus, Ctrl+0).</summary>
     public double UiScale { get; set; } = 1;
     /// <summary>Opacity of the overlay's background (its text stays fully opaque). 0.3 to 1.</summary>
-    public double OverlayOpacity { get; set; } = 0.88;
-    public OverlayPosition OverlayPosition { get; set; } = OverlayPosition.BottomCenter;
+    public double OverlayOpacity { get; set; } = 0.9;
+    public OverlayPosition OverlayPosition { get; set; } = OverlayPosition.BottomLeft;
     /// <summary>Where the Read aloud player sits; null = the same place as the dictation overlay.</summary>
-    public OverlayPosition? ReaderPosition { get; set; }
+    public OverlayPosition? ReaderPosition { get; set; } = OverlayPosition.TopRight;
     public InsertionMode Insertion { get; set; } = InsertionMode.Auto;
     /// <summary>Read a sentence or two around the cursor (locally, via UI Automation) to fix capitalization,
     /// trailing periods and spacing when inserting into the middle of existing text.</summary>
     public bool MatchSurroundingText { get; set; } = true;
     /// <summary>Type finished sentences into the app while still speaking (about every 5 seconds), then replace
     /// them with one final cleaned-up pass when dictation stops.</summary>
-    public bool TypeWhileSpeaking { get; set; } = true;
+    public bool TypeWhileSpeaking { get; set; }
     /// <summary>In Auto mode, text longer than this (or containing line breaks) is pasted instead of typed.</summary>
     public int TypingMaxChars { get; set; } = 400;
     public int MaxRecordingSeconds { get; set; } = 600;
     /// <summary>Keep recent dictations (text, and audio if <see cref="SaveHistoryAudio"/>) in data\history on this PC.
     /// That folder survives app updates.</summary>
     public bool KeepHistory { get; set; } = true;
-    /// <summary>How many recent dictations History keeps; older ones are deleted. 0 = no limit by number.</summary>
-    public int HistoryLimit { get; set; } = 50;
+    /// <summary>How many recent dictations History keeps; older ones are deleted. 0 = no limit by number (the default:
+    /// with <see cref="HistoryDays"/> 0 too, every dictation's text is kept).</summary>
+    public int HistoryLimit { get; set; }
     /// <summary>Or how long History keeps them, in days (0 = no limit by age). One of the two is set, or neither (keep all).</summary>
     public int HistoryDays { get; set; }
     /// <summary>Keep each dictation's recording (16 kHz WAV, about 2 MB a minute) so it can be played back.</summary>
     public bool SaveHistoryAudio { get; set; } = true;
     /// <summary>How many of the newest dictations keep their recording, or for how many days (0 and 0 = as long as the
-    /// text). A recording never outlives its text.</summary>
+    /// text). A recording never outlives its text. By default recordings are kept for a week.</summary>
     public int AudioLimit { get; set; }
-    public int AudioDays { get; set; }
+    public int AudioDays { get; set; } = 7;
     /// <summary>The typing speed Analytics' "time saved" is measured against, in words per minute.</summary>
-    public int TypingWpm { get; set; } = 40;
-    public HistoryGrouping HistoryGrouping { get; set; } = HistoryGrouping.Chronological;
+    public int TypingWpm { get; set; } = 35;
+    public HistoryGrouping HistoryGrouping { get; set; } = HistoryGrouping.ByApp;
     /// <summary>Keep the Analytics word tally (data\words.json): counts of words, phrases, corrections and fillers per
     /// day, never sentences. On by default.</summary>
     public bool KeepWordTally { get; set; } = true;
     /// <summary>What Extended Notes listens to: the microphone, the computer's audio, or both (remembered).</summary>
-    public Dictation.Core.Notes.NotesSource NotesSource { get; set; } = Dictation.Core.Notes.NotesSource.Mic;
+    public Dictation.Core.Notes.NotesSource NotesSource { get; set; } = Dictation.Core.Notes.NotesSource.Both;
     /// <summary>The AI model for Extended Notes' formatting and summaries: "" = the best on this PC (the default),
     /// "active" = the active model, otherwise a model by name. See <see cref="Dictation.Core.Notes.NotesModels"/>.</summary>
     public string NotesModel { get; set; } = "";
@@ -159,8 +157,9 @@ public sealed class AppSettings
     [System.Text.Json.Serialization.JsonIgnore]
     public string OllamaKeepAlive => UnloadAfterMinutes < 0 ? "1m" : UnloadAfterMinutes == 0 ? "-1m" : UnloadAfterMinutes + "m";
     public CloudSettings Cloud { get; set; } = new();
-    /// <summary>Ask GitHub for a newer release when the app starts. Off by default: the app makes no network calls unless asked.</summary>
-    public bool CheckUpdatesOnStartup { get; set; }
+    /// <summary>Ask GitHub for a newer release when the app starts (on by default; a plain request for the public release
+    /// list, nothing about the user is sent).</summary>
+    public bool CheckUpdatesOnStartup { get; set; } = true;
     /// <summary>Per-application insertion override keyed by process name, e.g. "notepad": "Typing".</summary>
     public Dictionary<string, InsertionMode> AppOverrides { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public AsrSettings Asr { get; set; } = new();

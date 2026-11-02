@@ -159,7 +159,7 @@ public partial class AnalyticsPage : UserControl
 
     FrameworkElement Readout(string label, string value, string sub, bool accent = false) => Readout(label, value, Muted(sub, 11), accent);
 
-    /// <summary>"vs typing at 40 wpm" under TIME SAVED: a click turns the number into a box to type another speed.</summary>
+    /// <summary>"vs typing at 35 wpm" under TIME SAVED: a click turns the number into a box to type another speed.</summary>
     FrameworkElement TypingSpeed()
     {
         var host = new ContentControl();
