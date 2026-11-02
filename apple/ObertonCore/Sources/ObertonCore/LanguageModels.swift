@@ -103,9 +103,15 @@ public struct AppleIntelligenceBackend: LanguageModelBackend {
             for e in examples { instructions += "\nInput:\n\(e.input)\nReply:\n\(e.output)\n" }
         }
         let session = LanguageModelSession(model: .default, instructions: instructions)
+        // The 27 SDKs (Swift 6.4, Xcode 27) renamed `sampling:` to `samplingMode:` and deprecated the old label;
+        // the 26 SDKs (Swift 6.2–6.3, Xcode 26.x) only have `sampling:`.
+        #if compiler(>=6.4)
+        let options = GenerationOptions(samplingMode: .greedy, maximumResponseTokens: maxTokens)
+        #else
+        let options = GenerationOptions(sampling: .greedy, maximumResponseTokens: maxTokens)
+        #endif
         do {
-            let response = try await session.respond(
-                to: user, options: GenerationOptions(samplingMode: .greedy, maximumResponseTokens: maxTokens))
+            let response = try await session.respond(to: user, options: options)
             return response.content
         } catch let e as LanguageModelSession.GenerationError {
             switch e {
