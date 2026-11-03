@@ -13,21 +13,21 @@ struct HotkeysSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             #if os(macOS)
-            Caption("Click a box and press the shortcut you want. Shortcuts work in every app. Use at least one of Ctrl (⌃), Alt (⌥), Shift (⇧) or Cmd (⌘), or an F-key.")
+            Caption("Click a box and press the shortcut you want. Shortcuts work in every application. Use at least one of Ctrl, Alt, Shift or Cmd (or an F-key).")
             row("Start / stop dictation", $model.settings.hotkey, reset: ("Reset", AppSettings.defaultHotkey))
             row("Switch to next profile", $model.settings.cycleProfileHotkey, reset: ("Clear", ""))
             row("Read selected text aloud", $model.settings.speakHotkey, reset: ("Reset", AppSettings.defaultSpeakHotkey))
             row("Extended notes marker", $model.settings.notesMarkerHotkey, reset: ("Clear", ""))
-            Caption("Drops a time marker (⚑ m:ss) into the transcript while an extended notes session records, from whatever app you are in. The key is only taken while a session records; the rest of the time it stays with the app that uses it.", size: 12.5)
+            Caption("Drops a time marker (⚑ h:mm:ss) into the transcript while an extended notes session records, from whatever application you are in. The key is only taken while a session records; the rest of the time it stays with the application that uses it.", bottom: 0)
                 .padding(.top, 6)
+            // The error is drawn in Ob.Error, which is the accent (red only ever means recording).
             Text(status.error ?? "✓ Shortcuts are registered.")
-                .font(Ob.sans(13.5)).foregroundStyle(status.error == nil ? ob.ink : ob.record)
+                .font(Ob.sans(Ob.body)).foregroundStyle(status.error == nil ? ob.ink : ob.accent)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 16)
-            Caption("Tip: a hotkey here is taken from every other app while Oberton runs. If one doesn't fire, or you miss what it did, pick another combination such as F9.", size: 12.5)
+            SystemShortcutClash().padding(.top, 12)
+            Caption("Tip: a hotkey here is taken from every other app while Oberton runs (Ctrl+D then no longer bookmarks a page in a browser, and Ctrl+Space no longer switches input methods). If one doesn't fire, or you miss what it did, pick another combination such as F9.", bottom: 0)
                 .padding(.top, 16)
-            Caption("Ctrl+Space is also macOS's shortcut for the previous input source. If you use more than one keyboard layout, change that one in System Settings › Keyboard › Keyboard Shortcuts › Input Sources.", size: 12.5)
-                .padding(.top, 8)
             #else
             Caption("iPhone has no system-wide shortcuts. Dictate from the dashboard, or add Oberton to the Action button or Control Center in a later version.")
             #endif
@@ -40,7 +40,7 @@ struct HotkeysSection: View {
             FieldLabel(title)
             HStack(spacing: 8) {
                 HotkeyBox(id: title, hotkey: key)
-                Button(reset.label) { key.wrappedValue = reset.value }.buttonStyle(.quietSmall)
+                Button(reset.label) { key.wrappedValue = reset.value }.buttonStyle(.quietNarrow)
             }
         }
     }
@@ -48,8 +48,56 @@ struct HotkeysSection: View {
 }
 
 #if os(macOS)
-/// The box a shortcut is recorded in: a hairline box showing the keys as chips (or "(none)"). Clicked, it outlines in
-/// the accent and takes the next key press with Ctrl, Alt, Shift or Cmd, or an F-key; Esc or a click elsewhere stops.
+/// One of Oberton's shortcuts is also a macOS shortcut that is turned on (Ctrl+Space selects the previous input source),
+/// so macOS may act on it first. Says so, with a one-click alternative for Read aloud; nothing changes by itself.
+/// Shown under Settings › Hotkeys and in the first-run setup.
+struct SystemShortcutClash: View {
+    @EnvironmentObject var model: AppModel
+    @Environment(\.ob) private var ob
+    @State private var taken: [String] = []
+    private let recheck = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
+
+    /// Read aloud's alternatives to Ctrl+Space, first free one wins.
+    static let alternatives = ["Ctrl+Shift+Space", "Ctrl+Alt+Shift+Space", "F9"]
+
+    private var keys: [String] {
+        [model.settings.hotkey, model.settings.cycleProfileHotkey, model.settings.speakHotkey, model.settings.notesMarkerHotkey]
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(taken, id: \.self) { key in
+                Text(message(key)).font(Ob.sans(Ob.body)).foregroundStyle(ob.accent).fixedSize(horizontal: false, vertical: true)
+                if Hotkey.same(key, model.settings.speakHotkey), let other = alternative {
+                    Button("Use \(other) for Read aloud") { model.settings.speakHotkey = other }.buttonStyle(.quietNarrow)
+                }
+            }
+        }
+        .onAppear(perform: check)
+        .onChange(of: keys) { check() }
+        .onReceive(recheck) { _ in check() }
+    }
+
+    private func check() {
+        let now = keys.filter { !$0.isEmpty && HotkeyManager.systemShortcutTaken($0) }
+        if now != taken { taken = now }
+    }
+
+    private var alternative: String? {
+        Self.alternatives.first { a in !keys.contains { Hotkey.same($0, a) } && !HotkeyManager.systemShortcutTaken(a) }
+    }
+
+    private func message(_ key: String) -> String {
+        if Hotkey.same(key, "Ctrl+Space") {
+            return "\(key) is also macOS's shortcut for “Select the previous input source”, and it is turned on, so pressing it may switch your keyboard layout instead. Turn it off in System Settings › Keyboard › Keyboard Shortcuts › Input Sources, or use another shortcut."
+        }
+        return "\(key) is also one of macOS's own shortcuts, and it is turned on, so macOS may act on it instead of Oberton. Turn it off in System Settings › Keyboard › Keyboard Shortcuts, or choose another shortcut here."
+    }
+}
+
+/// The box a shortcut is recorded in (a read-only TextBox, 240 wide, 8,6 inside): the shortcut as text, or "(none)".
+/// Clicked, it outlines in the accent and takes the next key press with Ctrl, Alt, Shift or Cmd, or an F-key; Esc or a
+/// click elsewhere stops.
 private struct HotkeyBox: View {
     var id: String
     @Binding var hotkey: String
@@ -60,26 +108,19 @@ private struct HotkeyBox: View {
     private var recording: Bool { status.recording == id }
 
     var body: some View {
-        Group {
-            if recording {
-                Text("Press a shortcut…").font(Ob.mono(12.5)).foregroundStyle(ob.muted)
-            } else if hotkey.isEmpty {
-                Text("(none)").font(Ob.mono(12.5)).foregroundStyle(ob.muted)
-            } else {
-                KeyChips(hotkey: hotkey, size: 12.5)
-            }
-        }
-        .padding(.horizontal, 8).padding(.vertical, 6)
-        .frame(width: 240, height: 32, alignment: .leading)
-        .overlay(Rectangle().strokeBorder(recording ? ob.accent : ob.divider, lineWidth: 1))
-        .contentShape(Rectangle())
-        .onTapGesture { start() }
-        .onDisappear { stop() }
-        .onChange(of: status.recording) { if status.recording != id { removeMonitor() } }
-        .accessibilityElement()
-        .accessibilityLabel(hotkey.isEmpty ? "None" : hotkey)
-        .accessibilityHint("Click, then press the shortcut you want")
-        .accessibilityAddTraits(.isButton)
+        Text(hotkey.isEmpty ? "(none)" : hotkey)
+            .font(Ob.sans(Ob.body)).lineLimit(1)
+            .padding(.horizontal, 8).padding(.vertical, 6)
+            .frame(width: 240, alignment: .leading)
+            .overlay(Rectangle().strokeBorder(recording ? ob.accent : ob.divider, lineWidth: 1))
+            .contentShape(Rectangle())
+            .onTapGesture { start() }
+            .onDisappear { stop() }
+            .onChange(of: status.recording) { if status.recording != id { removeMonitor() } }
+            .accessibilityElement()
+            .accessibilityLabel(hotkey.isEmpty ? "None" : hotkey)
+            .accessibilityHint("Click, then press the shortcut you want")
+            .accessibilityAddTraits(.isButton)
     }
 
     private func start() {

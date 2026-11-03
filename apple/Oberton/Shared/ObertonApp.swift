@@ -13,38 +13,15 @@ struct ObertonApp: App {
 
     #if os(macOS)
     var body: some Scene {
-        // One main window, as on Windows: opening it again brings it forward. It opens from the delegate at launch
-        // (not when Oberton started hidden at login, or the first-run setup shows instead).
-        Window("Oberton", id: "main") {
-            MainWindowContent().environmentObject(model)
-        }
-        .windowStyle(.hiddenTitleBar)
-        .defaultSize(width: 1200, height: 780)
-        .windowResizability(.contentMinSize)
-        .defaultLaunchBehavior(.suppressed)
-        .restorationBehavior(.disabled)
-        .commands {
-            CommandGroup(replacing: .appSettings) {
-                Button("Settings…") { delegate.showMain(settings: .general) }.keyboardShortcut(",")
+        // The windows are AppKit's, owned by the delegate (MacAppDelegate): the main window hides when closed, as
+        // Windows' does, and the first-run setup is a window of its own. This scene only carries the menu commands.
+        Settings { EmptyView() }
+            .commands {
+                CommandGroup(replacing: .appSettings) {
+                    Button("Settings…") { delegate.showMain(settings: .general) }.keyboardShortcut(",")
+                }
+                CommandGroup(replacing: .newItem) {}
             }
-            CommandGroup(replacing: .newItem) {}
-        }
-
-        Window("Oberton setup", id: "setup") {
-            OnboardingView { delegate.finishSetup() }
-                .environmentObject(model)
-                .obertonTheme(model.settings)
-        }
-        .windowStyle(.hiddenTitleBar)
-        .windowResizability(.contentSize)
-        .defaultLaunchBehavior(.suppressed)
-        .restorationBehavior(.disabled)
-
-        MenuBarExtra {
-            MenuBarContent(delegate: delegate).environmentObject(model)
-        } label: {
-            MenuBarLabel(delegate: delegate)
-        }
     }
     #else
     @State private var showSetup = !OnboardingView.isDone && !AppModel.snapshotMode
@@ -109,26 +86,29 @@ import AppKit
 import Combine
 import ServiceManagement
 
-/// Owns what lives as long as the app: the hotkeys, the overlay and the menu bar icon. Closing the window keeps
-/// Oberton running in the menu bar (Settings › General, as Windows keeps running in the tray); the Dock icon shows only
-/// while a window is open, as Windows' taskbar button does.
+/// Owns what lives as long as the app: the main window and the first-run setup, the hotkeys, the overlay, the reader
+/// and the menu bar icon. As on Windows (App.xaml.cs), the hotkeys, overlay, reader and icon start only once the setup
+/// is done, and closing the setup quits. Closing the main window hides it while Oberton keeps running in the menu bar
+/// (Settings › General), so it opens again as it was; the Dock icon shows only while a window is open, as Windows'
+/// taskbar button does.
 @MainActor
-final class MacAppDelegate: NSObject, NSApplicationDelegate {
+final class MacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDelegate {
     let model = AppModel()
     private lazy var platform = MacPlatform { [unowned self] in self.model.settings }
     private let hotkeys = HotkeyManager()
     private var overlay: OverlayController?
     private var reader: ReaderController?
-    private var watch: AnyCancellable?
-    private var escapeWatch: AnyCancellable?
-    private var loginWatch: AnyCancellable?
-    private var problemWatch: AnyCancellable?
+    private var watches: [AnyCancellable] = []
     private var windowWatches: [NSObjectProtocol] = []
-    private var shownHotkeyError: String?
-    /// Opens a window by its scene id; set by the menu bar icon, the first view SwiftUI draws.
-    private var openWindow: ((String) -> Void)?
+    /// The shortcuts last applied: a change to them shows any problem on the overlay (App.ApplyHotkeys).
+    private var appliedKeys: [String]?
+    private var mainWindow: NSWindow?
+    private var setupWindow: NSWindow?
+    private var setupFinished = false
+    private var statusItem: NSStatusItem?
+    private let menu = NSMenu()
     private var startedHidden = false
-    private var launched = false
+    private var servicesStarted = false
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         // Opened by the login item: start hidden in the menu bar (Windows' --minimized). Asked here, while the launch
@@ -157,25 +137,10 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         #endif
-        model.platform = platform
-        overlay = OverlayController(model: model)
-        reader = ReaderController(model: model)
-        // Re-register as soon as a shortcut changes in Settings, and let go of them while one is being recorded.
-        // (@Published sends before the value is stored, so the values come from the publishers.) The Extended Notes
-        // marker key is held only while a session records (paused or not); the rest of the time it stays with
-        // whatever app uses it.
-        watch = model.$settings.map { [$0.hotkey, $0.cycleProfileHotkey, $0.speakHotkey, $0.notesMarkerHotkey] }.removeDuplicates()
-            .combineLatest(HotkeyStatus.shared.$recording.map { $0 != nil }.removeDuplicates(),
-                           model.notes.$current.map { $0 != nil }.removeDuplicates())
-            .sink { [weak self] keys, paused, notes in self?.registerHotkeys(keys, paused: paused, notesRecording: notes) }
-        // Esc discards, held only while the overlay waits for a decision (App.xaml.cs).
-        escapeWatch = model.$phase.map { $0 == .preview || $0 == .placing }.removeDuplicates()
-            .sink { [weak self] waiting in
-                guard let self else { return }
-                if let error = hotkeys.holdEscape(waiting ? { [weak self] in self?.model.cancel() } : nil) { Log.warn(error) }
-            }
-        loginWatch = model.$settings.map(\.startAtLogin).removeDuplicates().sink { Self.applyLoginItem($0) }
-        problemWatch = model.$startupProblem.compactMap { $0 }.sink { Log.warn("Speech init: " + $0) }
+        // The theme applies to every window, the title bars and menus included (ThemeManager).
+        watches.append(model.$settings.map(\.theme).removeDuplicates().sink { theme in
+            NSApp.appearance = theme == .system ? nil : NSAppearance(named: theme == .dark ? .darkAqua : .aqua)
+        })
         // The Dock icon follows the windows.
         for name in [NSWindow.didBecomeKeyNotification, NSWindow.willCloseNotification, NSWindow.didMiniaturizeNotification,
                      NSWindow.didDeminiaturizeNotification] {
@@ -183,64 +148,151 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
                 DispatchQueue.main.async { MainActor.assumeIsolated { MacAppDelegate.updateDockIcon() } }
             })
         }
-        #if OBERTON_DIRECT
-        Updater.shared.start(model: model)
-        #endif
-        launched = true
-        showAtLaunch()
-    }
-
-    /// The menu bar icon was drawn: from now on windows can be opened.
-    func windowOpener(_ open: @escaping (String) -> Void) {
-        openWindow = open
-        showAtLaunch()
-    }
-
-    private var shownAtLaunch = false
-
-    /// At launch: the first-run setup, or the main window unless Oberton started hidden at login.
-    private func showAtLaunch() {
-        guard launched, let openWindow, !shownAtLaunch else { return }
-        shownAtLaunch = true
+        // First run (or a setup left unfinished): the setup before anything else.
         if !OnboardingView.isDone {
-            open("setup", with: openWindow)
-        } else if !startedHidden {
-            open("main", with: openWindow)
+            showSetup()
+            return
         }
+        startServices()
+        if !startedHidden { showMain() }
     }
 
-    private func open(_ id: String, with openWindow: (String) -> Void) {
+    /// The hotkeys, overlay, reader and menu bar icon, started once (after the setup on a first run).
+    private func startServices() {
+        guard !servicesStarted else { return }
+        servicesStarted = true
+        model.platform = platform
+        overlay = OverlayController(model: model)
+        reader = ReaderController(model: model)
+        makeStatusItem()
+        // Re-register as soon as a shortcut changes in Settings, and let go of them while one is being recorded.
+        // (@Published sends before the value is stored, so the values come from the publishers.) The Extended Notes
+        // marker key is held only while a session records (paused or not); the rest of the time it stays with
+        // whatever app uses it.
+        watches.append(model.$settings.map { [$0.hotkey, $0.cycleProfileHotkey, $0.speakHotkey, $0.notesMarkerHotkey] }.removeDuplicates()
+            .combineLatest(HotkeyStatus.shared.$recording.map { $0 != nil }.removeDuplicates(),
+                           model.notes.$current.map { $0 != nil }.removeDuplicates())
+            .sink { [weak self] keys, paused, notes in self?.registerHotkeys(keys, paused: paused, notesRecording: notes) })
+        // Esc discards, held only while the overlay waits for a decision (App.xaml.cs).
+        watches.append(model.$phase.map { $0 == .preview || $0 == .placing }.removeDuplicates()
+            .sink { [weak self] waiting in
+                guard let self else { return }
+                if let error = hotkeys.holdEscape(waiting ? { [weak self] in self?.model.cancel() } : nil) { Log.warn(error) }
+            })
+        watches.append(model.$settings.map(\.startAtLogin).removeDuplicates().sink { Self.applyLoginItem($0) })
+        // The speech engine couldn't start: the window opens with the message (App.xaml.cs, also when started hidden).
+        watches.append(model.$startupProblem.compactMap { $0 }.sink { [weak self] problem in
+            Log.warn("Speech init: " + problem)
+            self?.showMain()
+        })
+        // The icon's tooltip names the active profile (TrayIcon.SetTooltip).
+        watches.append(model.$settings.map(\.activeProfileID).removeDuplicates().combineLatest(model.$profiles)
+            .sink { [weak self] id, profiles in
+                let name = (profiles.first { $0.id == id } ?? profiles.first)?.name ?? ""
+                let text = "Oberton · \(name)"
+                self?.statusItem?.button?.toolTip = text.count > 60 ? String(text.prefix(60)) : text
+            })
+    }
+
+    // MARK: Windows
+
+    /// Open (or bring forward) the main window, optionally at a Settings section (App.ShowMain): shown, un-minimized
+    /// and in front, also when it is open already. Nothing during the first-run setup.
+    func showMain(settings: SettingsSection? = nil) {
+        guard OnboardingView.isDone else { setupWindow?.makeKeyAndOrderFront(nil); return }
+        if let settings { model.requestedSettings = settings }
+        let window = mainWindow ?? makeMainWindow()
         NSApp.setActivationPolicy(.regular)
-        openWindow(id)
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        window.makeKeyAndOrderFront(nil)
         NSApp.activate()
     }
 
-    /// Open (or bring forward) the main window, optionally at a Settings section.
-    func showMain(settings: SettingsSection? = nil) {
-        if let settings { model.requestedSettings = settings }
-        if let openWindow { open("main", with: openWindow) }
+    /// "Oberton", 1200×780 (at least 960×600), centred, its title in the paper-coloured title bar. Not remembered
+    /// between launches, as on Windows.
+    private func makeMainWindow() -> NSWindow {
+        let host = NSHostingController(rootView: MainWindowContent().environmentObject(model))
+        host.sizingOptions = [.minSize]
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1200, height: 780),
+                              styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                              backing: .buffered, defer: false)
+        window.contentViewController = host
+        window.title = "Oberton"
+        window.titlebarAppearsTransparent = true
+        window.setContentSize(NSSize(width: 1200, height: 780))
+        window.isReleasedWhenClosed = false
+        window.collectionBehavior.insert(.fullScreenPrimary)
+        window.identifier = NSUserInterfaceItemIdentifier("main")
+        window.delegate = self
+        window.center()
+        mainWindow = window
+        return window
     }
 
-    /// START USING OBERTON: the main window opens before the setup closes (closing the last window may quit).
+    /// The first-run setup: "Oberton setup", 640 wide, as tall as it needs, centred.
+    private func showSetup() {
+        let host = NSHostingController(rootView: SetupWindowContent { [weak self] in self?.finishSetup() }.environmentObject(model))
+        host.sizingOptions = .preferredContentSize
+        let window = NSWindow(contentViewController: host)
+        window.styleMask = [.titled, .closable]
+        window.title = "Oberton setup"
+        window.isReleasedWhenClosed = false
+        window.identifier = NSUserInterfaceItemIdentifier("setup")
+        window.delegate = self
+        window.center()
+        setupWindow = window
+        NSApp.setActivationPolicy(.regular)
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate()
+    }
+
+    /// START USING OBERTON: now the hotkeys, overlay and menu bar icon start, and the main window opens.
     func finishSetup() {
+        setupFinished = true
+        model.startupProblem = nil // the launch's warm-up, from before the speech model was there
+        startServices()
         showMain()
-        NSApp.windows.first { $0.identifier?.rawValue.hasPrefix("setup") == true }?.close()
+        setupWindow?.close()
+        setupWindow = nil
     }
 
-    /// Opening Oberton again (Finder, Spotlight, the Dock) brings the window forward, as Windows' second launch does.
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag { OnboardingView.isDone ? showMain() : openWindow.map { open("setup", with: $0) } }
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        if sender === mainWindow {
+            // Kept running in the menu bar: the window only hides, its page as it was (MainWindow.OnClosing);
+            // otherwise closing it quits.
+            if model.settings.minimizeToTray {
+                sender.orderOut(nil)
+                Self.updateDockIcon()
+            } else {
+                NSApp.terminate(nil)
+            }
+            return false
+        }
+        if sender === setupWindow, !setupFinished {
+            // Closing the setup cancels it, and Oberton doesn't start without it (App.xaml.cs exits).
+            Log.info("Setup not completed; exiting")
+            model.cancelWhisperDownload()
+            NSApp.terminate(nil)
+            return false
+        }
         return true
+    }
+
+    /// Opening Oberton again (Finder, Spotlight, the Dock) shows the window, as Windows' second launch does; during the
+    /// setup it only comes forward.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if OnboardingView.isDone { showMain() } else { setupWindow?.makeKeyAndOrderFront(nil) }
+        return false
     }
 
     /// Keep a session that is recording, up to now, and the notes draft.
     func applicationWillTerminate(_ notification: Notification) {
         model.notes.shutdown()
-        Log.info("Oberton quitting")
+        Log.info("=== Oberton exiting ===")
     }
 
-    /// "Keep running in the menu bar when the window is closed" off: closing the window quits.
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { !model.settings.minimizeToTray }
+    /// Closing a window is handled above (hide, or quit).
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     /// A Dock icon while a window (not the overlay or reader panels) is open or minimized; none otherwise.
     private static func updateDockIcon() {
@@ -250,6 +302,53 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         let policy: NSApplication.ActivationPolicy = open ? .regular : .accessory
         if NSApp.activationPolicy() != policy { NSApp.setActivationPolicy(policy) }
     }
+
+    // MARK: Menu bar icon
+
+    /// The tray icon's behaviour: a click opens the window, a right-click (or Control-click) shows the menu.
+    private func makeStatusItem() {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        item.button?.image = StatusMark.image
+        item.button?.setAccessibilityLabel("Oberton")
+        item.button?.target = self
+        item.button?.action = #selector(statusItemClicked(_:))
+        item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        menu.delegate = self
+        statusItem = item
+    }
+
+    @objc private func statusItemClicked(_ sender: NSStatusBarButton) {
+        let event = NSApp.currentEvent
+        if event?.type == .rightMouseUp || event?.modifierFlags.contains(.control) == true {
+            statusItem?.menu = menu
+            sender.performClick(nil)
+            statusItem?.menu = nil
+        } else {
+            showMain()
+        }
+    }
+
+    /// Windows' tray menu, rebuilt each time it opens: Start / stop dictation, Profile ▸ (the active one checked), Open
+    /// settings, Check for updates… (Settings › Updates), Quit.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        menu.addItem(ActionItem("Start / stop dictation") { [weak self] in self?.model.toggleDictation() })
+        let profiles = NSMenuItem(title: "Profile", action: nil, keyEquivalent: "")
+        profiles.submenu = NSMenu()
+        let active = model.activeProfile.id
+        for p in model.profiles {
+            let item = ActionItem(p.name) { [weak self] in self?.model.activeProfile = p }
+            item.state = p.id == active ? .on : .off
+            profiles.submenu?.addItem(item)
+        }
+        menu.addItem(profiles)
+        menu.addItem(.separator())
+        menu.addItem(ActionItem("Open settings") { [weak self] in self?.showMain() })
+        menu.addItem(ActionItem("Check for updates…") { [weak self] in self?.showMain(settings: .updates) })
+        menu.addItem(ActionItem("Quit") { NSApp.terminate(nil) })
+    }
+
+    // MARK: Hotkeys and login
 
     /// Settings › General › "Start when you log in" (Windows' Autostart.Apply): the app itself as a login item.
     private static func applyLoginItem(_ on: Bool) {
@@ -265,35 +364,57 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
 
     private func registerHotkeys(_ keys: [String], paused: Bool, notesRecording: Bool) {
         guard !paused else { hotkeys.register([]); return }
-        let errors = hotkeys.register([
+        // The marker key is checked against the others always, not only while a session records (App.MarkerClash).
+        let clash = HotkeyManager.markerClash(marker: keys[3], dictation: keys[0], speak: keys[2], cycle: keys[1])
+        var errors = hotkeys.register([
             (keys[0], "the dictation shortcut", { [weak self] in self?.model.toggleDictation() }),
             (keys[1], "the profile-switching shortcut", { [weak self] in self?.model.cycleProfile() }),
             (keys[2], "the Read aloud shortcut", { [weak self] in self?.model.readSelection() }),
-            (notesRecording ? keys[3] : "", "the Extended Notes marker shortcut", { [weak self] in self?.model.notes.addMarker() }),
+            (notesRecording && clash == nil ? keys[3] : "", "the Extended Notes marker shortcut", { [weak self] in self?.model.notes.addMarker() }),
         ])
-        HotkeyStatus.shared.error = errors.isEmpty ? nil : errors.joined(separator: "\n")
-        if !errors.isEmpty { Log.warn(errors.joined(separator: " ")) }
-        // Also on the overlay, as an error notice (App.xaml.cs ApplyHotkeys), once per new problem.
+        if let clash { errors.append(clash) }
         let error = errors.isEmpty ? nil : errors.joined(separator: "\n")
-        if let error, error != shownHotkeyError { model.notice(error, kind: .error) }
-        shownHotkeyError = error
+        HotkeyStatus.shared.error = error
+        // Logged, and shown on the overlay as an error notice, whenever the shortcuts change (App.ApplyHotkeys); not
+        // when they are only taken back after a box was recorded or a notes session started or stopped.
+        guard keys != appliedKeys else { return }
+        appliedKeys = keys
+        if let error {
+            Log.warn(error)
+            model.notice(error, kind: .error)
+        }
     }
 }
 
-/// The menu bar icon: the Oberton mark (TrayIcon.cs), as a template image so it follows the menu bar's colour. It is
-/// the first view SwiftUI draws, so it hands the delegate the way to open windows.
-struct MenuBarLabel: View {
-    let delegate: MacAppDelegate
-    @Environment(\.openWindow) private var openWindow
+/// The setup window's content, themed live from Settings.
+private struct SetupWindowContent: View {
+    var finish: () -> Void
+    @EnvironmentObject var model: AppModel
 
     var body: some View {
-        Image(nsImage: Self.mark)
-            .accessibilityLabel("Oberton")
-            .onAppear { delegate.windowOpener { openWindow(id: $0) } }
+        OnboardingView(finish: finish).obertonTheme(model.settings)
+    }
+}
+
+/// A menu item that runs a closure.
+private final class ActionItem: NSMenuItem {
+    private let run: () -> Void
+
+    init(_ title: String, _ run: @escaping () -> Void) {
+        self.run = run
+        super.init(title: title, action: #selector(fire), keyEquivalent: "")
+        target = self
     }
 
+    required init(coder: NSCoder) { fatalError("not used") }
+
+    @objc private func fire() { run() }
+}
+
+/// The menu bar icon: the Oberton mark (TrayIcon.cs), as a template image so it follows the menu bar's colour.
+enum StatusMark {
     /// A rounded square with the dot cut out of it, 16 pt.
-    static let mark: NSImage = {
+    static let image: NSImage = {
         let image = NSImage(size: NSSize(width: 16, height: 16), flipped: false) { rect in
             let square = NSBezierPath(roundedRect: rect.insetBy(dx: 1, dy: 1), xRadius: 3.5, yRadius: 3.5)
             square.append(NSBezierPath(ovalIn: NSRect(x: 5, y: 5, width: 6, height: 6)))
@@ -303,30 +424,9 @@ struct MenuBarLabel: View {
             return true
         }
         image.isTemplate = true
+        image.accessibilityDescription = "Oberton"
         return image
     }()
-}
-
-/// The menu bar's menu, as Windows' tray menu: "Oberton · <profile>" (the tray icon's tooltip, which a menu bar icon
-/// can't have), Start / stop dictation, Profile ▸, Open settings, Check for updates… (the D.3 page), Quit.
-struct MenuBarContent: View {
-    @EnvironmentObject var model: AppModel
-    let delegate: MacAppDelegate
-
-    var body: some View {
-        Text("Oberton · \(model.activeProfile.name)")
-        Divider()
-        Button("Start / stop dictation") { model.toggleDictation() }
-        Picker("Profile", selection: Binding(get: { model.activeProfile.id }, set: { id in
-            if let p = model.profiles.first(where: { $0.id == id }) { model.activeProfile = p }
-        })) {
-            ForEach(model.profiles) { Text($0.name).tag($0.id) }
-        }
-        Divider()
-        Button("Open settings") { delegate.showMain() }
-        Button("Check for updates…") { delegate.showMain(settings: .updates) }
-        Button("Quit") { NSApp.terminate(nil) }.keyboardShortcut("q")
-    }
 }
 #endif
 
@@ -382,7 +482,7 @@ enum Snapshots {
             // A folded group stays folded; the open section's group unfolds.
             var folded = s
             let kept = model.settings.collapsedSettingsGroups
-            folded.collapsedSettingsGroups = ["A // Dictation", "C // Look & feel"]
+            folded.collapsedSettingsGroups = ["DictationGroup", "LookGroup"]
             model.settings.collapsedSettingsGroups = folded.collapsedSettingsGroups
             save(RootView(start: Place(section: .settings, settings: .unloading)).environmentObject(model).obertonTheme(folded).frame(width: 1200, height: 780),
                  to: dir, name: "settings-folded-\(dark ? "dark" : "light")")
@@ -430,8 +530,8 @@ enum Snapshots {
             HStack(spacing: 16) {
                 ForEach([false, true], id: \.self) { dark in
                     HStack(spacing: 12) {
-                        Image(nsImage: MenuBarLabel.mark).renderingMode(.template)
-                        Image(nsImage: MenuBarLabel.mark).renderingMode(.template).resizable().interpolation(.high).frame(width: 64, height: 64)
+                        Image(nsImage: StatusMark.image).renderingMode(.template)
+                        Image(nsImage: StatusMark.image).renderingMode(.template).resizable().interpolation(.high).frame(width: 64, height: 64)
                     }
                     .foregroundStyle(dark ? Color.white : Color.black)
                     .padding(12).background(dark ? Color(white: 0.15) : Color(white: 0.92))

@@ -3,8 +3,8 @@ import ObertonCore
 import os
 
 /// A small log: the system log (Console, subsystem "Oberton") and a file in the data folder's logs/, as Windows'
-/// dictation.log. Metadata only (timings, sizes, states, errors), never what was said. The file rolls over at 2 MB,
-/// keeping one older copy (oberton.log.1).
+/// dictation.log, under the same name. Metadata only (timings, sizes, states, errors), never what was said. The file
+/// rolls over at 2 MB, keeping one older copy (dictation.log.1).
 enum Log {
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Oberton", category: "app")
     private static let lock = NSLock()
@@ -15,11 +15,13 @@ enum Log {
         return dir
     }
 
-    static var file: URL { dir.appending(path: "oberton.log") }
+    static var file: URL { dir.appending(path: "dictation.log") }
 
     static func info(_ message: String) { write("INFO", message); logger.info("\(message, privacy: .public)") }
     static func warn(_ message: String) { write("WARN", message); logger.warning("\(message, privacy: .public)") }
     static func error(_ message: String) { write("ERROR", message); logger.error("\(message, privacy: .public)") }
+    /// "message: the error", as Windows' Log.Error(m, e).
+    static func error(_ message: String, _ error: Error) { self.error("\(message): \(error)") }
 
     private static let stamp: DateFormatter = {
         let f = DateFormatter()
@@ -32,7 +34,9 @@ enum Log {
         // Paths in messages would carry the account name.
         let home = NSHomeDirectory()
         var message = message
-        if home.count > 3 { message = message.replacingOccurrences(of: home.hasSuffix("/") ? String(home.dropLast()) : home, with: "~") }
+        if home.count > 3 {
+            message = message.replacingOccurrences(of: home.hasSuffix("/") ? String(home.dropLast()) : home, with: "~", options: .caseInsensitive)
+        }
         let line = "\(stamp.string(from: .now)) \(level.padding(toLength: 5, withPad: " ", startingAt: 0)) \(message)\n"
         lock.withLock {
             let url = file

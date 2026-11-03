@@ -6,9 +6,10 @@ import AppKit
 #endif
 
 /// The first-run setup (Windows SetupWindow.xaml): the mark and "OBERTON 倍音", what Oberton is, then the steps
-/// dictation needs here instead of Windows' downloads: the microphone, Accessibility (Mac: to paste at the cursor;
-/// asked here with an explanation, no longer on every launch), the speech model for the language, and whether Apple
-/// Intelligence is ready. Shown once; QUIT leaves it for the next start, as on Windows.
+/// dictation needs here instead of Windows' runtimes: the microphone, Accessibility (Mac: to paste at the cursor;
+/// asked here with an explanation, no longer on every launch), the speech model (the chosen Whisper model downloaded,
+/// as on Windows, or Apple Speech's for the language), and whether Apple Intelligence is ready. Shown until it
+/// finishes; QUIT (or closing it) leaves it for the next start, CANCEL stops a run, CONTINUE SETUP picks it up again.
 struct OnboardingView: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.ob) private var ob
@@ -28,6 +29,9 @@ struct OnboardingView: View {
     @State private var fraction: Double?
     @State private var detail = ""
     @State private var error: String?
+    /// A run stopped (cancelled or failed): the button says CONTINUE SETUP.
+    @State private var stopped = false
+    @State private var runTask: Task<Void, Never>?
     @State private var mic = OnboardingView.micState
     #if os(macOS)
     @State private var accessibility = CGPreflightPostEventAccess()
@@ -68,7 +72,7 @@ struct OnboardingView: View {
             Text("DICTATION THAT NEVER LEAVES YOUR \(Device.noun.uppercased())").font(Ob.mono(26, .bold))
                 .fixedSize(horizontal: false, vertical: true).padding(.top, 22)
             Rule().padding(.top, 10)
-            Text("Talk into any app. Speech is recognized on this \(Device.noun) and Apple Intelligence tidies it up here too: no accounts, no cloud, no telemetry. First, a few things \(Device.noun == "Mac" ? "macOS" : "iOS") asks you to allow.")
+            Text("One download and you can talk into any app. After this, Oberton works offline: no accounts, no cloud, no telemetry.")
                 .font(Ob.sans(15)).foregroundStyle(ob.muted).lineSpacing(7).fixedSize(horizontal: false, vertical: true).padding(.top, 8)
 
             VStack(spacing: 0) {
@@ -86,15 +90,15 @@ struct OnboardingView: View {
                 #endif
                 Hairline()
                 row(done: speechReady, warn: false, name: "Speech model",
-                    what: "Apple Speech · \(languageName) · downloaded once, then works offline") {}
+                    what: model.settings.whisperModel ?? "Apple Speech · \(languageName) · downloaded once, then works offline") {}
                 Hairline()
                 row(done: AppleIntelligenceBackend.unavailableReason == nil, warn: false, name: "Apple Intelligence",
                     what: AppleIntelligenceBackend.unavailableReason.map { $0 + " Until then, profiles that use it insert what you said as is." }
                         ?? "Ready: tidies up your dictation on this \(Device.noun)") {}
-                if phase != .plan {
+                if phase != .plan || stopped {
                     VStack(alignment: .leading, spacing: 0) {
                         Text(stepTitle).font(Ob.sans(13, .semibold))
-                        ProgressBar(fraction: phase == .done ? 1 : fraction).frame(height: 6).padding(.top, 8)
+                        ProgressBar(fraction: phase == .done ? 1 : stopped ? fraction ?? 0 : fraction).frame(height: 6).padding(.top, 8)
                         if !detail.isEmpty {
                             Text(detail).font(Ob.sans(12)).foregroundStyle(ob.muted).fixedSize(horizontal: false, vertical: true).padding(.top, 6)
                         }
@@ -107,24 +111,33 @@ struct OnboardingView: View {
             .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
             .padding(.top, 24)
 
+            #if os(macOS)
+            // Read aloud's Ctrl+Space is also macOS's input-source shortcut when that is on: said here, with another key.
+            SystemShortcutClash().padding(.top, 16)
+            #endif
+
             if let error {
-                Text(error).font(Ob.sans(13)).foregroundStyle(ob.record).fixedSize(horizontal: false, vertical: true).padding(.top, 16)
+                // Ob.Error: the accent (red only ever means recording).
+                Text(error).font(Ob.sans(Ob.body)).foregroundStyle(ob.accent).fixedSize(horizontal: false, vertical: true).padding(.top, 16)
             }
 
             HStack(spacing: 16) {
-                Text("The speech model is a one-time download from Apple, a few hundred MB, kept by the system.")
+                Text(planText)
                     .font(Ob.sans(12)).foregroundStyle(ob.muted).fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 HStack(spacing: 10) {
-                    if phase != .done {
+                    // QUIT, which turns into CANCEL while the setup runs; hidden once it is done.
+                    if phase == .running {
+                        Button("Cancel") { runTask?.cancel() }.buttonStyle(CapsuleButtonStyle(kind: .quiet, height: 40))
+                    } else if phase != .done {
                         #if os(macOS)
-                        Button("Quit") { NSApp.terminate(nil) }.buttonStyle(.quiet).disabled(phase == .running)
+                        Button("Quit") { NSApp.terminate(nil) }.buttonStyle(CapsuleButtonStyle(kind: .quiet, height: 40))
                         #endif
                     }
-                    Button(phase == .done ? "Start using Oberton" : error != nil ? "Continue setup" : "Set up") {
-                        if phase == .done { Self.isDone = true; finish() } else { Task { await run() } }
+                    Button(phase == .done ? "Start using Oberton" : stopped ? "Continue setup" : "Set up") {
+                        if phase == .done { Self.isDone = true; finish() } else { runTask = Task { await run() } }
                     }
-                    .buttonStyle(.primary)
+                    .buttonStyle(CapsuleButtonStyle(kind: .primary, height: 40))
                     .keyboardShortcut(.defaultAction)
                     .disabled(phase == .running)
                 }
@@ -173,33 +186,73 @@ struct OnboardingView: View {
         detail = text
     }
 
+    /// "About 1.6 GB in total, saved to ~/Library/…" (Windows' plan line), or Apple's own download.
+    private var planText: String {
+        if let id = model.settings.whisperModel, let m = WhisperModels.model(id) {
+            return "About \(m.size) in total, saved to \((AppPaths.dataDir.path as NSString).abbreviatingWithTildeInPath)."
+        }
+        return "The speech model is a one-time download from Apple, a few hundred MB, kept by the system."
+    }
+
+    /// A problem worded for the user (Windows' UserFacingException).
+    private struct Problem: Error { var message: String }
+
     private func run() async {
         phase = .running
         error = nil
+        stopped = false
+        do {
+            try await runSteps()
+        } catch is CancellationError {
+            fail("Setup was cancelled. Click Continue setup to pick up where it left off.")
+        } catch let problem as Problem {
+            fail(problem.message)
+        } catch {
+            Log.error("Setup failed", error)
+            fail("Setup failed unexpectedly: \(error.localizedDescription)\nDetails are in \((Log.dir.path as NSString).abbreviatingWithTildeInPath)")
+        }
+        runTask = nil
+    }
+
+    private func fail(_ message: String) {
+        error = message
+        stopped = true
+        phase = .plan
+    }
+
+    private func runSteps() async throws {
         var n = 0
         n += 1
         begin(n, "Microphone", "Allow the microphone when asked.")
         await Self.requestMic()
         mic = Self.micState
+        try Task.checkCancellation()
         #if os(macOS)
         n += 1
         begin(n, "Accessibility", accessibility ? "" : "Turn on Oberton under Privacy & Security › Accessibility. You can do this later, too: until then the text is copied, ready to paste.")
         if !accessibility { CGRequestPostEventAccess() }
+        try Task.checkCancellation()
         #endif
         n += 1
-        begin(n, "Speech model", "Checking \(languageName)…")
-        do {
-            let downloaded = try await LiveTranscriber.download(locale: model.settings.speechLocale) { f in
-                fraction = f
-                if let f, f < 1 { detail = "Downloading the \(languageName) speech model  (\(Int(f * 100))%)" }
+        if let whisper = model.settings.whisperModel, WhisperModels.model(whisper) != nil {
+            try await downloadWhisper(whisper, step: n)
+        } else {
+            begin(n, "Speech model", "Checking \(languageName)…")
+            do {
+                let downloaded = try await LiveTranscriber.download(locale: model.settings.speechLocale) { f in
+                    fraction = f
+                    if let f, f < 1 { detail = "Downloading the \(languageName) speech model  (\(Int(f * 100))%)" }
+                }
+                speechReady = true
+                detail = downloaded ? "Downloaded." : "Already on this \(Device.noun)."
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let e as URLError {
+                Log.warn("Setup: speech model download failed: \(e.localizedDescription)")
+                throw Problem(message: "A download failed. Check your internet connection and click Retry.")
             }
-            speechReady = true
-            detail = downloaded ? "Downloaded." : "Already on this \(Device.noun)."
-        } catch {
-            self.error = error.localizedDescription
-            phase = .plan
-            return
         }
+        try Task.checkCancellation()
         n += 1
         begin(n, "Apple Intelligence", AppleIntelligenceBackend.unavailableReason ?? "Ready.")
         AppleIntelligenceBackend.warmUp()
@@ -213,6 +266,31 @@ struct OnboardingView: View {
         detail = "Tap Dictate on the dashboard to start, and tap it again to stop. The text is copied, ready to paste."
         #endif
         model.warmUp()
+    }
+
+    /// Windows' step 4: "Downloading the speech model (large-v3-turbo)", through the app's own download (the one the
+    /// model lists show), with "  (42%)" after the detail.
+    private func downloadWhisper(_ id: String, step: Int) async throws {
+        begin(step, "Downloading the speech model (\(id))")
+        if !WhisperModels.isDownloaded(id) {
+            if model.whisperDownload?.id != id { model.downloadWhisper(id) }
+            while model.whisperDownload?.id == id {
+                if Task.isCancelled {
+                    model.cancelWhisperDownload()
+                    throw CancellationError()
+                }
+                fraction = model.whisperDownload?.fraction
+                detail = fraction.map { $0 < 1 ? "  (\(Int($0 * 100))%)" : "" } ?? ""
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+            try Task.checkCancellation()
+            guard WhisperModels.isDownloaded(id) else {
+                throw Problem(message: "A download failed. Check your internet connection and click Retry.")
+            }
+        }
+        speechReady = true
+        fraction = 1
+        detail = ""
     }
 
     // MARK: Permissions

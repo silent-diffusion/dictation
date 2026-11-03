@@ -45,22 +45,23 @@ final class HotkeyManager {
         refs = []
         actions = [:]
         var errors: [String] = []
-        for (i, b) in bindings.enumerated() where !b.text.isEmpty {
+        // Blank (or only spaces) is intentionally unset (string.IsNullOrWhiteSpace).
+        for (i, b) in bindings.enumerated() where !b.text.trimmingCharacters(in: .whitespaces).isEmpty {
             guard let hotkey = Hotkey(b.text) else { errors.append("'\(b.text)' isn't a valid shortcut."); continue }
             if let earlier = bindings[..<i].first(where: { Hotkey.same($0.text, b.text) }) {
-                errors.append("\(b.text) is already \(earlier.role). Choose a different shortcut under Settings › Hotkeys.")
+                errors.append("\(b.text) is already \(earlier.role). Choose a different shortcut under Settings > Hotkeys.")
                 continue
             }
             var ref: EventHotKeyRef?
             let id = EventHotKeyID(signature: OSType(0x4F42_5254), id: UInt32(i + 1)) // 'OBRT'
             // Exclusive, so a combination another app holds is refused rather than shared, as RegisterHotKey on Windows.
-            let status = RegisterEventHotKey(hotkey.keyCode, Self.carbonModifiers(hotkey.modifiers), id, GetApplicationEventTarget(),
+            let status = RegisterEventHotKey(hotkey.keyCode, hotkey.carbonModifiers, id, GetApplicationEventTarget(),
                                              OptionBits(kEventHotKeyExclusive), &ref)
             if status == noErr, let ref {
                 refs.append(ref)
                 actions[UInt32(i + 1)] = b.action
             } else if status == eventHotKeyExistsErr {
-                errors.append("\(b.text) is already used by another app. Choose a different shortcut under Settings › Hotkeys.")
+                errors.append("\(b.text) is already used by another application. Choose a different shortcut under Settings > Hotkeys.")
             } else if hotkey.isOptionOnly {
                 errors.append("macOS doesn't allow \(b.text): a shortcut with only Alt (Option), or Alt and Shift, isn't allowed. Add Ctrl or Cmd.")
             } else {
@@ -89,13 +90,31 @@ final class HotkeyManager {
         return nil
     }
 
-    private static func carbonModifiers(_ m: Hotkey.Modifiers) -> UInt32 {
-        var mods: UInt32 = 0
-        if m.contains(.control) { mods |= UInt32(controlKey) }
-        if m.contains(.option) { mods |= UInt32(optionKey) }
-        if m.contains(.shift) { mods |= UInt32(shiftKey) }
-        if m.contains(.command) { mods |= UInt32(cmdKey) }
-        return mods
+    /// The marker key must differ from the other shortcuts (App.MarkerClash); registering it second would only say
+    /// "used by another application".
+    static func markerClash(marker: String, dictation: String, speak: String, cycle: String) -> String? {
+        guard !marker.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        func same(_ a: String, _ b: String) -> Bool {
+            a.replacingOccurrences(of: " ", with: "").caseInsensitiveCompare(b.replacingOccurrences(of: " ", with: "")) == .orderedSame
+                || Hotkey.same(a, b)
+        }
+        let other = same(marker, dictation) ? "the dictation shortcut" : same(marker, speak) ? "the Read aloud shortcut"
+            : same(marker, cycle) ? "the profile-switching shortcut" : nil
+        return other.map { "\(marker) is already \($0). Choose a different marker shortcut under Settings > Hotkeys." }
+    }
+
+    /// Whether one of macOS's own keyboard shortcuts that is turned on (System Settings › Keyboard › Keyboard
+    /// Shortcuts) is this combination; macOS then acts on it first. Ctrl+Space is "Select the previous input source".
+    static func systemShortcutTaken(_ text: String) -> Bool {
+        guard let hotkey = Hotkey(text) else { return false }
+        var list: Unmanaged<CFArray>?
+        guard CopySymbolicHotKeys(&list) == noErr, let all = list?.takeRetainedValue() as? [[String: Any]] else { return false }
+        let mask = UInt32(controlKey | optionKey | shiftKey | cmdKey)
+        return all.contains { entry in
+            (entry[kHISymbolicHotKeyEnabled as String] as? Bool) == true
+                && (entry[kHISymbolicHotKeyCode as String] as? Int).map(UInt32.init) == hotkey.keyCode
+                && ((entry[kHISymbolicHotKeyModifiers as String] as? Int).map(UInt32.init) ?? 0) & mask == hotkey.carbonModifiers
+        }
     }
 }
 #endif
