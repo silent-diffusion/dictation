@@ -411,7 +411,7 @@ struct ReaderDisplay {
         var starts: [(Int, Int, Int)] = []
         let plain = doc.plain as NSString
         var delta = 0
-        let mono = PlatformFont(name: "CascadiaMono-Regular", size: 13.5) ?? .monospacedSystemFont(ofSize: 13.5, weight: .regular)
+        let mono = Ob.monoFont(13.5)
         for (i, line) in doc.lines.enumerated() {
             let prefix: String = switch line.kind {
             case .bullet: String(repeating: " ", count: 4 * line.level) + "  •  "

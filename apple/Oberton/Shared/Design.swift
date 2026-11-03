@@ -62,6 +62,19 @@ enum Ob {
         hasCascadia ? .custom("Cascadia Mono", fixedSize: size).weight(weight) : .system(size: size, weight: weight, design: .monospaced)
     }
 
+    /// `mono` for the TextKit views (Extended Notes' Markdown, the reader): the same face at a weight, which the
+    /// variable font gives as its named instances (CascadiaMono-Regular_Bold…).
+    static func monoFont(_ size: CGFloat, _ weight: PlatformFont.Weight = .regular) -> PlatformFont {
+        guard hasCascadia else { return .monospacedSystemFont(ofSize: size, weight: weight) }
+        #if os(macOS)
+        let d = NSFontDescriptor(fontAttributes: [.family: "Cascadia Mono", .traits: [NSFontDescriptor.TraitKey.weight: weight]])
+        return NSFont(descriptor: d, size: size) ?? .monospacedSystemFont(ofSize: size, weight: weight)
+        #else
+        let d = UIFontDescriptor(fontAttributes: [.family: "Cascadia Mono", .traits: [UIFontDescriptor.TraitKey.weight: weight]])
+        return UIFont(descriptor: d, size: size)
+        #endif
+    }
+
     /// Whether the bundled Cascadia Mono (Resources/Fonts, copied to the bundle's Resources and registered through Info.plist) is available.
     static let hasCascadia: Bool = {
         #if os(macOS)

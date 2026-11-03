@@ -44,10 +44,9 @@ struct MarkdownLook: Equatable {
         return italic ? Self.italic(f) : f
     }
 
-    /// Cascadia Mono when the app has it (Windows' Ob.Mono), else the system's.
+    /// The interface's mono face (Ob.monoFont).
     func mono(_ size: CGFloat, bold: Bool = false) -> PlatformFont {
-        PlatformFont(name: bold ? "CascadiaMono-Bold" : "CascadiaMono-Regular", size: size)
-            ?? PlatformFont.monospacedSystemFont(ofSize: size, weight: bold ? .bold : .regular)
+        Ob.monoFont(size, bold ? .bold : .regular)
     }
 
     private static func italic(_ f: PlatformFont) -> PlatformFont {
