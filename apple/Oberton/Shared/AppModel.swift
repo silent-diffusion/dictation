@@ -70,7 +70,18 @@ final class AppModel: ObservableObject {
             }
         }
     }
-    @Published var profiles: [Profile] { didSet { profilesFile.save(profiles) } }
+    @Published var profiles: [Profile] {
+        didSet {
+            profilesFile.save(profiles)
+            // The active profile's own speech model was changed on its page: load it now if a speech model is in
+            // memory and nothing is dictating, as a profile switch does (an unloaded engine stays unloaded).
+            let id = settings.activeProfileID
+            if settings.speechModel(for: oldValue.first { $0.id == id }) != settings.speechModel(for: activeProfile) {
+                swapSpeechModel()
+                if !phase.isBusy, speechModelLoaded { speechReady() } // the status line names the profile's model
+            }
+        }
+    }
     @Published private(set) var history: [HistoryEntry]
     /// A dictation pauses Extended Notes while it runs (both would hear the same voice).
     @Published private(set) var phase: Phase = .idle {
