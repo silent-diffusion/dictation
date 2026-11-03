@@ -78,8 +78,9 @@ updates when Oberton starts" is on. The App Store build keeps its information pa
 | Swift flag | — | `OBERTON_DIRECT` |
 | Data | `~/Library/Containers/com.silentdiffusion.oberton/…/Application Support/Oberton` | `~/Library/Application Support/Oberton` |
 
-Both build `Oberton.app` with the same bundle ID, so in Xcode's shared DerivedData the last one built replaces the other;
-on the command line give the direct build its own folder:
+Both build `Oberton.app` with the same bundle ID, so in Xcode's shared DerivedData the last one built replaces the other
+(and a Debug App Store build made over a direct one keeps a stale, unused `Sparkle.framework` inside; archives are
+clean). On the command line give the direct build its own folder:
 
 ```bash
 xcodebuild -project Oberton.xcodeproj -scheme "Oberton Direct" -destination 'platform=macOS' -derivedDataPath build-direct -allowProvisioningUpdates build
