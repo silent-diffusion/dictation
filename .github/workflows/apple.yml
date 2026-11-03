@@ -27,3 +27,9 @@ jobs:
         run: xcodebuild -project Oberton.xcodeproj -scheme Oberton -destination 'generic/platform=macOS' -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
       - name: Build for iOS Simulator
         run: xcodebuild -project Oberton.xcodeproj -scheme Oberton -destination 'generic/platform=iOS Simulator' -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
+      # The direct download (Developer ID, not sandboxed, Sparkle), unsigned here as well. Same build folder: the packages are
+      # built once; its Oberton.app replaces the App Store one there.
+      - name: Build the direct download for macOS
+        run: xcodebuild -project Oberton.xcodeproj -scheme "Oberton Direct" -destination 'generic/platform=macOS' -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
+      - name: Check the direct build's Info.plist
+        run: scripts/check-direct-plist.sh

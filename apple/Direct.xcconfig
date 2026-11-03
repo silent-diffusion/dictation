@@ -1,0 +1,29 @@
+// The direct download ("Oberton Direct" scheme): the Mac app outside the App Store, signed with Developer ID and
+// notarized (scripts/export-direct.sh), not sandboxed, so it can read the text around another app's cursor through
+// Accessibility and update itself with Sparkle. The App Store build (the "Oberton" target) is unchanged by this file.
+#include "Signing.xcconfig"
+
+SDKROOT = macosx
+SUPPORTED_PLATFORMS = macosx
+SUPPORTS_MACCATALYST = NO
+
+ENABLE_APP_SANDBOX = NO
+// Notarization requires the hardened runtime.
+ENABLE_HARDENED_RUNTIME = YES
+CODE_SIGN_ENTITLEMENTS = Oberton-Direct.entitlements
+// Built and archived with the team's development certificate; the export (method developer-id) re-signs with the
+// Developer ID Application certificate. The team comes from Local.xcconfig only.
+CODE_SIGN_STYLE = Automatic
+
+// `#if OBERTON_DIRECT` (Distribution.isDirect): Sparkle, and the features the sandbox doesn't allow.
+SWIFT_ACTIVE_COMPILATION_CONDITIONS = $(inherited) OBERTON_DIRECT
+
+// Info.plist: the App Store build's keys for the Mac (keep them in step with Info.plist; CI checks) plus Sparkle's.
+INFOPLIST_FILE = Info-Direct.plist
+
+// Sparkle. PLACEHOLDERS: nothing is published at this address yet, and there is no signing key. Before the first direct
+// release, generate an EdDSA key pair with Sparkle's generate_keys (the private key stays in your login keychain) and
+// paste the public key below, then publish an appcast signed with that key at the feed URL. With the key empty the
+// updater doesn't start, and Settings › Updates says the check failed. (`/$()/` keeps `//` from starting a comment.)
+OBERTON_APPCAST_URL = https:/$()/github.com/silent-diffusion/dictation/releases/latest/download/appcast.xml
+OBERTON_SPARKLE_PUBLIC_KEY =
