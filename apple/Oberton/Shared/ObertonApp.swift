@@ -526,6 +526,7 @@ enum Snapshots {
             try? png.write(to: URL(fileURLWithPath: dir).appending(path: "overlay.png"))
         }
         MarkdownEditorSnapshots.write(to: dir, model: model)
+        DashboardSnapshots.write(to: dir, model: model)
         #if OBERTON_DIRECT
         UpdatesSnapshots.write(to: dir, model: model)
         #endif
