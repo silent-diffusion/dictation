@@ -5,8 +5,9 @@ import ObertonCore
 /// Settings › Model unloading (App.xaml.cs UnloadIdleModelsAsync / UnloadSoonIfImmediate): every 15 s, let the speech
 /// model and the Read aloud voice go once they have been unused for `unloadAfterMinutes`. Ollama lets the AI model go
 /// by itself, through the keep_alive sent with every request (`AppSettings.ollamaKeepAlive`). "Immediately after use"
-/// frees everything 3 s after a dictation or a reading ends. Never while Extended Notes needs the models
-/// (`AppModel.unloadNow` checks that too). Each model loads again by itself the next time it's needed.
+/// frees everything 3 s after a dictation ends or the player closes. The speech model never goes while Extended Notes
+/// needs it, and the voice never while the player shows, its DONE card included (Windows' ReaderWindow.IsBusy =
+/// visible); `AppModel.unloadNow` checks both too. Each model loads again by itself the next time it's needed.
 @MainActor
 final class ModelUnloader {
     private weak var model: AppModel?
@@ -25,9 +26,14 @@ final class ModelUnloader {
             .sink { [weak self] busy in if !busy { self?.unloadSoonIfImmediate() } }
             .store(in: &watches)
         model.reader.$status.map { $0 == .ended }.removeDuplicates().dropFirst()
-            .sink { [weak self] ended in
+            .sink { [weak self] _ in self?.voiceLastUsed = .now }
+            .store(in: &watches)
+        // The player closed (✕, or by itself after the end): ReaderWindow.Stop starts the 3 s timer.
+        model.reader.$isOpen.combineLatest(model.reader.$question.map { $0 != nil }).map { $0 || $1 }
+            .removeDuplicates().dropFirst()
+            .sink { [weak self] showing in
                 self?.voiceLastUsed = .now
-                if ended { self?.unloadSoonIfImmediate() }
+                if !showing { self?.unloadSoonIfImmediate() }
             }
             .store(in: &watches)
     }
@@ -35,12 +41,13 @@ final class ModelUnloader {
     private func unloadIdleModels() async {
         guard let model else { return }
         let minutes = model.settings.unloadAfterMinutes
-        guard minutes > 0, !model.notes.needsModels else { return }
+        guard minutes > 0 else { return }
         let idle = TimeInterval(minutes * 60)
-        if !model.phase.isBusy, model.speechLoaded, Date.now.timeIntervalSince(model.lastActivity) > idle {
+        // Extended Notes holds only the speech model; an idle voice still goes (App.UnloadIdleModelsAsync).
+        if !model.notes.needsModels, !model.phase.isBusy, model.speechLoaded, Date.now.timeIntervalSince(model.lastActivity) > idle {
             Log.info("Unloading the idle speech model: " + (await model.unloadNow(speech: true, ai: false, voice: false)))
         }
-        if !model.reader.isSpeaking, model.reader.isLoaded, Date.now.timeIntervalSince(voiceLastUsed) > idle {
+        if !model.reader.isShowing, model.reader.isLoaded, Date.now.timeIntervalSince(voiceLastUsed) > idle {
             Log.info("Unloading the idle Read aloud voice: " + (await model.unloadNow(speech: false, ai: false, voice: true)))
         }
     }
@@ -53,7 +60,7 @@ final class ModelUnloader {
         soon?.cancel()
         soon = Task { [weak self] in
             try? await Task.sleep(for: .seconds(3))
-            guard !Task.isCancelled, let model = self?.model, !model.phase.isBusy, !model.reader.isSpeaking else { return }
+            guard !Task.isCancelled, let model = self?.model, !model.phase.isBusy, !model.reader.isShowing else { return }
             Log.info("Unload immediately: " + (await model.unloadNow(speech: true, ai: true, voice: true)))
         }
     }
