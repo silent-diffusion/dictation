@@ -6,6 +6,34 @@ public enum OverlayPosition: String, Codable, CaseIterable, Sendable {
     case topLeft, topCenter, topRight, middleLeft, center, middleRight, bottomLeft, bottomCenter, bottomRight
 }
 
+/// Where the Read aloud player sits: with the dictation overlay, or a place of its own (Windows' `ReaderPosition`,
+/// where null = with the overlay). Saved as "withOverlay" or the position's name.
+public enum ReaderPosition: Codable, Hashable, Sendable {
+    case withOverlay
+    case at(OverlayPosition)
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        if raw == "withOverlay" { self = .withOverlay; return }
+        guard let p = OverlayPosition(rawValue: raw) else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Unknown reader position \(raw)"))
+        }
+        self = .at(p)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        switch self {
+        case .withOverlay: try c.encode("withOverlay")
+        case .at(let p): try c.encode(p.rawValue)
+        }
+    }
+}
+
+/// How a dictation goes into the app: Auto types short text and pastes long text (or text with line breaks), Typing
+/// always types, Clipboard always pastes.
+public enum InsertionMode: String, Codable, CaseIterable, Sendable { case auto, typing, clipboard }
+
 /// System follows the device's light/dark setting; Light and Dark override it.
 public enum AppTheme: String, Codable, CaseIterable, Sendable { case system, light, dark }
 
@@ -71,18 +99,60 @@ public struct AppSettings: Codable, Sendable, Equatable {
     /// Names and jargon to bias recognition, e.g. "Kubernetes, Dr. Nguyen".
     public var vocabularyHint = ""
     public var activeProfileID: String?
+    /// The profile marked DEFAULT (the profile ⋯ menu); nil = none marked.
+    public var defaultProfileID: String?
+    /// IDs of built-in profiles already offered, so one added in an update appears once and stays deleted if the user
+    /// deletes it.
+    public var builtInProfilesAdded: [String] = []
+    /// The microphone to record from, by name; nil = the system's default input.
+    public var microphoneName: String?
+    /// Level the volume before transcribing, so quiet stretches next to loud ones aren't dropped.
+    public var evenOutVolume = true
+    /// Open Oberton when the user logs in (Windows' StartWithWindows, on by default there too).
+    public var startAtLogin = true
+    /// Closing the window keeps Oberton running in the menu bar (Windows: minimize to the tray).
+    public var minimizeToTray = true
+    /// Unload a model after this many minutes without use, to free memory. 0 = keep loaded; `unloadImmediately` = as
+    /// soon as each dictation or reading is done. It loads again by itself the next time it is needed.
+    public var unloadAfterMinutes = 30
+    public static let unloadImmediately = -1
     public var showOverlay = true
-    /// Bottom left at 90% (the Windows defaults since 5.18). The Read aloud player shares the overlay, its place and opacity.
+    /// Bottom left at 90% (the Windows defaults since 5.18).
     public var overlayPosition = OverlayPosition.bottomLeft
     public var overlayOpacity = 0.9
+    /// The Read aloud player's own place (top right by default, as on Windows) and background opacity (0.3–1; its text
+    /// stays fully opaque).
+    public var readerPosition = ReaderPosition.at(.topRight)
+    public var readerOpacity = 0.9
+    /// The player shows the whole text (scrolling along) instead of the current sentence only.
+    public var readerExpanded = false
     /// Read aloud: an AVSpeechSynthesisVoice identifier (nil = the system's default voice) and base speed (0.5–2).
     public var ttsVoice: String?
     public var ttsBaseSpeed = 1.75
     /// After a dictation is inserted, put the user's own clipboard back.
     public var restoreClipboard = true
+    public var insertion = InsertionMode.auto
+    /// Per-app insertion override, keyed by the app's bundle identifier (Windows: by process name, e.g. "notepad").
+    public var appOverrides: [String: InsertionMode] = [:]
+    /// In Auto mode, text longer than this (or containing line breaks) is pasted instead of typed.
+    public var typingMaxChars = 400
+    /// Read a sentence or two around the cursor to fix capitalization, trailing periods and spacing when inserting
+    /// into the middle of existing text.
+    public var matchSurroundingText = true
+    /// Type finished sentences into the app while still speaking, then replace them with one final cleaned-up pass
+    /// when dictation stops.
+    public var typeWhileSpeaking = false
     public var keepHistory = true
     /// How many recent dictations History keeps; 0 = all of them (the default since Windows 5.18).
     public var historyLimit = 0
+    /// Or how long History keeps them, in days (0 = no limit by age).
+    public var historyDays = 0
+    /// Keep each dictation's recording so it can be played back.
+    public var saveHistoryAudio = true
+    /// How many of the newest dictations keep their recording, or for how many days (0 and 0 = as long as the text).
+    /// A recording never outlives its text. By default recordings are kept for a week.
+    public var audioLimit = 0
+    public var audioDays = 7
     /// History lists dictations by app (newest first within each) rather than in one list.
     public var historyByApp = true
     /// Keep the Analytics word tally (words.json): counts of words, phrases, corrections and fillers, never sentences.
@@ -96,6 +166,8 @@ public struct AppSettings: Codable, Sendable, Equatable {
     public var showJapanese = true
     /// The main window's sidebar is folded away, so the page fills the window (open by default, as on Windows since 5.18).
     public var sidebarCollapsed = false
+    /// Settings menu groups folded away, by name ("A // Dictation", "B // Models & AI", …).
+    public var collapsedSettingsGroups: [String] = []
     /// The size of everything in the main window, 1 = as designed (Cmd+plus, Cmd+minus, Cmd+0).
     public var uiScale = 1.0
     /// The dashboard notepad from before Extended Notes; its text moves to Extended Notes' draft (notes/draft.txt) once.
@@ -118,6 +190,18 @@ public struct AppSettings: Codable, Sendable, Equatable {
         take(.typingWPM, &typingWPM); take(.cloud, &cloud)
         take(.theme, &theme); take(.accent, &accent); take(.showJapanese, &showJapanese)
         take(.sidebarCollapsed, &sidebarCollapsed); take(.uiScale, &uiScale); take(.notepad, &notepad)
+        take(.defaultProfileID, &defaultProfileID); take(.builtInProfilesAdded, &builtInProfilesAdded)
+        take(.microphoneName, &microphoneName); take(.evenOutVolume, &evenOutVolume)
+        take(.startAtLogin, &startAtLogin); take(.minimizeToTray, &minimizeToTray); take(.unloadAfterMinutes, &unloadAfterMinutes)
+        take(.readerPosition, &readerPosition); take(.readerOpacity, &readerOpacity); take(.readerExpanded, &readerExpanded)
+        take(.insertion, &insertion); take(.typingMaxChars, &typingMaxChars)
+        take(.matchSurroundingText, &matchSurroundingText); take(.typeWhileSpeaking, &typeWhileSpeaking)
+        take(.historyDays, &historyDays); take(.saveHistoryAudio, &saveHistoryAudio); take(.audioLimit, &audioLimit); take(.audioDays, &audioDays)
+        take(.collapsedSettingsGroups, &collapsedSettingsGroups)
+        // One unknown mode drops only that app's override, not the others.
+        if let raw = try? c.decode([String: String].self, forKey: .appOverrides) {
+            appOverrides = raw.compactMapValues(InsertionMode.init(rawValue:))
+        }
     }
 }
 

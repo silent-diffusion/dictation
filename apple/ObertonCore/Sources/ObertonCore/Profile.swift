@@ -10,10 +10,15 @@ public struct Profile: Codable, Identifiable, Hashable, Sendable {
     /// The AI model, as a `ModelID` string ("apple:on-device", "ollama:qwen2.5:3b", "anthropic:…", "openai:…");
     /// nil = the default model in Settings.
     public var model: String?
+    /// The speech recognition model for this profile; nil = the one in Settings › Models.
+    public var speechModel: String?
     /// Read aloud voice for this profile (an AVSpeechSynthesisVoice identifier); nil = Read aloud's own.
     public var voice: String?
     /// Off = Raw: the recognizer's words, no AI.
     public var autoProcess: Bool = true
+    /// Raw only: words go into the app as they are heard. Off (the default): each new bit is pasted; on: typed key by
+    /// key, which some apps garble.
+    public var liveTyping: Bool = false
     public var showPreview: Bool = false
     public var preserveParagraphs: Bool = true
     public var removeFillers: Bool = true
@@ -38,6 +43,18 @@ public struct Profile: Codable, Identifiable, Hashable, Sendable {
         self.showPreview = showPreview
         self.rewriteWhole = rewriteWhole
         self.maxChangeRatio = maxChangeRatio
+    }
+
+    // Profiles saved by older versions are missing newer keys: decode what is there, default the rest.
+    public init(from decoder: Decoder) throws {
+        self.init()
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        func take<T: Decodable>(_ key: CodingKeys, _ into: inout T) { if let v = try? c.decode(T.self, forKey: key) { into = v } }
+        take(.id, &id); take(.name, &name); take(.description, &description); take(.prompt, &prompt)
+        take(.model, &model); take(.speechModel, &speechModel); take(.voice, &voice)
+        take(.autoProcess, &autoProcess); take(.liveTyping, &liveTyping); take(.showPreview, &showPreview)
+        take(.preserveParagraphs, &preserveParagraphs); take(.removeFillers, &removeFillers); take(.rewriteWhole, &rewriteWhole)
+        take(.readAloudAfterInsert, &readAloudAfterInsert); take(.maxChangeRatio, &maxChangeRatio)
     }
 
     public var isRaw: Bool { !autoProcess }
