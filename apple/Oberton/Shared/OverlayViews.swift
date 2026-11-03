@@ -1,8 +1,11 @@
 import ObertonCore
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 
-// The overlay and the Read aloud player stay dark in both themes, as on Windows: ink at 88% (the pill) or 94% (cards),
-// paper-colored text, the accent's dark-paper version for highlights, red only for the recording dot.
+// The overlay and the Read aloud player stay dark in both themes, as on Windows: ink at the chosen opacity, paper-colored
+// text, the accent's dark-paper version for highlights, red only for the recording dot.
 
 let darkInk = Color(hex: 0x0D0D0C)
 let lightText = Color(hex: 0xE8E7E3)
@@ -45,245 +48,332 @@ private struct HeightCap: Layout {
     }
 }
 
-/// The pill: ● 00:14 ▮▮▮ LIGHT CLEANUP 録音 ✕ CANCEL; after a dictation went in, the receipt (click it to compare);
-/// or, for a moment after the cycle-profile hotkey, which profile is on now.
+// MARK: - The pill
+
+/// What the overlay shows, newest first as on Windows: the profile just switched to, a notice, the preview waiting for
+/// a decision, NO PLACE TO PASTE, the receipt after a dictation went in, or the dictation under way. The preview and
+/// NO PLACE TO PASTE (and notices) show even with "Show overlay" off.
 struct OverlayPill: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject var reader: ReadAloudPlayer
     /// The receipt's three boxes are open.
     @Binding var open: Bool
 
+    private var hotkey: String {
+        #if os(macOS)
+        model.settings.hotkey
+        #else
+        ""
+        #endif
+    }
+
     var body: some View {
         let opacity = model.settings.overlayOpacity
-        if model.profileNotice, !model.phase.isBusy {
+        let phase = model.phase
+        if model.profileNotice, !phase.isBusy {
             let i = model.profiles.firstIndex { $0.id == model.activeProfile.id } ?? 0
             ProfilePill(name: model.activeProfile.name, index: i, count: model.profiles.count, opacity: opacity)
-        } else if case .done = model.phase, let entry = model.receipt {
+        } else if let notice = model.overlayNotice {
+            NoticePill(text: notice.text, kind: notice.kind, opacity: opacity)
+        } else if phase == .preview, let pending = model.pending {
+            PreviewPill(entry: pending, profile: model.activeProfile.name, hotkey: hotkey, opacity: opacity,
+                        onInsert: { model.confirmPreview() }, onOriginal: { model.confirmPreview(useOriginal: true) },
+                        onDiscard: { model.cancel() })
+        } else if phase == .placing {
+            PlacingPill(profile: model.activeProfile.name, hotkey: hotkey, opacity: opacity,
+                        onCopy: { model.copyPlacingToClipboard() }, onDiscard: { model.cancel() })
+        } else if case .failed(let message) = phase {
+            NoticePill(text: message, kind: .error, opacity: opacity)
+        } else if model.settings.showOverlay, case .done = phase, let entry = model.receipt {
             // A profile can read what went in aloud: the player then takes the receipt's place, unless it has a warning.
             if !reader.isSpeaking || entry.warning != nil {
                 ReceiptPill(entry: entry, opacity: opacity, open: open, onOpen: { open = true },
                             onHover: { model.holdReceipt($0, release: open ? 4 : 2) }, onClose: { model.dismissReceipt() })
             }
-        } else if model.phase != .idle, model.phase != .preview {
-            let live = [.recording, .transcribing, .processing].contains(model.phase) ? model.liveText : ""
-            PillContent(phase: model.phase, profile: model.activeProfile.name, level: model.level, startedAt: model.startedAt,
-                        live: live, opacity: opacity, onCancel: { model.cancel() })
+        } else if model.settings.showOverlay, phase != .idle {
+            let live = [.recording, .transcribing, .processing].contains(phase) ? model.liveText : ""
+            PillContent(phase: phase, profile: model.activeProfile.name, level: model.level, startedAt: model.startedAt,
+                        live: live, opacity: opacity, aiModel: model.processor.model(for: model.activeProfile).displayName,
+                        audioSeconds: model.stoppedAt.map { $0.timeIntervalSince(model.startedAt ?? $0) },
+                        loadingSpeech: model.speechLoading, onCancel: { model.cancel() })
         }
     }
 }
 
-/// The overlay's box: ink at the chosen opacity, a faint paper edge, a soft shadow. A 20 pt corner radius on a box at
-/// least 40 pt tall is a capsule on one line and a rounded rectangle on more.
-private struct PillBox: ViewModifier {
+/// Windows' body widths (OverlayWindow.xaml.cs): compact while dictating, wide for messages and the cleanup, narrow for
+/// the receipt and the profile, the preview's three columns, and the opened receipt's stacked boxes.
+enum PillWidth {
+    static let compact: CGFloat = 440, wide: CGFloat = 470, narrow: CGFloat = 360
+    static let compareWide: CGFloat = 860, compareStack: CGFloat = 560
+}
+
+/// The overlay's card: a body of a fixed width (less if the screen is smaller), padded 18, 8, 8, 8 inside a 1 pt
+/// paper edge at 14%, ink at the chosen opacity, a soft shadow. 28 pt corners on one line, 20 when it grows (expanded).
+struct PillCard: ViewModifier {
+    var width: CGFloat
+    var expanded = false
     var opacity: Double
-    static let shape = RoundedRectangle(cornerRadius: 20, style: .circular)
+    @Environment(\.overlayRoom) private var room
 
     func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: expanded ? 20 : 28, style: .circular)
         content
+            .frame(width: max(40, min(width, room.width - 28)), alignment: .leading)
             .foregroundStyle(lightText)
-            .padding(EdgeInsets(top: 8, leading: 18, bottom: 8, trailing: 8))
-            .frame(minHeight: 40)
-            .background(Self.shape.fill(darkInk.opacity(opacity)))
-            .overlay(Self.shape.strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
-            .shadow(color: .black.opacity(0.25), radius: 15, y: 8)
-            .contentShape(Self.shape)
+            .padding(EdgeInsets(top: 9, leading: 19, bottom: 9, trailing: 9))
+            .background(shape.fill(darkInk.opacity(min(1, max(0.3, opacity)))).shadow(color: .black.opacity(0.35), radius: 12, y: 4))
+            .overlay(shape.strokeBorder(Color(hex: 0xE8E7E3, alpha: 0x24 / 255), lineWidth: 1))
+            .contentShape(shape)
     }
 }
 
-/// PROFILE   Formal email  ▬ • • •  (the cycle-profile hotkey): the profile's name, and a dot for each profile with the
-/// current one drawn long. 360 pt wide, as on Windows.
-struct ProfilePill: View {
-    var name: String
-    var index: Int
-    var count: Int
-    var opacity: Double
-    @Environment(\.overlayRoom) private var room
+/// The left-hand mark: the recording dot (red, pulsing), a grey dot (an info notice), the spinner, ✓ or ⚠.
+enum PillIndicator {
+    case dot(Color, pulse: Bool)
+    case spinner
+    case check
+    case warning(Color)
+}
+
+/// The trailing button: "✕ CANCEL" while dictating, a plain ✕ when it closes the opened receipt.
+enum PillTrailing {
+    case cancel(() -> Void)
+    case close(() -> Void)
+}
+
+/// The pill's one row, laid out as Windows' grid: indicator · TITLE · (meter, subtitle or dots) · decor · chip · button,
+/// at least 40 pt tall.
+struct PillRow<Title: View, Middle: View>: View {
+    var indicator: PillIndicator?
+    var decor: String?
+    var chip: String?
+    var trailing: PillTrailing?
+    var title: Title
+    var middle: Middle
+
+    init(indicator: PillIndicator? = nil, decor: String? = nil, chip: String? = nil, trailing: PillTrailing? = nil,
+         @ViewBuilder title: () -> Title, @ViewBuilder middle: () -> Middle) {
+        self.indicator = indicator
+        self.decor = decor
+        self.chip = chip
+        self.trailing = trailing
+        self.title = title()
+        self.middle = middle()
+    }
 
     var body: some View {
-        // At least 360 pt wide with the dots at the right end; a long name widens it up to 520 pt, then wraps.
-        let dots: CGFloat = count > 1 ? CGFloat(count) * 11 + 5 + 12 : 0
-        WidthCap(width: min(520, room.width)) {
-            HStack(spacing: 12) {
-                (Text("PROFILE   ").foregroundStyle(mutedText) + Text(name).fontWeight(.semibold))
-                    .font(Ob.mono(11))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(minWidth: min(360, room.width) - 26 - dots - (count > 1 ? 12 : 0), alignment: .leading)
-                    .layoutPriority(1)
-                if count > 1 {
-                    HStack(spacing: 5) {
-                        ForEach(0..<count, id: \.self) { i in
-                            Capsule().fill(i == index ? lightText : lightText.opacity(0.3)).frame(width: i == index ? 16 : 6, height: 6)
-                        }
-                    }
-                    .padding(.trailing, 12)
-                    .accessibilityHidden(true)
-                }
+        HStack(spacing: 0) {
+            if let indicator {
+                IndicatorView(kind: indicator).frame(width: 16, height: 16).padding(.trailing, 12)
             }
-            .frame(minHeight: 24)
-            .modifier(PillBox(opacity: opacity))
-            .accessibilityElement(children: .combine)
+            title
+                .font(Ob.mono(13, .semibold))
+                .fixedSize(horizontal: false, vertical: true)
+                .layoutPriority(1)
+            // The star column: it takes the room left, so what follows sits at the right end.
+            HStack(spacing: 0) {
+                middle
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12)
+            if let decor {
+                Decor(decor, size: 10.5, color: lightText.opacity(0.5)).fixedSize().padding(.trailing, 10)
+            }
+            if let chip, !chip.isEmpty {
+                Text(chip).font(Ob.mono(11)).foregroundStyle(lightText.opacity(0.8))
+                    .lineLimit(1).truncationMode(.tail)
+                    .padding(.horizontal, 10).padding(.vertical, 3)
+                    .overlay(RoundedRectangle(cornerRadius: 12, style: .circular).strokeBorder(darkLine, lineWidth: 1))
+                    .frame(maxWidth: 220, alignment: .trailing)
+                    .padding(.trailing, 8)
+                    .layoutPriority(1)
+            }
+            switch trailing {
+            case .cancel(let action):
+                Button(action: action) {
+                    HStack(spacing: 7) {
+                        Cross().stroke(lightText, style: StrokeStyle(lineWidth: 1.4, lineCap: .round)).frame(width: 11, height: 11)
+                        Text("CANCEL")
+                    }
+                }
+                .buttonStyle(PillButtonStyle(height: 36, padding: 12))
+                .fixedSize()
+                .help("Cancel this dictation")
+                .accessibilityLabel("Cancel dictation")
+            case .close(let action):
+                Button(action: action) {
+                    Cross().stroke(lightText, style: StrokeStyle(lineWidth: 1.4, lineCap: .round)).frame(width: 11, height: 11)
+                }
+                .buttonStyle(PillButtonStyle(height: 36, padding: 0))
+                .fixedSize()
+                .help("Close")
+                .accessibilityLabel("Close")
+            case nil:
+                EmptyView()
+            }
+        }
+        .frame(minHeight: 40)
+    }
+}
+
+extension PillRow where Middle == EmptyView {
+    init(indicator: PillIndicator? = nil, decor: String? = nil, chip: String? = nil, trailing: PillTrailing? = nil,
+         @ViewBuilder title: () -> Title) {
+        self.init(indicator: indicator, decor: decor, chip: chip, trailing: trailing, title: title) { EmptyView() }
+    }
+}
+
+private struct IndicatorView: View {
+    var kind: PillIndicator
+    @Environment(\.ob) private var ob
+
+    var body: some View {
+        switch kind {
+        case .dot(let color, let pulse): PulsingDot(color: color, pulse: pulse)
+        case .spinner: RingSpinner(accent: Color(hex: ob.accentChoice.hex.dark))
+        case .check:
+            CheckMark().stroke(lightText, style: StrokeStyle(lineWidth: 1.8, lineCap: .round, lineJoin: .round))
+        case .warning(let color):
+            WarningMark().stroke(color, style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
         }
     }
 }
 
-/// ✓ INSERTED  17 WORDS // 1.2 S  挿入 — after a dictation went in. Dimmed so it doesn't compete with the text; the
-/// pointer on it brings it back and keeps it. When the safety net stepped in (or there is a note), a warning and the
-/// note instead. Clicking it opens 01 // TRANSCRIPTION, 02 // AI EDIT, 03 // INSERTED, read top to bottom, with ✕.
-struct ReceiptPill: View {
-    var entry: HistoryEntry
-    var opacity: Double
-    var open = false
-    var onOpen: () -> Void = {}
-    var onHover: (Bool) -> Void = { _ in }
-    var onClose: () -> Void = {}
-    @Environment(\.ob) private var ob
-    @Environment(\.overlayRoom) private var room
+/// The recording dot: 10 pt, fading to 35% and back every 700 ms while it records.
+private struct PulsingDot: View {
+    var color: Color
+    var pulse: Bool
+    @State private var dim = false
+
+    var body: some View {
+        Circle().fill(color).frame(width: 10, height: 10)
+            .opacity(pulse && dim ? 0.35 : 1)
+            .onAppear {
+                guard pulse else { return }
+                withAnimation(.linear(duration: 0.7).repeatForever(autoreverses: true)) { dim = true }
+            }
+    }
+}
+
+/// Windows' spinner: a faint 14 pt ring with a quarter arc in the accent, one turn a second.
+private struct RingSpinner: View {
+    var accent: Color
+
+    var body: some View {
+        TimelineView(.animation) { context in
+            let turn = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1)
+            ZStack {
+                Circle().stroke(lightText.opacity(0.2), lineWidth: 1.5).frame(width: 13, height: 13)
+                Circle().trim(from: 0, to: 0.25)
+                    .stroke(accent, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                    .frame(width: 14, height: 14)
+                    .rotationEffect(.degrees(-90 + turn * 360))
+            }
+        }
+        .accessibilityLabel("Working")
+    }
+}
+
+/// Windows' drawn marks, on a 16 pt grid.
+private struct CheckMark: Shape {
+    func path(in r: CGRect) -> Path {
+        Path { p in
+            p.move(to: CGPoint(x: 2.5, y: 8.5))
+            p.addLine(to: CGPoint(x: 6.2, y: 12))
+            p.addLine(to: CGPoint(x: 13.5, y: 4.5))
+        }
+    }
+}
+
+private struct WarningMark: Shape {
+    func path(in r: CGRect) -> Path {
+        Path { p in
+            p.move(to: CGPoint(x: 8, y: 1.8))
+            p.addLine(to: CGPoint(x: 14.8, y: 14))
+            p.addLine(to: CGPoint(x: 1.2, y: 14))
+            p.closeSubpath()
+            p.move(to: CGPoint(x: 8, y: 6.5))
+            p.addLine(to: CGPoint(x: 8, y: 9.6))
+            p.move(to: CGPoint(x: 8, y: 11.8))
+            p.addLine(to: CGPoint(x: 8, y: 11.9))
+        }
+    }
+}
+
+private struct Cross: Shape {
+    func path(in r: CGRect) -> Path {
+        Path { p in
+            p.move(to: CGPoint(x: 1, y: 1))
+            p.addLine(to: CGPoint(x: 10, y: 10))
+            p.move(to: CGPoint(x: 10, y: 1))
+            p.addLine(to: CGPoint(x: 1, y: 10))
+        }
+    }
+}
+
+/// The overlay's buttons (Windows' PillButton styles): 32 pt capsules in mono 11.5. `accent` is filled paper (Insert),
+/// `outline` a faint edge (Use original), `ghost` no edge (Discard), `plain` the Cancel / ✕ button.
+struct PillButtonStyle: ButtonStyle {
+    enum Kind { case plain, accent, outline, ghost }
+    var kind = Kind.plain
+    var height: CGFloat = 32
+    var padding: CGFloat = 14
+
+    func makeBody(configuration: Configuration) -> some View {
+        PillButtonBody(configuration: configuration, style: self)
+    }
+}
+
+private struct PillButtonBody: View {
+    let configuration: ButtonStyleConfiguration
+    let style: PillButtonStyle
     @State private var hovering = false
 
-    private var safetyNet: Bool { entry.safetyNet ?? false }
-    private var noted: Bool { safetyNet || entry.warning != nil }
-    private var edited: Bool { entry.inserted != entry.transcription }
-
     var body: some View {
-        // Windows' widths: 360 for the receipt, 470 with a note, 560 with the boxes open.
-        let width: CGFloat = open ? 560 : noted ? 470 : 360
-        WidthCap(width: min(width, room.width)) {
-            VStack(alignment: .leading, spacing: 0) {
-                row
-                if open {
-                    boxes.padding(EdgeInsets(top: 6, leading: 0, bottom: 8, trailing: 10))
-                } else if noted {
-                    note.padding(EdgeInsets(top: 4, leading: 0, bottom: 6, trailing: 10))
-                }
-            }
-            .frame(minWidth: min(width, room.width) - 26, alignment: .leading)
-            .modifier(PillBox(opacity: opacity))
-            .opacity(noted || open || hovering ? 1 : 0.55)
-        }
-        .onHover { on in
-            hovering = on
-            onHover(on)
-        }
-        .onTapGesture { if !open { onOpen() } }
+        let shape = RoundedRectangle(cornerRadius: 16, style: .circular)
+        let accent = style.kind == .accent
+        configuration.label
+            .font(Ob.mono(11.5, accent ? .semibold : .regular))
+            .foregroundStyle(accent ? darkInk : style.kind == .ghost ? lightText.opacity(0xC8 / 255) : lightText)
+            .lineLimit(1)
+            .padding(.horizontal, style.padding)
+            .frame(minWidth: style.height, minHeight: style.height, maxHeight: style.height)
+            .background(shape.fill(accent ? lightText : hovering ? lightText.opacity(0x1A / 255) : .clear))
+            .overlay(shape.strokeBorder(border, lineWidth: 1))
+            .opacity(configuration.isPressed ? 0.7 : 1)
+            .contentShape(shape)
+            .onHover { hovering = $0 }
     }
 
-    private var row: some View {
-        HStack(spacing: 0) {
-            Group {
-                if noted {
-                    Image(systemName: "exclamationmark.triangle").font(.system(size: 12)).foregroundStyle(lightText)
-                } else {
-                    Image(systemName: "checkmark").font(.system(size: 11, weight: .semibold)).foregroundStyle(lightText)
-                }
-            }
-            .frame(width: 16, height: 16)
-            .padding(.trailing, 12)
-            Text(title).font(Ob.mono(11, .semibold)).fixedSize()
-            if !noted {
-                Text("\(entry.words) \(entry.words == 1 ? "WORD" : "WORDS") // \(String(format: "%.1f", entry.turnaroundSeconds)) S")
-                    .font(Ob.mono(11)).foregroundStyle(mutedText).lineLimit(1).truncationMode(.tail)
-                    .padding(.horizontal, 12)
-            }
-            Spacer(minLength: 12)
-            if !noted { Decor("挿入", size: 10, color: lightText.opacity(0.5)).fixedSize().padding(.trailing, 10) }
-            if open {
-                Button(action: onClose) {
-                    Text("✕").font(Ob.mono(11)).frame(width: 36, height: 36)
-                        .overlay(Circle().strokeBorder(lightText.opacity(0.22), lineWidth: 1))
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Close")
-            }
-        }
-        .frame(minHeight: 24)
-    }
-
-    private var title: String {
-        !safetyNet ? "INSERTED" : edited ? "PARTLY EDITED" : "ORIGINAL WORDS INSERTED"
-    }
-
-    /// The note, or what the safety net did: 15 pt on 22 pt lines, at most five lines (the end of it if longer).
-    private var note: some View {
-        let text = entry.warning ?? "The AI's edit changed too much (or came back empty), so your words went in unchanged. "
-            + "You can adjust the safety net on the profile's page."
-        return Text(LiveWords.tail(text, 260))
-            .font(Ob.sans(15)).lineSpacing(5).foregroundStyle(lightText)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxHeight: 112, alignment: .top).clipped()
-    }
-
-    /// The AI's edit is shown as a diff unless there was none: no AI, or the AI's words were not used at all.
-    private var hasEdit: Bool { entry.aiEdit != nil && !(entry.warning != nil && !edited) }
-
-    private var boxes: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            box("01 // TRANSCRIPTION", copy: entry.transcription) {
-                Text(entry.transcription).foregroundStyle(lightText.opacity(0.85))
-            }
-            rule
-            box("02 // AI EDIT", copy: hasEdit ? entry.aiEdit ?? "" : "") {
-                if hasEdit, let edit = entry.aiEdit {
-                    DiffText(original: entry.transcription, edited: edit.trimmingCharacters(in: .whitespacesAndNewlines), size: 14, onDark: true)
-                } else {
-                    Text(safetyNet ? "The safety net rejected the AI's edit, so your words went in as spoken." : "No AI edit for this dictation.")
-                        .foregroundStyle(mutedText)
-                }
-            }
-            rule
-            box("03 // INSERTED", copy: entry.inserted) {
-                Text(entry.inserted.trimmingCharacters(in: .whitespacesAndNewlines)).foregroundStyle(lightText)
-            }
-        }
-    }
-
-    private var rule: some View { Rectangle().fill(lightText.opacity(0.22)).frame(height: 1).padding(.vertical, 9) }
-
-    /// A box: its name and COPY, then its text, which scrolls past 130 pt.
-    private func box<C: View>(_ title: String, copy: String, @ViewBuilder content: () -> C) -> some View {
-        let text = content().font(Ob.sans(14)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        return VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(title).font(Ob.mono(10.5)).foregroundStyle(lightText.opacity(0.6))
-                Spacer()
-                CopyLink(text: copy)
-            }
-            HeightCap(height: 130) {
-                ViewThatFits(in: .vertical) {
-                    text
-                    ScrollView { text }.scrollIndicators(.automatic)
-                }
-            }
+    private var border: Color {
+        switch style.kind {
+        case .accent: lightText
+        case .outline: Color.white.opacity(0x38 / 255)
+        case .plain: darkLine
+        case .ghost: .clear
         }
     }
 }
 
-/// COPY next to a box's name; COPIED ✓ for a moment after.
-private struct CopyLink: View {
+/// A message under the row: 15 pt on 22 pt lines, at most 112 pt tall, the end of it if it is long.
+private struct PillBodyText: View {
     var text: String
-    @State private var copied = false
+    var color = lightText
 
     var body: some View {
-        Button {
-            let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !t.isEmpty else { return }
-            Clipboard.copy(t)
-            copied = true
-            Task { try? await Task.sleep(for: .seconds(1.4)); copied = false }
-        } label: {
-            Text(copied ? "COPIED ✓" : "COPY").font(Ob.mono(10.5)).foregroundStyle(lightText.opacity(0.8))
-                .padding(.horizontal, 8).padding(.vertical, 1)
-                .overlay(Capsule().strokeBorder(lightText.opacity(0.22), lineWidth: 1))
-                .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
+        Text(LiveWords.tail(text, 260))
+            .font(Ob.sans(15)).lineSpacing(4).foregroundStyle(color)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, maxHeight: 112, alignment: .topLeading).clipped()
+            .padding(EdgeInsets(top: 4, leading: 0, bottom: 6, trailing: 10))
     }
 }
 
-/// The pill itself, drawn from plain values. It grows with its text up to 520 pt (or the room there is), then wraps;
-/// a 20 pt corner radius on a pill at least 40 pt tall is a capsule on one line and a rounded rectangle on more.
-/// While dictating, the words recognized so far sit in the same box, above the row, as on Windows.
+// MARK: Dictating
+
+/// The pill while dictating, drawn from plain values (Windows' ShowState):
+/// STARTING · ● 0:07 ⠿⠿⠿ 録音 Light Cleanup ✕ CANCEL · TRANSCRIBING 7 S OF AUDIO · TIDYING // LIGHT CLEANUP with the AI
+/// model's chip and the transcript under it · INSERTING 挿入. The words recognized so far sit above the row.
 struct PillContent: View {
     var phase: AppModel.Phase
     var profile: String
@@ -291,94 +381,102 @@ struct PillContent: View {
     var startedAt: Date?
     var live = ""
     var opacity: Double
+    /// The AI model tidying up (the processing chip).
+    var aiModel: String?
+    /// How long the recording was (TRANSCRIBING's "N S OF AUDIO").
+    var audioSeconds: Double?
+    /// The speech model is still loading.
+    var loadingSpeech = false
+    /// The text was already typed while speaking: this is the final pass over it.
+    var finalPass = false
     var onCancel: () -> Void = {}
-    @Environment(\.ob) private var ob
-    @Environment(\.overlayRoom) private var room
+
+    private var processing: Bool { phase == .processing }
 
     var body: some View {
-        WidthCap(width: min(520, room.width)) {
-            VStack(alignment: .leading, spacing: 0) {
-                if !live.isEmpty { LiveWords(text: live) }
-                row
+        VStack(alignment: .leading, spacing: 0) {
+            if phase == .recording || phase == .transcribing {
+                if !live.isEmpty {
+                    LiveWords(text: live)
+                } else if loadingSpeech {
+                    LiveWords(text: "Loading the speech model… keep talking, it will catch up.", color: mutedText)
+                }
             }
-            .modifier(PillBox(opacity: opacity))
-            .opacity(isDone ? 0.75 : 1)
+            row
+            if processing, !live.isEmpty { PillBodyText(text: live, color: mutedText) }
         }
+        .modifier(PillCard(width: processing ? PillWidth.wide : PillWidth.compact, expanded: processing, opacity: opacity))
+        .opacity(isDone ? 0.75 : 1)
     }
 
-    /// ● 00:14 ▮▮▮ LIGHT CLEANUP 録音 ✕ CANCEL
-    private var row: some View {
-        HStack(spacing: 14) {
-            switch phase {
-            case .recording:
-                Circle().fill(recordRed).frame(width: 10, height: 10)
-                TimelineView(.periodic(from: .now, by: 1)) { _ in
-                    Text(elapsed).font(Ob.mono(11, .medium)).monospacedDigit()
+    @ViewBuilder private var row: some View {
+        switch phase {
+        case .starting:
+            PillRow(indicator: .spinner, decor: "処理中", chip: profile, trailing: .cancel(onCancel)) { Text("STARTING") }
+        case .recording:
+            PillRow(indicator: .dot(recordRed, pulse: true), decor: "録音", chip: profile, trailing: .cancel(onCancel)) {
+                TimelineView(.periodic(from: .now, by: 0.2)) { _ in
+                    Text(clock).font(Ob.mono(13)).monospacedDigit()
                 }
                 .fixedSize()
-                Wave(level: level)
-            case .starting, .transcribing, .processing, .inserting:
-                ProgressView().controlSize(.small).tint(lightText)
-            case .failed:
-                Image(systemName: "exclamationmark.triangle").font(.system(size: 11)).foregroundStyle(Color(hex: ob.accentChoice.hex.dark))
-            default:
-                Text("✓").font(Ob.mono(11, .semibold)).fixedSize()
+            } middle: {
+                DotMeter(level: level)
             }
-            Group {
-                switch phase {
-                case .recording, .starting: chipLabel(profile)
-                default: Text(phase.label.uppercased()).font(Ob.mono(11, .medium)).lineSpacing(3)
+        case .transcribing:
+            PillRow(indicator: .spinner, decor: "処理中", chip: profile, trailing: .cancel(onCancel)) {
+                Text(loadingSpeech ? "LOADING SPEECH MODEL" : "TRANSCRIBING")
+            } middle: {
+                if let audioSeconds {
+                    Text("\(max(1, Int(audioSeconds.rounded()))) S OF AUDIO").font(Ob.mono(11.5)).foregroundStyle(mutedText)
+                        .lineLimit(1).truncationMode(.tail)
                 }
             }
-            .fixedSize(horizontal: false, vertical: true)
-            .layoutPriority(1)
-            if let jp { Decor(jp, size: 10, color: lightText.opacity(0.55)).fixedSize() }
-            if phase.isBusy {
-                Button(action: onCancel) { chipLabel("✕  Cancel") }.buttonStyle(.plain).fixedSize()
+        case .processing:
+            PillRow(indicator: .spinner, decor: "処理中", chip: aiModel, trailing: .cancel(onCancel)) {
+                Text((finalPass ? "FINAL PASS // " : "TIDYING // ") + profile.uppercased())
             }
-        }
-        .frame(minHeight: 24)
-    }
-
-    private var jp: String? {
-        switch phase {
-        case .recording: "録音"
-        case .transcribing, .processing: "処理中"
-        case .done: "挿入"
-        default: nil
+        case .inserting:
+            PillRow(indicator: .spinner, decor: "挿入") { Text("INSERTING") }
+        case .done(let message):
+            PillRow(indicator: .check, decor: "挿入") { Text(message.uppercased()) }
+        case .failed(let message):
+            PillRow(indicator: .warning(lightText)) { Text(message) }
+        case .idle, .preview, .placing:
+            PillRow { Text(phase.label.uppercased()) }
         }
     }
 
     private var isDone: Bool { if case .done = phase { true } else { false } }
 
-    private var elapsed: String {
-        let s = Int(Date().timeIntervalSince(startedAt ?? Date()))
-        return String(format: "%02d:%02d", s / 60, s % 60)
-    }
-
-    /// A chip; a long profile name wraps inside it, and the 12 pt radius keeps a one-line chip a capsule.
-    private func chipLabel(_ text: String) -> some View {
-        Text(text.uppercased()).font(Ob.mono(11, .medium))
-            .padding(.horizontal, 12).padding(.vertical, 5)
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .circular).strokeBorder(lightText.opacity(0.25), lineWidth: 1))
+    /// m:ss, as on Windows (0:07).
+    private var clock: String {
+        let s = max(0, Int(Date().timeIntervalSince(startedAt ?? Date())))
+        return "\(s / 60):" + String(format: "%02d", s % 60)
     }
 }
 
-/// The level as a short waveform of bars.
-private struct Wave: View {
+/// The level meter: 22 columns of 5 dots, lit from the bottom as far as each moment's level reaches (√level, so quiet
+/// speech still moves it; at least one dot, so silence reads as a row of dots).
+private struct DotMeter: View {
     var level: Float
-    @State private var history: [Float] = Array(repeating: 0, count: 14)
+    @State private var levels = [Double](repeating: 0, count: 22)
 
     var body: some View {
-        HStack(spacing: 2) {
-            ForEach(Array(history.enumerated()), id: \.offset) { _, v in
-                Capsule().fill(lightText).frame(width: 2.5, height: 4 + CGFloat(v) * 14)
+        HStack(spacing: 3) {
+            ForEach(0..<levels.count, id: \.self) { i in
+                let lit = max(1, Int((levels[i] * 5).rounded()))
+                VStack(spacing: 2) {
+                    ForEach(0..<5, id: \.self) { d in
+                        Circle().fill(lightText).frame(width: 3, height: 3).opacity(5 - d <= lit ? 0.95 : 0.2)
+                    }
+                }
             }
         }
-        .frame(height: 18)
+        .frame(height: 28)
+        .fixedSize()
         .onChange(of: level) { _, new in
-            history.removeFirst()
-            history.append(new)
+            levels.removeFirst()
+            levels.append(Double(min(max(new, 0), 1)).squareRoot())
         }
         .accessibilityHidden(true)
     }
@@ -388,6 +486,7 @@ private struct Wave: View {
 /// lines tall. The newest words stay in view; older lines move up and out, as on Windows.
 struct LiveWords: View {
     var text: String
+    var color = lightText.opacity(0.85)
     @Environment(\.overlayRoom) private var room
 
     private static let lineHeight: CGFloat = 21
@@ -404,7 +503,7 @@ struct LiveWords: View {
         WidthCap(width: min(430, room.width)) {
             Text(Self.tail(text, 180))
                 .font(Ob.sans(14))
-                .foregroundStyle(lightText.opacity(0.85))
+                .foregroundStyle(color)
                 .lineSpacing(Self.spacing)
                 .lineLimit(nil)
                 .fixedSize(horizontal: false, vertical: true)
@@ -425,108 +524,503 @@ struct LiveWords: View {
     }
 }
 
-/// ✓ INSERTED  MAIL // 17 WORDS, then 01 // TRANSCRIPTION, 02 // AI EDIT, 03 // INSERTED (or the preview, with
-/// INSERTED brought forward and the buttons to decide).
-struct ReceiptCard: View {
-    var entry: HistoryEntry
-    var preview = false
-    var onClose: () -> Void
-    @EnvironmentObject var model: AppModel
-    @Environment(\.ob) private var ob
+// MARK: Waiting for a decision
 
+/// ✓ READY TO INSERT with the profile, then 01 // TRANSCRIPTION · 02 // AI EDIT · 03 // INSERTED side by side with
+/// the one that goes in brought forward, then INSERT <hotkey>, USE ORIGINAL and, at the right, DISCARD ESC. 860 pt wide;
+/// stacked at 560 where there isn't room (iPhone).
+struct PreviewPill: View {
+    var entry: HistoryEntry
+    var profile: String
+    var hotkey: String
+    var opacity: Double
+    var onInsert: () -> Void = {}
+    var onOriginal: () -> Void = {}
+    var onDiscard: () -> Void = {}
     @Environment(\.overlayRoom) private var room
 
     var body: some View {
-        WidthCap(width: min(440, room.width)) {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    Text(preview ? "PREVIEW" : "✓ INSERTED").font(Ob.mono(10.5, .semibold)).foregroundStyle(lightText).fixedSize()
-                    Text(((entry.appName.map { [$0] } ?? []) + ["\(entry.words) words"]).joined(separator: " // ").uppercased())
-                        .font(Ob.mono(10.5, .medium)).foregroundStyle(dimText).fixedSize(horizontal: false, vertical: true)
-                    Spacer(minLength: 0)
-                    Button(action: onClose) {
-                        Text("✕").font(Ob.mono(10.5)).foregroundStyle(lightText)
-                            .padding(.horizontal, 10).padding(.vertical, 2)
-                            .overlay(Capsule().strokeBorder(lightText.opacity(0.25), lineWidth: 1))
-                    }
-                    .buttonStyle(.plain)
-                }
-                // A long dictation scrolls inside the card rather than running the card off the screen.
-                HeightCap(height: max(120, room.height - (preview ? 210 : 160))) {
-                    ViewThatFits(in: .vertical) {
-                        sections
-                        ScrollView { sections }.scrollIndicators(.automatic)
-                    }
-                }
-                if preview {
-                    HStack(spacing: 8) {
-                        Button("Insert") { model.confirmPreview() }.buttonStyle(DarkCapsule(filled: true))
-                        Button("Use original") { model.confirmPreview(useOriginal: true) }.buttonStyle(DarkCapsule())
-                        Button("Discard   Esc") { model.cancel() }.buttonStyle(DarkCapsule())
-                    }
-                    .padding(.top, 12)
-                }
-            }
-            .padding(EdgeInsets(top: 14, leading: 16, bottom: 14, trailing: 16))
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 16).fill(darkInk.opacity(0.94)))
-            .shadow(color: .black.opacity(0.3), radius: 20, y: 10)
-        }
-    }
-
-    private var sections: some View {
+        let stacked = room.width < 640
+        let width = stacked ? PillWidth.compareStack : PillWidth.compareWide
+        let inner = max(40, min(width, room.width - 28))
         VStack(alignment: .leading, spacing: 0) {
-            sep
-            box("01 // Transcription", copy: entry.transcription) {
-                Text(entry.transcription).foregroundStyle(lightText.opacity(0.85))
+            PillRow(indicator: .check, chip: profile) { Text("READY TO INSERT") }
+            // The diff is between what was heard and what goes in; a profile without AI has none.
+            CompareBoxes(raw: entry.transcription, edit: entry.aiEdit == nil ? nil : entry.inserted, inserted: entry.inserted,
+                         noEdit: "No AI edit: this profile doesn't use AI.", stacked: stacked, focus: true, width: inner - 10)
+                .padding(EdgeInsets(top: 6, leading: 0, bottom: 8, trailing: 10))
+            HStack(spacing: 8) {
+                Button(hotkey.isEmpty ? "INSERT" : "INSERT   \(hotkey.uppercased())", action: onInsert)
+                    .buttonStyle(PillButtonStyle(kind: .accent))
+                Button("USE ORIGINAL", action: onOriginal).buttonStyle(PillButtonStyle(kind: .outline))
+                Spacer(minLength: 8)
+                Button(discardLabel, action: onDiscard).buttonStyle(PillButtonStyle(kind: .ghost)).padding(.trailing, 4)
             }
-            .opacity(preview ? 0.6 : 1)
-            if let edit = entry.aiEdit {
-                sep
-                box("02 // AI Edit", copy: edit) { DiffText(original: entry.transcription, edited: edit, size: 13.5, onDark: true) }
-                    .opacity(preview ? 0.6 : 1)
+            .padding(EdgeInsets(top: 4, leading: 0, bottom: 6, trailing: 0))
+        }
+        .modifier(PillCard(width: width, expanded: true, opacity: opacity))
+    }
+}
+
+/// "DISCARD   ESC" on the Mac, where Esc discards; the iPhone has no Esc.
+private var discardLabel: String {
+    #if os(macOS)
+    "DISCARD   ESC"
+    #else
+    "DISCARD"
+    #endif
+}
+
+/// ⚠ NO PLACE TO PASTE: nothing that takes text had the cursor when the dictation started. A click into a text field
+/// puts it there (the platform watches for that), or COPY TO CLIPBOARD <hotkey>; DISCARD ESC at the right.
+struct PlacingPill: View {
+    var profile: String
+    var hotkey: String
+    var opacity: Double
+    var onCopy: () -> Void = {}
+    var onDiscard: () -> Void = {}
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            PillRow(indicator: .warning(lightText), chip: profile) { Text("NO PLACE TO PASTE") }
+            PillBodyText(text: "Nothing to type into had the cursor when you started. Click into a text field and the text goes in there, or copy it to the clipboard.")
+            HStack(spacing: 8) {
+                Button(hotkey.isEmpty ? "COPY TO CLIPBOARD" : "COPY TO CLIPBOARD   \(hotkey.uppercased())", action: onCopy)
+                    .buttonStyle(PillButtonStyle(kind: .accent))
+                Spacer(minLength: 8)
+                Button(discardLabel, action: onDiscard).buttonStyle(PillButtonStyle(kind: .ghost)).padding(.trailing, 4)
             }
-            sep
-            box("03 // Inserted", copy: entry.inserted) {
-                Text(entry.inserted).foregroundStyle(lightText).font(Ob.sans(preview ? 16 : 14))
-            }
-            .padding(EdgeInsets(top: 8, leading: 10, bottom: 10, trailing: 10))
-            .background(RoundedRectangle(cornerRadius: 8).fill(lightText.opacity(0.05)))
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(lightText.opacity(0.25), lineWidth: 1))
-            if let warning = entry.warning {
-                Text(warning).font(Ob.sans(12)).foregroundStyle(Color(hex: ob.accentChoice.hex.dark))
-                    .fixedSize(horizontal: false, vertical: true).padding(.top, 10)
-            }
+            .padding(EdgeInsets(top: 4, leading: 0, bottom: 6, trailing: 0))
+        }
+        .modifier(PillCard(width: PillWidth.wide, expanded: true, opacity: opacity))
+    }
+}
+
+// MARK: Messages
+
+/// A notice (Windows' ShowMessage): ● OBERTON for information, ⚠ HEADS UP for a warning, ⚠ SOMETHING WENT WRONG (in the
+/// accent) for an error, with the message under it. 470 pt wide.
+struct NoticePill: View {
+    var text: String
+    var kind: AppModel.NoticeKind
+    var opacity: Double
+    @Environment(\.ob) private var ob
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            PillRow(indicator: indicator) { Text(title) }
+            PillBodyText(text: text)
+        }
+        .modifier(PillCard(width: PillWidth.wide, expanded: true, opacity: opacity))
+        .accessibilityElement(children: .combine)
+    }
+
+    private var indicator: PillIndicator {
+        switch kind {
+        case .info: .dot(mutedText, pulse: false)
+        case .warning: .warning(lightText)
+        case .error: .warning(Color(hex: ob.accentChoice.hex.dark))
         }
     }
 
-    private var sep: some View { Rectangle().fill(darkLine).frame(height: 1).padding(.vertical, 10) }
+    private var title: String {
+        switch kind {
+        case .info: "OBERTON"
+        case .warning: "HEADS UP"
+        case .error: "SOMETHING WENT WRONG"
+        }
+    }
+}
 
-    private func box<C: View>(_ title: String, copy: String, @ViewBuilder content: () -> C) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
+/// ● DICTATION APPEARS HERE: for a moment after Settings › Layout moves the overlay, at the new spot.
+struct PositionPill: View {
+    var opacity: Double
+
+    var body: some View {
+        PillRow(indicator: .dot(recordRed, pulse: false)) { Text("DICTATION APPEARS HERE") }
+            .modifier(PillCard(width: PillWidth.narrow, opacity: opacity))
+    }
+}
+
+/// PROFILE   Formal email  ▬ • • •  (the cycle-profile hotkey): the profile's name, and a dot for each profile with the
+/// current one drawn long. 360 pt wide, as on Windows.
+struct ProfilePill: View {
+    var name: String
+    var index: Int
+    var count: Int
+    var opacity: Double
+
+    var body: some View {
+        PillRow {
+            Text("PROFILE   ").fontWeight(.regular).foregroundStyle(mutedText) + Text(name)
+        } middle: {
+            if count > 1 {
+                HStack(spacing: 5) {
+                    ForEach(0..<count, id: \.self) { i in
+                        Capsule().fill(i == index ? lightText : lightText.opacity(0x4D / 255)).frame(width: i == index ? 16 : 6, height: 6)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .accessibilityHidden(true)
+            }
+        }
+        .modifier(PillCard(width: PillWidth.narrow, opacity: opacity))
+        .accessibilityElement(children: .combine)
+    }
+}
+
+// MARK: After a dictation
+
+/// ✓ INSERTED  17 WORDS // 1.2 S  挿入 — after a dictation went in. Dimmed so it doesn't compete with the text; the
+/// pointer on it brings it back and keeps it. When the safety net stepped in (or there is a note), a warning and the
+/// note instead. Clicking it opens 01 // TRANSCRIPTION, 02 // AI EDIT, 03 // INSERTED, read top to bottom, with ✕.
+struct ReceiptPill: View {
+    var entry: HistoryEntry
+    var opacity: Double
+    var open = false
+    var onOpen: () -> Void = {}
+    var onHover: (Bool) -> Void = { _ in }
+    var onClose: () -> Void = {}
+    @Environment(\.overlayRoom) private var room
+    @State private var hovering = false
+
+    private var safetyNet: Bool { entry.safetyNet ?? false }
+    private var noted: Bool { safetyNet || entry.warning != nil }
+    private var edited: Bool { entry.inserted != entry.transcription }
+
+    var body: some View {
+        // Windows' widths: 360 for the receipt, 470 with a note, 560 with the boxes open.
+        let width = open ? PillWidth.compareStack : noted ? PillWidth.wide : PillWidth.narrow
+        VStack(alignment: .leading, spacing: 0) {
+            PillRow(indicator: noted ? .warning(lightText) : .check, decor: noted ? nil : "挿入", trailing: open ? .close(onClose) : nil) {
+                Text(title)
+            } middle: {
+                if !noted {
+                    Text("\(entry.words) \(entry.words == 1 ? "WORD" : "WORDS") // \(String(format: "%.1f", entry.turnaroundSeconds)) S")
+                        .font(Ob.mono(11.5)).foregroundStyle(mutedText).lineLimit(1).truncationMode(.tail)
+                }
+            }
+            if open {
+                CompareBoxes(raw: entry.transcription, edit: hasEdit ? entry.aiEdit : nil, inserted: entry.inserted,
+                             noEdit: safetyNet ? "The safety net rejected the AI's edit, so your words went in as spoken." : "No AI edit for this dictation.",
+                             stacked: true, width: max(40, min(width, room.width - 28)) - 10)
+                    .padding(EdgeInsets(top: 6, leading: 0, bottom: 8, trailing: 10))
+            } else if noted {
+                PillBodyText(text: entry.warning ?? "The AI's edit changed too much (or came back empty), so your words went in unchanged. "
+                    + "You can adjust the safety net on the profile's page.")
+            }
+        }
+        .modifier(PillCard(width: width, expanded: open || noted, opacity: opacity))
+        .opacity(noted || open || hovering ? 1 : 0.55)
+        .onHover { on in
+            hovering = on
+            onHover(on)
+        }
+        .onTapGesture { if !open { onOpen() } }
+    }
+
+    private var title: String {
+        !safetyNet ? "INSERTED" : edited ? "PARTLY EDITED" : "ORIGINAL WORDS INSERTED"
+    }
+
+    /// The AI's edit is shown as a diff unless there was none: no AI, or the AI's words were not used at all.
+    private var hasEdit: Bool { entry.aiEdit != nil && !(entry.warning != nil && !edited) }
+}
+
+// MARK: The three boxes
+
+/// 01 // TRANSCRIPTION · 02 // AI EDIT (struck through / added) · 03 // INSERTED. Side by side in the preview, with
+/// INSERTED brought forward (wider, framed, larger, the others at 45%) and up to 220 pt tall; stacked after a dictation
+/// went in, up to 130 pt each. Each box's COPY takes the part selected in it, or the whole box; AI EDIT's leaves out
+/// the struck-through words.
+struct CompareBoxes: View {
+    var raw: String
+    /// The text the AI made of `raw`; nil when there was no AI edit (`noEdit` shows instead).
+    var edit: String?
+    var inserted: String
+    var noEdit: String
+    var stacked: Bool
+    var focus = false
+    /// The width the boxes fill.
+    var width: CGFloat
+    @Environment(\.ob) private var ob
+    @State private var selections = [OverlayTextSelection(), OverlayTextSelection(), OverlayTextSelection()]
+    @State private var popped = false
+
+    private var maxHeight: CGFloat { stacked ? 130 : 220 }
+
+    var body: some View {
+        if stacked {
+            VStack(alignment: .leading, spacing: 0) {
+                rawBox(width: width)
+                rule
+                editBox(width: width)
+                rule
+                insertedBox(width: width)
+            }
+        } else {
+            let unit = max(20, (width - 40) / (focus ? 3.4 : 3))
+            HStack(alignment: .top, spacing: 0) {
+                rawBox(width: unit)
+                divider(hidden: false)
+                editBox(width: unit)
+                divider(hidden: focus)
+                insertedBox(width: unit * (focus ? 1.4 : 1))
+            }
+            .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var rule: some View { Rectangle().fill(darkLine).frame(height: 1).padding(.vertical, 9) }
+
+    private func divider(hidden: Bool) -> some View {
+        Rectangle().fill(hidden ? .clear : darkLine).frame(width: 1).frame(width: 20).frame(maxHeight: .infinity)
+    }
+
+    private func rawBox(width: CGFloat) -> some View {
+        box("01 // TRANSCRIPTION", copy: { selections[0].selected() ?? raw }) {
+            OverlayText(text: .plain(raw, color: lightText.opacity(0.85)), maxHeight: maxHeight, selection: selections[0])
+        }
+        .frame(width: width, alignment: .topLeading)
+        .opacity(focus ? 0.45 : 1)
+    }
+
+    private func editBox(width: CGFloat) -> some View {
+        let trimmed = edit?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return box("02 // AI EDIT", copy: { selections[1].selected(dropStruck: true) ?? trimmed ?? "" }) {
+            if let trimmed {
+                OverlayText(text: .diff(raw, trimmed, accent: Color(hex: ob.accentChoice.hex.dark)), maxHeight: maxHeight, selection: selections[1])
+            } else {
+                Text(noEdit).font(Ob.sans(14)).foregroundStyle(mutedText).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(width: width, alignment: .topLeading)
+        .opacity(focus ? 0.45 : 1)
+    }
+
+    private func insertedBox(width: CGFloat) -> some View {
+        let text = inserted.trimmingCharacters(in: .whitespacesAndNewlines)
+        let shape = RoundedRectangle(cornerRadius: 6, style: .circular)
+        return box("03 // INSERTED", label: focus ? lightText : dimText, copy: { selections[2].selected() ?? text }) {
+            OverlayText(text: .plain(text, color: lightText, size: focus ? 15.5 : 14), maxHeight: maxHeight, selection: selections[2])
+        }
+        .padding(focus ? EdgeInsets(top: 10, leading: 14, bottom: 12, trailing: 14) : EdgeInsets())
+        .background(shape.fill(focus ? lightText.opacity(0x1F / 255) : .clear))
+        .overlay(shape.strokeBorder(focus ? lightText.opacity(0x66 / 255) : .clear, lineWidth: 1))
+        .frame(width: width, alignment: .topLeading)
+        // The box that goes in pops out a little (0.96 → 1.02 over 220 ms) and stays there.
+        .scaleEffect(focus ? (popped ? 1.02 : 0.96) : 1)
+        .onAppear {
+            guard focus else { return }
+            withAnimation(.easeOut(duration: 0.22)) { popped = true }
+        }
+    }
+
+    /// A box: its name and COPY, then its text.
+    private func box<C: View>(_ title: String, label: Color = dimText, copy: @escaping () -> String,
+                              @ViewBuilder content: () -> C) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text(title.uppercased()).font(Ob.mono(10.5, .medium)).foregroundStyle(dimText)
-                Spacer()
-                TextCopyButton(text: copy, onDark: true)
+                Text(title).font(Ob.mono(10.5)).foregroundStyle(label)
+                Spacer(minLength: 8)
+                CopyLink(text: copy)
             }
-            content().font(Ob.sans(13.5)).lineSpacing(5).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            content()
         }
     }
 }
 
-/// A capsule on the dark overlay.
-struct DarkCapsule: ButtonStyle {
-    var filled = false
+/// COPY next to a box's name; COPIED ✓ for a moment after.
+private struct CopyLink: View {
+    var text: () -> String
+    @State private var copied = false
 
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(Ob.mono(11, filled ? .semibold : .medium))
-            .textCase(.uppercase)
-            .foregroundStyle(filled ? darkInk : lightText)
-            .padding(.horizontal, 14).frame(minHeight: 28)
-            .background(Capsule().fill(filled ? lightText : .clear))
-            .overlay(Capsule().strokeBorder(lightText.opacity(filled ? 1 : 0.25), lineWidth: 1))
-            .opacity(configuration.isPressed ? 0.7 : 1)
-            .contentShape(Capsule())
+    var body: some View {
+        Button {
+            let t = text().trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !t.isEmpty else { return }
+            Clipboard.copy(t)
+            copied = true
+            Task { try? await Task.sleep(for: .seconds(1.4)); copied = false }
+        } label: {
+            Text(copied ? "COPIED ✓" : "COPY").font(Ob.mono(10.5)).foregroundStyle(lightText.opacity(0.8))
+                .padding(.horizontal, 8).padding(.vertical, 1)
+                .overlay(Capsule().strokeBorder(darkLine, lineWidth: 1))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help("Copy this box (or just the part you selected)")
     }
 }
+
+/// A box's text as runs: plain, or the AI edit's diff (removed words struck through, added ones in the accent).
+struct OverlayRichText {
+    enum Style { case plain, removed, added }
+    var runs: [(String, Style)]
+    var color: Color
+    var accent: Color = lightText
+    var size: CGFloat = 14
+    /// Windows' line heights: 21 pt for the boxes at 14, 22 at 15.5.
+    var lineHeight: CGFloat { size > 14 ? 22 : 21 }
+
+    static func plain(_ text: String, color: Color, size: CGFloat = 14) -> OverlayRichText {
+        OverlayRichText(runs: [(text, .plain)], color: color, size: size)
+    }
+
+    static func diff(_ original: String, _ edited: String, accent: Color) -> OverlayRichText {
+        var runs: [(String, Style)] = []
+        for (i, token) in WordDiff.compute(original, edited).enumerated() {
+            if i > 0 { runs.append((" ", .plain)) }
+            runs.append((token.word, token.kind == .same ? .plain : token.kind == .removed ? .removed : .added))
+        }
+        return OverlayRichText(runs: runs, color: lightText, accent: accent)
+    }
+
+    private static let removedColor = Color(hex: 0xE8E7E3, alpha: 0x70 / 255)
+
+    var attributed: AttributedString {
+        var out = AttributedString()
+        for (text, style) in runs {
+            var run = AttributedString(text)
+            switch style {
+            case .plain: run.foregroundColor = color
+            case .removed:
+                run.foregroundColor = Self.removedColor
+                run.strikethroughStyle = .single
+            case .added: run.foregroundColor = accent
+            }
+            out += run
+        }
+        return out
+    }
+
+    #if os(macOS)
+    var nsAttributed: NSAttributedString {
+        let para = NSMutableParagraphStyle()
+        para.minimumLineHeight = lineHeight
+        para.maximumLineHeight = lineHeight
+        let font = NSFont.systemFont(ofSize: size)
+        let out = NSMutableAttributedString()
+        for (text, style) in runs {
+            var attrs: [NSAttributedString.Key: Any] = [.font: font, .paragraphStyle: para]
+            switch style {
+            case .plain: attrs[.foregroundColor] = NSColor(color)
+            case .removed:
+                attrs[.foregroundColor] = NSColor(Self.removedColor)
+                attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
+            case .added: attrs[.foregroundColor] = NSColor(accent)
+            }
+            out.append(NSAttributedString(string: text, attributes: attrs))
+        }
+        return out
+    }
+    #endif
+}
+
+/// What is selected in a box, for its COPY. The overlay never takes keyboard focus, so ⌘C can't copy; COPY does.
+final class OverlayTextSelection {
+    #if os(macOS)
+    weak var view: NSTextView?
+    #endif
+
+    /// The selected text, or nil when nothing is selected. `dropStruck` leaves out struck-through (removed) words.
+    func selected(dropStruck: Bool = false) -> String? {
+        #if os(macOS)
+        guard let view, let storage = view.textStorage else { return nil }
+        let range = view.selectedRange()
+        guard range.location != NSNotFound, range.length > 0, NSMaxRange(range) <= storage.length else { return nil }
+        let part = storage.attributedSubstring(from: range)
+        guard dropStruck else { return part.string }
+        var kept = ""
+        part.enumerateAttribute(.strikethroughStyle, in: NSRange(location: 0, length: part.length)) { value, r, _ in
+            if (value as? Int ?? 0) == 0 { kept += (part.string as NSString).substring(with: r) }
+        }
+        return kept.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        #else
+        return nil
+        #endif
+    }
+}
+
+#if os(macOS)
+/// A box's text: selectable with the mouse (in the panel that never becomes key), scrolling past `maxHeight`.
+struct OverlayText: NSViewRepresentable {
+    var text: OverlayRichText
+    var maxHeight: CGFloat
+    var selection: OverlayTextSelection
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NSScrollView()
+        scroll.drawsBackground = false
+        scroll.borderType = .noBorder
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.scrollerStyle = .overlay
+        scroll.scrollerKnobStyle = .light
+        let view = OverlayTextView(usingTextLayoutManager: false)
+        view.isEditable = false
+        view.isSelectable = true
+        view.drawsBackground = false
+        view.textContainerInset = .zero
+        view.textContainer?.lineFragmentPadding = 0
+        view.textContainer?.widthTracksTextView = true
+        view.isVerticallyResizable = true
+        view.isHorizontallyResizable = false
+        view.autoresizingMask = [.width]
+        view.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
+        view.insertionPointColor = .clear
+        // Windows' selection: paper at 30%.
+        view.selectedTextAttributes = [.backgroundColor: NSColor(Color(hex: 0xE8E7E3, alpha: 0.3))]
+        scroll.documentView = view
+        return scroll
+    }
+
+    func updateNSView(_ scroll: NSScrollView, context: Context) {
+        guard let view = scroll.documentView as? NSTextView else { return }
+        let new = text.nsAttributed
+        if view.textStorage?.isEqual(to: new) != true { view.textStorage?.setAttributedString(new) }
+        selection.view = view
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSScrollView, context: Context) -> CGSize? {
+        let width = proposal.width ?? 300
+        return CGSize(width: width, height: min(Self.height(of: text.nsAttributed, width: width), maxHeight))
+    }
+
+    static func height(of text: NSAttributedString, width: CGFloat) -> CGFloat {
+        let storage = NSTextStorage(attributedString: text)
+        let layout = NSLayoutManager()
+        let container = NSTextContainer(size: CGSize(width: width, height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        layout.addTextContainer(container)
+        storage.addLayoutManager(layout)
+        layout.ensureLayout(for: container)
+        return ceil(layout.usedRect(for: container).height)
+    }
+}
+
+/// Takes the first click (the panel is never key) and never drags the panel: a drag in it selects.
+private final class OverlayTextView: NSTextView {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override var mouseDownCanMoveWindow: Bool { false }
+}
+#else
+/// A box's text on iPhone: selectable, scrolling past `maxHeight`. COPY copies the whole box.
+struct OverlayText: View {
+    var text: OverlayRichText
+    var maxHeight: CGFloat
+    var selection: OverlayTextSelection
+
+    var body: some View {
+        let content = Text(text.attributed).font(Ob.sans(text.size)).lineSpacing(text.lineHeight - text.size * 1.2)
+            .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        HeightCap(height: maxHeight) {
+            ViewThatFits(in: .vertical) {
+                content
+                ScrollView { content }.scrollIndicators(.automatic)
+            }
+        }
+    }
+}
+#endif

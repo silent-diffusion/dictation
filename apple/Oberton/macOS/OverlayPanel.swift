@@ -5,19 +5,30 @@ import ObertonCore
 import SwiftUI
 
 /// The pill: always on top, on every Space and over full-screen apps, and never takes focus from the app being
-/// dictated into. Shown while dictating or reading aloud.
+/// dictated into. Shown while dictating, and for notices.
 ///
 /// The panel is exactly as big as what it shows (plus room for the shadows): SwiftUI reports the content's size, and
 /// the panel is resized around it, anchored at the chosen corner or edge and clamped into the screen's visible area.
 /// A fixed large window can't do that: content bigger than it is clipped, and its empty parts sit over other apps.
+///
+/// Dragged somewhere, it stays there until Oberton quits or Settings › Layout moves it (Windows' WindowDrag): it keeps
+/// its centre and, in the lower half of the screen, its bottom edge (the top edge in the upper half), so it grows away
+/// from the edge it is near.
 @MainActor
 final class OverlayController {
     private let panel: NSPanel
     private let host: NSHostingView<AnyView>
     private let model: AppModel
+    private let flash = OverlayFlash()
     private var bag: Set<AnyCancellable> = []
     private var contentSize: CGSize?
     private var room: CGSize?
+    /// Where it was dragged to: centre x, and the bottom or top edge (`fromBottom`) — nil until it is dragged.
+    private var anchor: CGPoint?
+    private var fromBottom = true
+    /// The frame is being set by `layout`, not dragged by the user.
+    private var placing = false
+    private var flashTask: Task<Void, Never>?
     static let margin: CGFloat = 8
     static let padding: CGFloat = 16
 
@@ -40,23 +51,63 @@ final class OverlayController {
         host.sizingOptions = []
         panel.contentView = host
 
-        model.$phase.combineLatest(model.$settings, model.$profileNotice)
+        // After each change has landed (objectWillChange fires before it; the hop to the main run loop waits it out).
+        model.objectWillChange.merge(with: flash.objectWillChange)
             .receive(on: RunLoop.main)
-            .sink { [weak self] phase, settings, notice in
-                self?.update(visible: settings.showOverlay && (phase != .idle || notice), settings: settings)
-            }
+            .sink { [weak self] _ in self?.update() }
+            .store(in: &bag)
+        // Settings › Layout moved the overlay (or the player, which can follow it): forget the dragged spot and flash
+        // the pill at the new one (App.PreviewOverlay).
+        model.$settings.map { [$0.overlayPosition.rawValue, String(describing: $0.readerPosition)] }.removeDuplicates().dropFirst()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.previewPosition() }
             .store(in: &bag)
         NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
             .sink { [weak self] _ in if self?.panel.isVisible == true { self?.layout(fresh: false) } }
             .store(in: &bag)
+        NotificationCenter.default.publisher(for: NSWindow.didMoveNotification, object: panel)
+            .sink { [weak self] _ in self?.moved() }
+            .store(in: &bag)
     }
 
-    private var screen: CGRect? { (panel.isVisible ? panel.screen : nil)?.visibleFrame ?? NSScreen.main?.visibleFrame }
+    /// The screen it is on, or the one it was dragged to, or the main one.
+    private var screen: CGRect? {
+        if panel.isVisible, let s = panel.screen { return s.visibleFrame }
+        if let anchor, let s = NSScreen.screens.first(where: { $0.frame.insetBy(dx: -1, dy: -1).contains(anchor) }) { return s.visibleFrame }
+        return NSScreen.main?.visibleFrame
+    }
 
-    private func update(visible: Bool, settings: AppSettings) {
+    /// Shown while dictating (with "Show overlay" on); the preview, NO PLACE TO PASTE, notices, the
+    /// profile switch and the position flash show either way, as on Windows.
+    private func update() {
+        let phase = model.phase
+        let visible = phase == .preview || phase == .placing || model.overlayNotice != nil || model.profileNotice || flash.on
+            || { if case .failed = phase { true } else { false } }()
+            || (model.settings.showOverlay && phase != .idle)
         guard visible else { panel.orderOut(nil); return }
         if !panel.isVisible { layout(fresh: true) }
         panel.orderFrontRegardless()
+    }
+
+    /// ● DICTATION APPEARS HERE for 1.5 s at the new position, unless a dictation is under way.
+    private func previewPosition() {
+        anchor = nil
+        guard !model.phase.isBusy else { return }
+        flash.on = true
+        if panel.isVisible { layout(fresh: true) }
+        flashTask?.cancel()
+        flashTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1.5))
+            if !Task.isCancelled { self?.flash.on = false }
+        }
+    }
+
+    /// The user dragged it: remember the spot (WindowDrag.Remember).
+    private func moved() {
+        guard !placing, panel.isVisible, let screen else { return }
+        let f = panel.frame
+        fromBottom = f.midY < screen.midY
+        anchor = CGPoint(x: f.midX, y: fromBottom ? f.minY : f.maxY)
     }
 
     /// Hands the content the room the screen has, then sizes and places the panel. `fresh` places it at the chosen
@@ -67,12 +118,25 @@ final class OverlayController {
         let room = CGSize(width: screen.width - inset, height: screen.height - inset)
         if room != self.room {
             self.room = room
-            host.rootView = AnyView(OverlayView { [weak self] in self?.fit($0) }
+            host.rootView = AnyView(OverlayView(flash: flash) { [weak self] in self?.fit($0) }
                 .environmentObject(model).environment(\.overlayRoom, room))
         }
         let size = contentSize ?? host.fittingSize
-        panel.setFrame(Self.frame(size: size, position: model.settings.overlayPosition, screen: screen,
-                                  current: fresh ? nil : panel.frame), display: true)
+        let frame = anchor.map { Self.frame(size: size, anchor: $0, fromBottom: fromBottom, screen: screen) }
+            ?? Self.frame(size: size, position: model.settings.overlayPosition, screen: screen, current: fresh ? nil : panel.frame)
+        placing = true
+        panel.setFrame(frame, display: true)
+        placing = false
+    }
+
+    /// Where a panel of `size` goes when it was dragged: centred on `anchor.x`, its bottom (or top) edge on `anchor.y`,
+    /// kept inside the screen.
+    static func frame(size: CGSize, anchor: CGPoint, fromBottom: Bool, screen: CGRect) -> CGRect {
+        var x = anchor.x - size.width / 2
+        var y = fromBottom ? anchor.y : anchor.y - size.height
+        x = max(screen.minX, min(x, screen.maxX - size.width))
+        y = min(screen.maxY - size.height, max(y, screen.minY))
+        return CGRect(origin: CGPoint(x: x.rounded(), y: y.rounded()), size: size)
     }
 
     private func fit(_ size: CGSize) {
@@ -125,29 +189,41 @@ enum OverlaySnapshots {
         partly.warning = "The AI's edit of 1 of 3 parts failed the safety net; those parts were inserted unchanged."
         partly.safetyNet = true
         let long = String(repeating: "and then we collect feedback from all of them over the following week, ", count: 30)
+        let narrow = CGSize(width: 340, height: 600)
+        var raw = clean
+        raw.aiEdit = nil
+        raw.inserted = raw.transcription
+        let hotkey = model.settings.hotkey
+        let model8b = "qwen3:8b"
         let shots: [(String, CGSize, AnyView)] = [
-            ("pill-recording", room, AnyView(PillContent(phase: .recording, profile: "Light Cleanup", startedAt: .now, opacity: opacity))),
-            ("pill-short", room, AnyView(PillContent(phase: .done("Inserted into Mail"), profile: "", opacity: opacity))),
-            ("pill-transcribing", room, AnyView(PillContent(phase: .transcribing, profile: "", opacity: opacity))),
-            ("pill-accessibility", room, AnyView(PillContent(phase: .done(error), profile: "", opacity: opacity))),
-            ("pill-accessibility-narrow", CGSize(width: 340, height: 600), AnyView(PillContent(phase: .done(error), profile: "", opacity: opacity))),
+            ("pill-starting", room, AnyView(PillContent(phase: .starting, profile: "Light Cleanup", opacity: opacity))),
+            ("pill-recording", room, AnyView(PillContent(phase: .recording, profile: "Light Cleanup", level: 0.4, startedAt: .now - 7, opacity: opacity))),
+            ("pill-recording-loading", room, AnyView(PillContent(phase: .recording, profile: "Light Cleanup", startedAt: .now - 3, opacity: opacity, loadingSpeech: true))),
+            ("pill-transcribing", room, AnyView(PillContent(phase: .transcribing, profile: "Light Cleanup", opacity: opacity, audioSeconds: 7.4))),
+            ("pill-transcribing-loading", room, AnyView(PillContent(phase: .transcribing, profile: "Light Cleanup", opacity: opacity, audioSeconds: 3, loadingSpeech: true))),
+            ("pill-processing", room, AnyView(PillContent(phase: .processing, profile: "Light Cleanup", live: entry.transcription, opacity: opacity, aiModel: model8b))),
+            ("pill-final-pass", room, AnyView(PillContent(phase: .processing, profile: "Light Cleanup", live: long, opacity: opacity, aiModel: model8b, finalPass: true))),
+            ("pill-inserting", room, AnyView(PillContent(phase: .inserting, profile: "Light Cleanup", opacity: opacity))),
             ("pill-long-profile", room, AnyView(PillContent(phase: .recording, profile: "Formal email to the leadership team, with British spelling and no contractions", startedAt: .now, opacity: opacity))),
-            ("pill-before-accessibility", room, AnyView(
-                HStack(spacing: 14) {
-                    Text("✓")
-                    Text(error.uppercased()).lineLimit(2).frame(maxWidth: 320, alignment: .leading)
-                    Text("挿入")
-                }
-                .font(Ob.mono(11, .medium)).foregroundStyle(Color(hex: 0xE8E7E3))
-                .padding(EdgeInsets(top: 8, leading: 18, bottom: 8, trailing: 8)).frame(minHeight: 40)
-                .background(Capsule().fill(Color(hex: 0x0D0D0C).opacity(opacity))))),
             ("pill-live-short", room, AnyView(PillContent(phase: .recording, profile: "Light Cleanup", startedAt: .now,
                                                           live: "so the plan for friday is", opacity: opacity))),
             ("pill-live-long", room, AnyView(PillContent(phase: .recording, profile: "Light Cleanup", startedAt: .now,
                                                          live: "um so the plan for friday is we ship the beta to the uh first ten testers " + long, opacity: opacity))),
-            ("pill-live-transcribing", room, AnyView(PillContent(phase: .transcribing, profile: "", live: long, opacity: opacity))),
-            ("pill-live-narrow", CGSize(width: 340, height: 600), AnyView(PillContent(phase: .recording, profile: "Light Cleanup", startedAt: .now,
-                                                                                      live: long, opacity: opacity))),
+            ("pill-live-transcribing", room, AnyView(PillContent(phase: .transcribing, profile: "Light Cleanup", live: long, opacity: opacity, audioSeconds: 64))),
+            ("pill-live-narrow", narrow, AnyView(PillContent(phase: .recording, profile: "Light Cleanup", startedAt: .now, live: long, opacity: opacity))),
+            ("preview", room, AnyView(PreviewPill(entry: clean, profile: "Light Cleanup", hotkey: hotkey, opacity: opacity))),
+            ("preview-no-ai", room, AnyView(PreviewPill(entry: raw, profile: "Raw", hotkey: hotkey, opacity: opacity))),
+            ("preview-long", room, AnyView(PreviewPill(entry: HistoryEntry(transcription: long, aiEdit: long.capitalized, inserted: long.capitalized,
+                                                                         profileName: "Light Cleanup", model: nil, appName: "Notes", seconds: 90,
+                                                                         turnaroundSeconds: 1, warning: nil),
+                                                       profile: "Light Cleanup", hotkey: hotkey, opacity: opacity))),
+            ("preview-narrow", CGSize(width: 600, height: 700), AnyView(PreviewPill(entry: clean, profile: "Light Cleanup", hotkey: hotkey, opacity: opacity))),
+            ("placing", room, AnyView(PlacingPill(profile: "Light Cleanup", hotkey: hotkey, opacity: opacity))),
+            ("notice-info", room, AnyView(NoticePill(text: "Copied to your clipboard. Paste it wherever you like.", kind: .info, opacity: opacity))),
+            ("notice-warning", room, AnyView(NoticePill(text: "The microphone is silent. Check the microphone in System Settings › Privacy & Security, or pick another mic.", kind: .warning, opacity: opacity))),
+            ("notice-error", room, AnyView(NoticePill(text: error, kind: .error, opacity: opacity))),
+            ("notice-hotkey", room, AnyView(NoticePill(text: "Ctrl+Alt+D is already used by another app. Choose a different shortcut under Settings › Hotkeys.", kind: .error, opacity: opacity))),
+            ("position", room, AnyView(PositionPill(opacity: opacity))),
             ("profile-notice", room, AnyView(ProfilePill(name: "Light Cleanup", index: 1, count: 4, opacity: opacity))),
             ("profile-notice-long", room, AnyView(ProfilePill(name: "Formal email to the leadership team, with British spelling and no contractions",
                                                               index: 3, count: 6, opacity: opacity))),
@@ -187,12 +263,37 @@ enum OverlaySnapshots {
                 }
             }
         }
+        // A box's COPY takes the selected part; AI EDIT's leaves out the struck-through words.
+        let selection = OverlayTextSelection()
+        let textView = NSTextView()
+        textView.textStorage?.setAttributedString(OverlayRichText.diff("um so the plan is fine", "So the plan is fine.", accent: .blue).nsAttributed)
+        selection.view = textView
+        print("copy, nothing selected: \(selection.selected(dropStruck: true) ?? "nil (whole box)")")
+        textView.setSelectedRange(NSRange(location: 0, length: textView.string.count))
+        print("copy, all selected: '\(selection.selected(dropStruck: true) ?? "nil")' (shown: '\(textView.string)')")
+        textView.setSelectedRange(NSRange(location: 3, length: 9))
+        print("copy, part selected: '\(selection.selected() ?? "nil")'")
+        // A dragged pill keeps its centre and its bottom (or top) edge as it grows, and stays on screen.
+        for (anchor, bottom) in [(CGPoint(x: 700, y: 60), true), (CGPoint(x: 700, y: 900), false), (CGPoint(x: 1500, y: 30), true)] {
+            for size in [CGSize(width: 552, height: 90), CGSize(width: 924, height: 400)] {
+                let f = OverlayController.frame(size: size, anchor: anchor, fromBottom: bottom, screen: screen)
+                let inside = f.minX >= screen.minX && f.minY >= screen.minY && f.maxX <= screen.maxX && f.maxY <= screen.maxY
+                print("anchor \(anchor) \(bottom ? "bottom" : "top") \(Int(size.width))×\(Int(size.height)) → \(f) midX \(f.midX) \(bottom ? "minY \(f.minY)" : "maxY \(f.maxY)") \(inside ? "inside" : "OFF SCREEN")")
+            }
+        }
         exit(0)
     }
 }
 #endif
 
+/// The position flash is on (Settings › Layout just moved the overlay).
+@MainActor
+final class OverlayFlash: ObservableObject {
+    @Published var on = false
+}
+
 struct OverlayView: View {
+    @ObservedObject var flash: OverlayFlash
     var onSize: (CGSize) -> Void = { _ in }
     @EnvironmentObject var model: AppModel
     @State private var showReceipt = false
@@ -200,10 +301,11 @@ struct OverlayView: View {
     var body: some View {
         let alignment = model.settings.overlayPosition.alignment
         VStack(alignment: alignment.horizontal, spacing: 10) {
-            if model.phase == .preview, let pending = model.pending {
-                ReceiptCard(entry: pending, preview: true) { model.cancel() }
+            if flash.on, !model.phase.isBusy {
+                PositionPill(opacity: model.settings.overlayOpacity)
+            } else {
+                OverlayPill(reader: model.reader, open: $showReceipt)
             }
-            OverlayPill(reader: model.reader, open: $showReceipt)
         }
         .padding(OverlayController.padding)
         .fixedSize()

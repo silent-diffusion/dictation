@@ -66,9 +66,6 @@ struct PhoneOverlay: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            if model.phase == .preview, let pending = model.pending {
-                ReceiptCard(entry: pending, preview: true) { model.cancel() }.frame(maxWidth: 360)
-            }
             OverlayPill(reader: model.reader, open: $showReceipt)
         }
         .padding(.horizontal, 12)
@@ -94,6 +91,8 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
     private var overlay: OverlayController?
     private var reader: ReaderController?
     private var watch: AnyCancellable?
+    private var escapeWatch: AnyCancellable?
+    private var shownHotkeyError: String?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         #if DEBUG
@@ -110,6 +109,12 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
             .combineLatest(HotkeyStatus.shared.$recording.map { $0 != nil }.removeDuplicates(),
                            model.notes.$current.map { $0 != nil }.removeDuplicates())
             .sink { [weak self] keys, paused, notes in self?.registerHotkeys(keys, paused: paused, notesRecording: notes) }
+        // Esc discards, held only while the overlay waits for a decision (App.xaml.cs).
+        escapeWatch = model.$phase.map { $0 == .preview || $0 == .placing }.removeDuplicates()
+            .sink { [weak self] waiting in
+                guard let self else { return }
+                if let error = hotkeys.holdEscape(waiting ? { [weak self] in self?.model.cancel() } : nil) { NSLog("Oberton: %@", error) }
+            }
         Task { await platform.requestPermissions() }
     }
 
@@ -128,6 +133,10 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         ])
         HotkeyStatus.shared.error = errors.isEmpty ? nil : errors.joined(separator: "\n")
         if !errors.isEmpty { NSLog("Oberton: %@", errors.joined(separator: " ")) }
+        // Also on the overlay, as an error notice (App.xaml.cs ApplyHotkeys), once per new problem.
+        let error = errors.isEmpty ? nil : errors.joined(separator: "\n")
+        if let error, error != shownHotkeyError { model.notice(error, kind: .error) }
+        shownHotkeyError = error
     }
 }
 
@@ -200,10 +209,11 @@ enum Snapshots {
         HotkeyStatus.shared.error = nil
         HotkeyStatus.shared.recording = nil
         let overlay = VStack(spacing: 16) {
-            ReceiptCard(entry: HistoryEntry(transcription: "um so the plan for friday is we ship the beta to the uh first ten testers and then we collect feedback",
+            ReceiptPill(entry: HistoryEntry(transcription: "um so the plan for friday is we ship the beta to the uh first ten testers and then we collect feedback",
                                             aiEdit: "The plan for Friday is to ship the beta to the first ten testers, and then collect feedback.",
                                             inserted: "The plan for Friday is to ship the beta to the first ten testers, and then collect feedback.",
-                                            profileName: "Light Cleanup", model: nil, appName: "Mail", seconds: 14, turnaroundSeconds: 1.2, warning: nil)) {}
+                                            profileName: "Light Cleanup", model: nil, appName: "Mail", seconds: 14, turnaroundSeconds: 1.2, warning: nil),
+                        opacity: model.settings.overlayOpacity)
             PillContent(phase: .recording, profile: "Light Cleanup", startedAt: .now,
                         live: "so the plan for friday is we ship the beta to the first ten testers and", opacity: model.settings.overlayOpacity)
         }

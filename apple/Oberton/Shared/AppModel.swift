@@ -64,7 +64,13 @@ final class AppModel: ObservableObject {
     @Published var profiles: [Profile] { didSet { profilesFile.save(profiles) } }
     @Published private(set) var history: [HistoryEntry]
     /// A dictation pauses Extended Notes while it runs (both would hear the same voice).
-    @Published private(set) var phase: Phase = .idle { didSet { notes.setDictating(phase.isBusy) } }
+    @Published private(set) var phase: Phase = .idle {
+        didSet {
+            notes.setDictating(phase.isBusy)
+            // A new dictation state takes the pill from a notice, as on Windows.
+            if phase != oldValue, phase.isBusy { overlayNotice = nil }
+        }
+    }
     @Published private(set) var liveText = ""
     @Published private(set) var level: Float = 0
     @Published private(set) var startedAt: Date?
@@ -80,8 +86,9 @@ final class AppModel: ObservableObject {
     @Published var receipt: HistoryEntry?
     /// The cycle-profile hotkey was just pressed: the overlay shows which profile is on now, for 1.5 s.
     @Published private(set) var profileNotice = false
-    /// A message for the overlay (Windows' `Notice`): the silent microphone, the length limit, an AI problem.
-    @Published private(set) var notice: Notice?
+    /// The message the overlay shows now (Windows' `ShowMessage`): the silent microphone, the length limit, an AI
+    /// problem, a hotkey that couldn't be registered. Set through `notice(_:kind:)`.
+    @Published private(set) var overlayNotice: OverlayNotice?
     /// The speech model is still loading while recording goes on (it catches up on what was said).
     @Published private(set) var speechLoading = false
     /// Settings › Speech recognition's status line ("Speech: Ready · …"), and whether it is a good one.
@@ -110,8 +117,10 @@ final class AppModel: ObservableObject {
     private var noticeTask: Task<Void, Never>?
     private var placeTask: Task<Void, Never>?
     private var placingEntry: HistoryEntry?
+    private var overlayNoticeTask: Task<Void, Never>?
     private var limitTimer: Timer?
-    private var stoppedAt: Date?
+    /// When the recording stopped (the pill's "N S OF AUDIO").
+    private(set) var stoppedAt: Date?
     /// Loads the speech model if needed, then hands the recognizer what was recorded so far.
     private var engineTask: Task<Void, Error>?
     private var warmTask: Task<Void, Never>?
@@ -288,8 +297,8 @@ final class AppModel: ObservableObject {
             if Task.isCancelled { return }
             // No phantom text: silence, a click or a stock phrase the recognizer made up inserts nothing.
             if SpeechGuard.shouldDiscard(raw, recorded: seconds, peakLevel: peak) {
-                phase = .done("I didn't catch anything. Try again.")
-                scheduleIdle()
+                phase = .idle
+                notice("I didn't catch anything. Try again.")
                 return
             }
             await finish(raw: raw, seconds: seconds, profile: activeProfile)
@@ -314,6 +323,7 @@ final class AppModel: ObservableObject {
     private func finish(raw: String, seconds: Double, profile: Profile) async {
         var result = ProcessResult(text: raw, modified: false)
         if !profile.isRaw {
+            liveText = raw // the overlay shows what is being tidied
             phase = .processing
             result = await processor.process(raw, profile: profile)
             if Task.isCancelled { return }
@@ -405,9 +415,9 @@ final class AppModel: ObservableObject {
         platform?.copy(entry.inserted)
         record(entry)
         receipt = nil
-        phase = .done(timedOut ? "No place to paste was chosen, so the text was copied to your clipboard."
-                                : "Copied to your clipboard. Paste it wherever you like.")
-        scheduleIdle(after: 6)
+        phase = .idle
+        notice(timedOut ? "No place to paste was chosen, so the text was copied to your clipboard."
+                        : "Copied to your clipboard. Paste it wherever you like.")
     }
 
     private func endPlacing() {
@@ -417,11 +427,41 @@ final class AppModel: ObservableObject {
         placingText = nil
     }
 
+    /// As on Windows: back to idle, and the error as the overlay's SOMETHING WENT WRONG notice.
     private func fail(_ error: Error) {
         level = 0
-        phase = .failed(error.localizedDescription)
-        scheduleIdle(after: 6)
+        phase = .idle
+        notice(error.localizedDescription, kind: .error)
     }
+
+    // MARK: Notices
+
+    enum NoticeKind { case info, warning, error }
+
+    struct OverlayNotice: Equatable {
+        var text: String
+        var kind: NoticeKind
+        let id = UUID()
+    }
+
+    /// A message on the overlay (Windows' `ShowMessage`): OBERTON (info), HEADS UP (warning) or SOMETHING WENT WRONG
+    /// (error), with `text` as the body. It stays for its length / 15 seconds, between 3 and 9. Info is skipped while
+    /// a dictation is under way. Shown even with "Show overlay" off, as on Windows.
+    func notice(_ text: String, kind: NoticeKind = .info) {
+        if kind == .info, phase.isBusy { return }
+        let notice = OverlayNotice(text: text, kind: kind)
+        overlayNotice = notice
+        overlayNoticeTask?.cancel()
+        overlayNoticeTask = Task {
+            try? await Task.sleep(for: .seconds(Self.noticeSeconds(text)))
+            if !Task.isCancelled, overlayNotice?.id == notice.id { overlayNotice = nil }
+        }
+    }
+
+    static func noticeSeconds(_ text: String) -> Double { min(9, max(3, Double(text.count) / 15)) }
+
+    /// The dictation engine's name for `notice(_:kind:)`.
+    func notify(_ text: String, level: NoticeKind) { notice(text, kind: level) }
 
     private func scheduleIdle(after seconds: Double = 2.5) {
         let current = phase
@@ -457,26 +497,6 @@ final class AppModel: ObservableObject {
         noticeTask = Task {
             try? await Task.sleep(for: .seconds(1.5))
             if !Task.isCancelled { profileNotice = false }
-        }
-    }
-
-    // MARK: Notices
-
-    enum NoticeLevel { case info, warning, error }
-
-    struct Notice: Equatable {
-        var text: String
-        var level: NoticeLevel
-        var id = UUID()
-    }
-
-    /// Show a message on the overlay for a few seconds (longer for a warning or an error).
-    func notify(_ text: String, level: NoticeLevel) {
-        let shown = Notice(text: text, level: level)
-        notice = shown
-        Task {
-            try? await Task.sleep(for: .seconds(level == .info ? 4 : 8))
-            if notice?.id == shown.id { notice = nil }
         }
     }
 
@@ -790,9 +810,9 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// An info notice for Read aloud. Until the overlay's notices land, the player shows it as a card with OK.
+    /// An info notice for Read aloud, on the overlay (App.OnSpeakHotkey).
     private func readerNotice(_ text: String) {
-        reader.showMessage(text)
+        notice(text)
     }
 
     // MARK: Models
