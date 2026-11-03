@@ -19,9 +19,9 @@ struct AboutSection: View {
             }
             part("D.2.2", "How it works", "口述") {
                 steps(howItWorks)
-                prose(Text("If the AI fails or its edit strays too far from what you said (the profile's safety net), your own words are inserted instead, so a dictation is never lost. The dashboard's signal path lights each step while it works. Read aloud uses the voices built into \(Device.system). ")
+                prose(Text("If the AI fails or its edit strays too far from what you said (the profile's safety net), your own words are inserted instead, so a dictation is never lost. The dashboard's signal path lights each step while it works. Read aloud uses Kokoro, Piper or the voices built into \(Device.system). ")
                       + ink("Nothing leaves your \(Device.noun)")
-                      + Text(" unless you turn off Keep everything offline and choose a cloud model; the only other network use is downloading the speech and AI models you pick."))
+                      + Text(" unless you turn off Keep everything offline and choose a cloud model; the only other network use is downloading the models and voices you pick" + (Distribution.isDirect ? ", and checking for updates." : ".")))
             }
             part("D.2.3", "How Extended Notes works", "記録") {
                 prose(Text("A session runs four steps side by side, each on its own rhythm, so the text keeps up with a lecture of any length while the AI only ever reads as much as fits in its memory at once."))

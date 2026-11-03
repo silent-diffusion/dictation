@@ -80,7 +80,11 @@ struct ReaderCard: View {
                     }
                     .buttonStyle(SpeedPress())
                     .help("Choose a speed").accessibilityLabel("Choose a speed")
+                    #if os(macOS)
+                    .background(FloatingMenu(isPresented: $speeds) { speedGrid })
+                    #else
                     .popover(isPresented: $speeds, arrowEdge: .top) { speedGrid }
+                    #endif
                     RoundButton(size: 30, help: "Faster") { setSpeed(player.speed + ReadAloudPlayer.speedStep) } label: {
                         Image(systemName: "plus").font(.system(size: 10, weight: .semibold))
                     }
@@ -175,7 +179,9 @@ struct ReaderCard: View {
             }
         }
         .padding(8)
-        .background(darkInk.opacity(0.95))
+        // Windows' popup: #F20D0D0C, a 22 % ink line, corner 10.
+        .background(RoundedRectangle(cornerRadius: 10).fill(darkInk.opacity(0.95)))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Self.ink.opacity(0.22), lineWidth: 1))
         .presentationBackground(darkInk.opacity(0.95))
     }
 
@@ -350,6 +356,76 @@ private struct SpeedPress: ButtonStyle {
         }
     }
 }
+
+#if os(macOS)
+/// Windows' speed Popup: a flat panel 6 pt above its button that fades in, never takes the keyboard focus from the app
+/// being read (a SwiftUI popover is a window that can), moves with the player, and closes on any click elsewhere.
+private struct FloatingMenu<Content: View>: NSViewRepresentable {
+    @Binding var isPresented: Bool
+    @ViewBuilder var content: Content
+
+    func makeNSView(context: Context) -> NSView { NSView() }
+
+    func updateNSView(_ anchor: NSView, context: Context) {
+        let c = context.coordinator
+        c.close = { isPresented = false }
+        if isPresented { c.show(AnyView(content), above: anchor) } else { c.hide() }
+    }
+
+    static func dismantleNSView(_ anchor: NSView, coordinator: Coordinator) { coordinator.hide() }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    @MainActor final class Coordinator {
+        var close: () -> Void = {}
+        private var panel: NSPanel?
+        private var monitors: [Any] = []
+
+        func show(_ content: AnyView, above anchor: NSView) {
+            guard let parent = anchor.window else { return }
+            let host = NSHostingView(rootView: content.fixedSize())
+            let size = host.fittingSize
+            let panel = self.panel ?? {
+                let p = NSPanel(contentRect: .zero, styleMask: [.nonactivatingPanel, .borderless], backing: .buffered, defer: true)
+                p.isOpaque = false
+                p.backgroundColor = .clear
+                p.hasShadow = false
+                p.becomesKeyOnlyIfNeeded = true
+                p.level = parent.level
+                return p
+            }()
+            panel.contentView = host
+            let button = parent.convertToScreen(anchor.convert(anchor.bounds, to: nil))
+            panel.setFrame(CGRect(x: (button.midX - size.width / 2).rounded(), y: button.maxY + 6, width: size.width, height: size.height), display: true)
+            if self.panel == nil {
+                self.panel = panel
+                panel.alphaValue = 0
+                parent.addChildWindow(panel, ordered: .above)
+                NSAnimationContext.runAnimationGroup { $0.duration = 0.15; panel.animator().alphaValue = 1 }
+                // A click anywhere but on the menu closes it (the button's own click toggles it).
+                let outside: (NSEvent) -> Void = { [weak self, weak anchor] e in
+                    guard let self, e.window !== self.panel else { return }
+                    if e.window === parent, let anchor, anchor.bounds.contains(anchor.convert(e.locationInWindow, from: nil)) { return }
+                    DispatchQueue.main.async { self.close() }
+                }
+                if let m = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: outside) { monitors.append(m) }
+                if let m = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: { outside($0); return $0 }) { monitors.append(m) }
+            } else {
+                panel.orderFront(nil)
+            }
+        }
+
+        func hide() {
+            monitors.forEach(NSEvent.removeMonitor)
+            monitors = []
+            guard let panel else { return }
+            panel.parent?.removeChildWindow(panel)
+            panel.orderOut(nil)
+            self.panel = nil
+        }
+    }
+}
+#endif
 
 /// Progress through the whole text: a ruler (a tick every 8 pt over a hairline), filled in the accent as it reads.
 private struct Ruler: View {
@@ -771,7 +847,8 @@ struct ReaderPreview: View {
             VStack(alignment: .leading, spacing: 0) {
                 RoundedRectangle(cornerRadius: 3).fill(ob.muted).frame(width: 120, height: 7)
                 ForEach([0, 30, 10, 50] as [CGFloat], id: \.self) { trailing in
-                    RoundedRectangle(cornerRadius: 2).fill(ob.divider).frame(height: 5).padding(.trailing, trailing).padding(.top, trailing == 0 ? 12 : 8)
+                    // Windows' Ob.Track lines (the muted tone).
+                    RoundedRectangle(cornerRadius: 2).fill(ob.muted).frame(height: 5).padding(.trailing, trailing).padding(.top, trailing == 0 ? 12 : 8)
                 }
             }
             .padding(EdgeInsets(top: 22, leading: 20, bottom: 0, trailing: 20))
@@ -782,8 +859,9 @@ struct ReaderPreview: View {
                  + Text(" hear it read aloud.").foregroundStyle(ReaderCard.ink.opacity(0.45)))
                     .font(Ob.sans(12)).frame(maxWidth: 220, alignment: .leading).fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 10) {
-                    Image(systemName: "play.fill").font(.system(size: 8)).foregroundStyle(darkInk)
-                        .frame(width: 22, height: 22).background(Circle().fill(ReaderCard.ink))
+                    // Windows' sharp triangle, M 8,6 L 16,11 L 8,16.
+                    Path { p in p.move(to: CGPoint(x: 8, y: 6)); p.addLine(to: CGPoint(x: 16, y: 11)); p.addLine(to: CGPoint(x: 8, y: 16)); p.closeSubpath() }
+                        .fill(darkInk).frame(width: 22, height: 22).background(Circle().fill(ReaderCard.ink))
                     Rectangle().fill(ReaderCard.ink.opacity(0.22)).frame(width: 120, height: 1)
                     Text("1.0×").font(Ob.mono(11)).foregroundStyle(ReaderCard.ink.opacity(0.72))
                 }
