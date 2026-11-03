@@ -332,7 +332,7 @@ final class NotesRecorder: ObservableObject {
 
     private func ask(_ instructions: String, _ text: String, _ maxTokens: Int) async throws -> String {
         let id = await resolveModel()
-        let backend = try TextProcessor(settings: settings()).backend(for: id)
+        let backend = try await TextProcessor(settings: settings()).backend(for: id, ask: true)
         return try await backend.complete(system: instructions, examples: [], user: text, maxTokens: maxTokens)
     }
 

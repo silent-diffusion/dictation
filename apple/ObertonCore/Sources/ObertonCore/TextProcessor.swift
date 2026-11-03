@@ -11,13 +11,36 @@ public struct TextProcessor: Sendable {
         profile.model.flatMap(ModelID.init) ?? settings.defaultModel
     }
 
-    public func backend(for id: ModelID) throws -> LanguageModelBackend {
+    /// The back end for a model, with its request timeout scaled to how the model sits in memory (as on Windows):
+    /// `ask` is background work on long text (Extended Notes), which gets longer.
+    public func backend(for id: ModelID, ask: Bool) async throws -> LanguageModelBackend {
+        guard id.provider == .ollama else { return try plainBackend(for: id) }
+        let endpoint = try OllamaBackend.validated(settings.ollamaEndpoint)
+        try checkOffline(id)
+        let size = await OllamaBackend.size(endpoint: endpoint, model: id.name)
+        return OllamaBackend(endpoint: endpoint, model: id.name,
+                             timeout: ask ? size.askTimeout(setting: settings.aiTimeoutSeconds) : size.dictationTimeout(setting: settings.aiTimeoutSeconds))
+    }
+
+    /// "Keep everything offline" also blocks the Ollama models that run on ollama.com.
+    func checkOffline(_ id: ModelID) throws {
+        if settings.cloud.keepOffline && id.isOllamaCloud {
+            throw UserFacingError("\(id.name) runs on ollama.com, but \"Keep everything offline\" is on. " +
+                                  "Turn it off in Settings › Cloud AI, or pick a model that runs on this device.")
+        }
+    }
+
+    /// The back end with the timeout as set (no lookup of the model's size).
+    public func backend(for id: ModelID) throws -> LanguageModelBackend { try plainBackend(for: id) }
+
+    private func plainBackend(for id: ModelID) throws -> LanguageModelBackend {
         switch id.provider {
         case .apple:
             return AppleIntelligenceBackend()
         case .ollama:
+            try checkOffline(id)
             return OllamaBackend(endpoint: try OllamaBackend.validated(settings.ollamaEndpoint), model: id.name,
-                                 timeout: settings.aiTimeoutSeconds)
+                                 timeout: max(10, settings.aiTimeoutSeconds))
         case .anthropic, .openai:
             if settings.cloud.keepOffline {
                 throw UserFacingError("\(id.displayName) is a cloud model, but \"Keep everything offline\" is on. " +
@@ -34,7 +57,7 @@ public struct TextProcessor: Sendable {
         let raw = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if raw.isEmpty || profile.isRaw { return ProcessResult(text: raw, modified: false) }
         let backend: LanguageModelBackend
-        do { backend = try self.backend(for: model(for: profile)) } catch {
+        do { backend = try await self.backend(for: model(for: profile), ask: false) } catch {
             return ProcessResult(text: raw, modified: false, warning: error.localizedDescription + " Your original words were inserted.")
         }
         return await process(raw, profile: profile, backend: backend)

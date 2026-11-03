@@ -108,7 +108,7 @@ struct DashboardView: View {
                           label: "Read aloud today", sub: best > 0 ? "words · best day \(best.formatted())" : "nothing read yet")
             }
         case 2:
-            let turn = model.usage.recentTurnaround
+            let turn = model.recentTurnaround
             meterCell(settings: .models) {
                 FanMeter(fraction: (turn ?? 0) / 10, value: turn.map { String(format: "%.1f s", $0) } ?? "—", label: "Turnaround")
             }

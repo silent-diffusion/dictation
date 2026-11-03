@@ -54,7 +54,13 @@ final class AppModel: ObservableObject {
         }
     }
 
-    @Published var settings: AppSettings { didSet { settingsFile.save(settings) } }
+    @Published var settings: AppSettings {
+        didSet {
+            settingsFile.save(settings)
+            // A new profile or language: get its models ready now, so the next dictation doesn't wait (as on Windows).
+            if oldValue.activeProfileID != settings.activeProfileID || oldValue.language != settings.language { warmUp() }
+        }
+    }
     @Published var profiles: [Profile] { didSet { profilesFile.save(profiles) } }
     @Published private(set) var history: [HistoryEntry]
     /// A dictation pauses Extended Notes while it runs (both would hear the same voice).
@@ -74,6 +80,15 @@ final class AppModel: ObservableObject {
     @Published var receipt: HistoryEntry?
     /// The cycle-profile hotkey was just pressed: the overlay shows which profile is on now, for 1.5 s.
     @Published private(set) var profileNotice = false
+    /// A message for the overlay (Windows' `Notice`): the silent microphone, the length limit, an AI problem.
+    @Published private(set) var notice: Notice?
+    /// The speech model is still loading while recording goes on (it catches up on what was said).
+    @Published private(set) var speechLoading = false
+    /// Settings › Speech recognition's status line ("Speech: Ready · …"), and whether it is a good one.
+    @Published private(set) var speechStatus = "Speech: starting…"
+    @Published private(set) var speechOK = false
+    /// The speech engine couldn't start at launch: shown once in the main window, as Windows' message box.
+    @Published var startupProblem: String?
 
     let reader = ReadAloudPlayer()
     /// Extended Notes: the sessions on disk (notes/), and the one recording now.
@@ -97,6 +112,17 @@ final class AppModel: ObservableObject {
     private var placingEntry: HistoryEntry?
     private var limitTimer: Timer?
     private var stoppedAt: Date?
+    /// Loads the speech model if needed, then hands the recognizer what was recorded so far.
+    private var engineTask: Task<Void, Error>?
+    private var warmTask: Task<Void, Never>?
+    // For the turnaround: which models this dictation used, and whether they were loaded when it started.
+    private var speechModelUsed = "", aiModelUsed = ""
+    private var speechWarm = true
+    private var aiWarm: Task<Bool, Never>?
+    /// A previewed dictation's turnaround, taken when the preview showed (reading it isn't processing time).
+    private var previewTurnaround: Double?
+    /// The text waited for a click (nowhere to type): its turnaround isn't a fair one.
+    private var placed = false
     private var notesChange: AnyCancellable?
 
     init() {
@@ -114,7 +140,14 @@ final class AppModel: ObservableObject {
         notes = NotesRecorder(store: notesStore, settings: { loadedSettings })
         profiles = profilesFile.load() ?? BuiltInProfiles.create()
         self.history = history
-        usage = usageFile.load() ?? UsageLog()
+        if let loaded = usageFile.load() {
+            usage = loaded
+        } else {
+            // The first time: count what History already has, so the dashboard doesn't start from zero.
+            let seeded = UsageLog(seed: history)
+            usage = seeded
+            if !Self.snapshotMode { usageFile.save(seeded) }
+        }
         if let loaded = wordsFile.load() {
             words = loaded
         } else if loadedSettings.keepWordTally {
@@ -137,6 +170,14 @@ final class AppModel: ObservableObject {
         notesChange = notes.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         transcriber.onText = { [weak self] in self?.liveText = $0 }
         transcriber.onLevel = { [weak self] in self?.level = $0 }
+        transcriber.onSilence = { [weak self] in
+            guard self?.phase == .recording else { return }
+            #if os(macOS)
+            self?.notify("The microphone is silent. Check System Settings › Privacy & Security › Microphone or pick another mic.", level: .warning)
+            #else
+            self?.notify("The microphone is silent. Check Settings › Privacy & Security › Microphone or pick another mic.", level: .warning)
+            #endif
+        }
         transcriber.onAudio = { [historyAudio] in historyAudio.append($0) }
         // Kept by age: what has grown too old goes even when nothing new comes in.
         historyPrune = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
@@ -147,6 +188,8 @@ final class AppModel: ObservableObject {
             self.usage.recordReading(words: words, seconds: seconds)
             self.usageFile.save(self.usage)
         }
+        // Warm both models in the background so the first hotkey press is quick.
+        if !Self.snapshotMode { Task { @MainActor [weak self] in self?.warmUp(atLaunch: true) } }
     }
 
     /// Whether the active profile's AI can run right now (for the status dots).
@@ -186,19 +229,40 @@ final class AppModel: ObservableObject {
         pending = nil
         receipt = nil
         historyAudio.begin()
-        phase = .starting
+        previewTurnaround = nil
+        placed = false
+        let profile = activeProfile
+        // Were the models already loaded? A turnaround that includes loading one isn't a fair turnaround.
+        speechModelUsed = speechModelName
+        speechWarm = LiveTranscriber.modelRetained
+        aiModelUsed = aiModelName(profile)
+        let aiID = processor.model(for: profile), endpoint = settings.ollamaEndpoint
+        aiWarm = profile.isRaw ? nil : Task { await Self.aiLoaded(aiID, endpoint: endpoint) }
+
+        // Start listening right away. If the speech model isn't loaded (first use, or let go after a while), it loads
+        // meanwhile and catches up on what was said.
+        do { try transcriber.startRecording(microphone: settings.microphoneName, evenOut: settings.evenOutVolume) } catch { fail(error); return }
         startedAt = Date()
-        work = Task {
-            do {
-                let vocabulary = settings.vocabularyHint.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-                try await transcriber.start(locale: Locale(identifier: settings.language), vocabulary: vocabulary)
-                guard phase == .starting else { await transcriber.cancel(); return }
-                phase = .recording
-                limitTimer = Timer.scheduledTimer(withTimeInterval: settings.maxRecordingSeconds, repeats: false) { [weak self] _ in
-                    Task { @MainActor in if self?.phase == .recording { self?.stop() } }
-                }
-            } catch {
-                fail(error)
+        phase = .recording
+        speechLoading = !speechWarm
+        let vocabulary = settings.vocabularyHint.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        let locale = Locale(identifier: settings.language)
+        let engine = Task { [transcriber] in try await transcriber.startRecognizer(locale: locale, vocabulary: vocabulary) }
+        engineTask = engine
+        Task { [weak self] in
+            // The engine failed to start while the user was still speaking: say so now, not at the end.
+            do { try await engine.value; self?.speechReady() } catch {
+                if let self, self.engineTask == engine, self.phase == .recording { await self.transcriber.cancel(); self.fail(error) }
+            }
+            if self?.engineTask == engine { self?.speechLoading = false }
+        }
+        // The AI model too, so the cleanup at the end doesn't wait for it to load.
+        warmUpAI(profile)
+        limitTimer = Timer.scheduledTimer(withTimeInterval: max(10, settings.maxRecordingSeconds), repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.phase == .recording else { return }
+                self.notify("Maximum recording length reached; finishing up.", level: .info)
+                self.stop()
             }
         }
     }
@@ -206,14 +270,28 @@ final class AppModel: ObservableObject {
     func stop() {
         guard phase == .recording else { return }
         limitTimer?.invalidate()
+        transcriber.stopRecording()
         stoppedAt = Date()
+        let seconds = (stoppedAt ?? Date()).timeIntervalSince(startedAt ?? Date())
         phase = .transcribing
         level = 0
+        let engine = engineTask
         work = Task {
-            let raw = await transcriber.stop()
-            let seconds = (stoppedAt ?? Date()).timeIntervalSince(startedAt ?? Date())
-            // No phantom text: very short or silent recordings insert nothing.
-            guard seconds >= 0.4, OutputSanitizer.hasContent(raw) else { phase = .done("Nothing heard"); scheduleIdle(); return }
+            // If the model was still loading, it now catches up on the whole recording.
+            do { try await engine?.value } catch {
+                await transcriber.cancel()
+                if !Task.isCancelled { fail(error) }
+                return
+            }
+            let peak = transcriber.peak
+            let raw = NotesFormat.collapseRepeats(OutputSanitizer.collapseDots(await transcriber.stop()))
+            if Task.isCancelled { return }
+            // No phantom text: silence, a click or a stock phrase the recognizer made up inserts nothing.
+            if SpeechGuard.shouldDiscard(raw, recorded: seconds, peakLevel: peak) {
+                phase = .done("I didn't catch anything. Try again.")
+                scheduleIdle()
+                return
+            }
             await finish(raw: raw, seconds: seconds, profile: activeProfile)
         }
     }
@@ -225,6 +303,8 @@ final class AppModel: ObservableObject {
         }
         limitTimer?.invalidate()
         work?.cancel()
+        engineTask = nil
+        speechLoading = false
         pending = nil
         Task { await transcriber.cancel() }
         level = 0
@@ -238,12 +318,14 @@ final class AppModel: ObservableObject {
             result = await processor.process(raw, profile: profile)
             if Task.isCancelled { return }
         }
-        let entry = HistoryEntry(transcription: raw, aiEdit: profile.isRaw ? nil : result.text, inserted: result.text,
+        // An AI edit only when the AI really changed the text: not when it failed, nor when the safety net kept it all.
+        var entry = HistoryEntry(transcription: raw, aiEdit: result.modified ? result.text : nil, inserted: result.text,
                                  profileName: profile.name, model: profile.isRaw ? nil : processor.model(for: profile).description,
-                                 appName: platform?.targetAppName, seconds: seconds,
-                                 turnaroundSeconds: Date().timeIntervalSince(stoppedAt ?? Date()), warning: result.warning,
+                                 appName: platform?.targetAppName, seconds: seconds, turnaroundSeconds: 0, warning: result.warning,
                                  safetyNet: result.safetyNet)
+        entry.date = startedAt ?? entry.date
         if profile.showPreview {
+            previewTurnaround = Date().timeIntervalSince(stoppedAt ?? Date()) // time spent reading the preview isn't processing time
             pending = entry
             phase = .preview
             return
@@ -254,7 +336,10 @@ final class AppModel: ObservableObject {
     /// Insert the previewed text (`useOriginal`: the raw transcription instead).
     func confirmPreview(useOriginal: Bool = false) {
         guard var entry = pending else { return }
-        if useOriginal { entry.inserted = entry.transcription }
+        if useOriginal {
+            entry.inserted = entry.transcription
+            entry.aiEdit = nil // the original words, not the AI's
+        }
         pending = nil
         let profile = activeProfile
         work = Task { await insert(entry, readBack: profile.voice, readBackRequested: profile.readAloudAfterInsert) }
@@ -266,17 +351,21 @@ final class AppModel: ObservableObject {
             waitForPlace(entry, readBack: voice, readBackRequested: readBackRequested)
             return
         }
+        var entry = entry
         phase = .inserting
         do {
             let receipt = try await platform?.insert(entry.inserted) ?? "Done"
+            // The turnaround runs from the stop press until the text is in place.
+            entry.turnaroundSeconds = previewTurnaround ?? Date().timeIntervalSince(stoppedAt ?? Date())
+            await recordTurnaround(entry)
             record(entry)
             self.receipt = entry
             phase = .done(entry.warning ?? receipt)
             if readBackRequested { reader.read(entry.inserted, voice: voice ?? settings.ttsVoice, speed: settings.ttsBaseSpeed) }
         } catch {
-            var failed = entry
-            failed.wasInserted = false
-            record(failed)
+            entry.turnaroundSeconds = previewTurnaround ?? Date().timeIntervalSince(stoppedAt ?? Date())
+            entry.wasInserted = false
+            record(entry)
             fail(error)
             return
         }
@@ -287,6 +376,11 @@ final class AppModel: ObservableObject {
     // MARK: Nowhere to type: wait for a click, or copy
 
     private func waitForPlace(_ entry: HistoryEntry, readBack voice: String?, readBackRequested: Bool) {
+        // Waiting for the user isn't processing time.
+        if previewTurnaround == nil { previewTurnaround = Date().timeIntervalSince(stoppedAt ?? Date()) }
+        placed = true
+        var entry = entry
+        entry.turnaroundSeconds = previewTurnaround ?? 0
         placingEntry = entry
         placingText = entry.inserted
         phase = .placing
@@ -366,14 +460,108 @@ final class AppModel: ObservableObject {
         }
     }
 
+    // MARK: Notices
+
+    enum NoticeLevel { case info, warning, error }
+
+    struct Notice: Equatable {
+        var text: String
+        var level: NoticeLevel
+        var id = UUID()
+    }
+
+    /// Show a message on the overlay for a few seconds (longer for a warning or an error).
+    func notify(_ text: String, level: NoticeLevel) {
+        let shown = Notice(text: text, level: level)
+        notice = shown
+        Task {
+            try? await Task.sleep(for: .seconds(level == .info ? 4 : 8))
+            if notice?.id == shown.id { notice = nil }
+        }
+    }
+
+    // MARK: Warming up
+
+    /// The speech model's name for the turnaround samples: Apple's recognizer and the language.
+    var speechModelName: String { "apple-speech:" + settings.language }
+
+    /// The AI model a profile uses, or "" without AI.
+    func aiModelName(_ profile: Profile) -> String { profile.isRaw ? "" : processor.model(for: profile).description }
+
+    /// The average of the last three turnarounds with the active profile's models, where neither had to load first.
+    var recentTurnaround: Double? {
+        usage.recentTurnaround(speechModel: speechModelName, aiModel: aiModelName(activeProfile)).seconds
+    }
+
+    /// Get the speech model and the active profile's AI model loaded (at launch, and when the profile or language
+    /// changes), as Windows does. A speech model that can't start at launch is reported once (`startupProblem`).
+    func warmUp(atLaunch: Bool = false) {
+        guard !Self.snapshotMode else { return }
+        let locale = Locale(identifier: settings.language)
+        warmTask?.cancel()
+        warmTask = Task {
+            speechStatus = "Speech: loading the speech model (\(languageName))…"
+            speechOK = false
+            do {
+                try await LiveTranscriber.warmUp(locale: locale)
+                if Task.isCancelled { return }
+                speechReady()
+            } catch {
+                if Task.isCancelled { return }
+                speechStatus = "Speech: " + error.localizedDescription
+                if atLaunch { startupProblem = error.localizedDescription }
+            }
+        }
+        warmUpAI(activeProfile)
+    }
+
+    private var languageName: String { Locale.current.localizedString(forIdentifier: settings.language) ?? settings.language }
+
+    private func speechReady() {
+        speechStatus = "Speech: Ready · Apple Speech · \(languageName)"
+        speechOK = true
+        objectWillChange.send() // the dashboard's speech dial
+    }
+
+    /// Load a profile's AI model without generating anything: Apple Intelligence's prewarm, or an empty Ollama request.
+    /// Cloud models have nothing to load.
+    private func warmUpAI(_ profile: Profile) {
+        guard !profile.isRaw else { return }
+        let id = processor.model(for: profile)
+        switch id.provider {
+        case .apple:
+            AppleIntelligenceBackend.warmUp()
+        case .ollama:
+            guard !id.isOllamaCloud, // runs on ollama.com: nothing to load here
+                  let url = try? OllamaBackend.validated(settings.ollamaEndpoint) else { return }
+            Task { await OllamaBackend.warmUp(endpoint: url, model: id.name) }
+        case .anthropic, .openai:
+            break
+        }
+    }
+
+    /// Whether the AI model is in memory right now (Apple Intelligence and cloud models: nothing to load, or no way to tell).
+    private static func aiLoaded(_ id: ModelID, endpoint: String) async -> Bool {
+        guard id.provider == .ollama, !id.isOllamaCloud, let url = try? OllamaBackend.validated(endpoint) else { return true }
+        return await OllamaBackend.isLoaded(endpoint: url, model: id.name)
+    }
+
     // MARK: History
 
     var lastEntry: HistoryEntry? { history.first }
 
+    /// The dashboard's turnaround: only a dictation that went straight in counts (not one that waited for a click),
+    /// noting whether a model had to load first. Saved with the dictation's counts (`record`).
+    private func recordTurnaround(_ entry: HistoryEntry) async {
+        guard !placed, entry.turnaroundSeconds > 0 else { return }
+        let aiWasWarm = await aiWarm?.value ?? true
+        usage.recordTurnaround(TurnaroundSample(speechModel: speechModelUsed, aiModel: aiModelUsed, seconds: entry.turnaroundSeconds,
+                                                modelLoaded: !speechWarm || !aiWasWarm))
+    }
+
     private func record(_ entry: HistoryEntry) {
         // The daily counts are kept whether or not History is.
-        usage.recordDictation(words: entry.words, seconds: entry.seconds, turnaround: entry.turnaroundSeconds,
-                              usedAI: entry.aiEdit != nil, keptAI: entry.aiEdit != nil && entry.warning == nil, app: entry.appName)
+        usage.record(entry)
         usageFile.save(usage)
         if settings.keepWordTally {
             words.record(entry)
@@ -498,8 +686,12 @@ final class AppModel: ObservableObject {
                 log.recordReading(words: Int.random(in: 80...900, using: &rng), seconds: Double.random(in: 30...300, using: &rng), on: day)
             }
         }
+        for t in [1.3, 0.9, 1.1] {
+            log.recordTurnaround(TurnaroundSample(speechModel: speechModelName, aiModel: aiModelName(activeProfile), seconds: t, modelLoaded: false))
+        }
         usage = log
         words = tally
+        speechReady() // the Speech recognition page's status line
         seedSnapshotNotes()
         seedSnapshotHistory()
     }
@@ -626,7 +818,12 @@ final class AppModel: ObservableObject {
         if speech {
             if notes.needsModels { skipped.append("the speech model (Extended Notes is using it)") }
             else if phase.isBusy { skipped.append("the speech model (dictating)") }
-            else if speechLoaded { await LiveTranscriber.unloadModel(); done.append("speech model") }
+            else if speechLoaded {
+                await LiveTranscriber.unloadModel()
+                done.append("speech model")
+                speechStatus = "Speech: Unloaded · loads again when you dictate"
+                speechOK = false
+            }
         }
         if ai {
             // Apple Intelligence keeps no session between requests here; Ollama keeps its models loaded until told.

@@ -34,20 +34,50 @@ public struct UsageDay: Codable, Sendable, Equatable {
     }
 }
 
+/// One dictation's turnaround (stop to text in place) and the models behind it (Windows' `TurnaroundSample`).
+public struct TurnaroundSample: Codable, Sendable, Equatable {
+    public var date: Date
+    public var speechModel: String
+    /// The AI model, or "" when the profile uses no AI.
+    public var aiModel: String
+    public var seconds: Double
+    /// The speech model or the AI model wasn't loaded when the dictation started, so the time includes loading.
+    public var modelLoaded: Bool
+
+    public init(date: Date = Date(), speechModel: String, aiModel: String, seconds: Double, modelLoaded: Bool) {
+        self.date = date
+        self.speechModel = speechModel
+        self.aiModel = aiModel
+        self.seconds = seconds
+        self.modelLoaded = modelLoaded
+    }
+}
+
 /// Daily counts behind the dashboard meters and Analytics, so they survive History being trimmed, cleared or off.
 public struct UsageLog: Codable, Sendable, Equatable {
+    /// About two years; older days are dropped.
+    public static let keepDays = 750
+    /// How many recent turnarounds are kept.
+    public static let keepTurnarounds = 100
+
     /// Keyed by local date, "yyyy-MM-dd".
     public var days: [String: UsageDay] = [:]
-    /// The last few turnarounds (stop → text in place), newest last.
-    public var turnarounds: [Double] = []
+    /// The latest turnarounds with the models that produced them (no text), newest last.
+    public var samples: [TurnaroundSample] = []
     public var totalWords = 0
 
     public init() {}
 
+    /// A new log counted from what History already has, so the dashboard doesn't start from zero (once, when there is
+    /// no usage file yet).
+    public init(seed history: [HistoryEntry]) {
+        for e in history.sorted(by: { $0.date < $1.date }) { record(e) }
+    }
+
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         days = (try? c.decode([String: UsageDay].self, forKey: .days)) ?? [:]
-        turnarounds = (try? c.decode([Double].self, forKey: .turnarounds)) ?? []
+        samples = (try? c.decode([TurnaroundSample].self, forKey: .samples)) ?? []
         totalWords = (try? c.decode(Int.self, forKey: .totalWords)) ?? 0
     }
 
@@ -66,6 +96,20 @@ public struct UsageLog: Codable, Sendable, Equatable {
     /// Monday = 0 … Sunday = 6.
     public static func weekdayRow(_ date: Date) -> Int { (Calendar.current.component(.weekday, from: date) + 5) % 7 }
 
+    /// Count a finished dictation, as Windows counts it: the AI worked on it when it has an AI edit or the safety net
+    /// stepped in, and kept its edit when nothing was rejected.
+    public mutating func record(_ e: HistoryEntry) {
+        let safetyNet = e.safetyNet == true
+        recordDictation(words: e.words, seconds: e.seconds, turnaround: e.turnaroundSeconds, usedAI: e.aiEdit != nil || safetyNet,
+                        keptAI: e.aiEdit != nil && !safetyNet, app: e.appName, on: e.date)
+    }
+
+    /// Remember how long a dictation took from stop to text in place, and with which models.
+    public mutating func recordTurnaround(_ sample: TurnaroundSample) {
+        samples.append(sample)
+        if samples.count > Self.keepTurnarounds { samples.removeFirst(samples.count - Self.keepTurnarounds) }
+    }
+
     public mutating func recordDictation(words: Int, seconds: Double, turnaround: Double, usedAI: Bool, keptAI: Bool, app: String?, on date: Date = Date()) {
         var d = days[Self.key(date)] ?? UsageDay()
         d.dictations += 1
@@ -77,8 +121,26 @@ public struct UsageLog: Codable, Sendable, Equatable {
         d.hours[min(max(Calendar.current.component(.hour, from: date), 0), 23)] += 1
         days[Self.key(date)] = d
         totalWords += words
-        turnarounds.append(turnaround)
-        if turnarounds.count > 20 { turnarounds.removeFirst(turnarounds.count - 20) }
+        prune()
+    }
+
+    /// Drop the days older than `keepDays`.
+    public mutating func prune(now: Date = Date()) {
+        guard let cutoff = Calendar.current.date(byAdding: .day, value: -Self.keepDays, to: now).map(Self.key) else { return }
+        days = days.filter { $0.key >= cutoff }
+    }
+
+    /// Days in a row, up to today (or yesterday, if nothing yet today), with at least one dictation.
+    public func streak(today: Date = Date()) -> Int {
+        let cal = Calendar.current
+        var day = today
+        if (days[Self.key(day)]?.dictations ?? 0) == 0 { day = cal.date(byAdding: .day, value: -1, to: day)! }
+        var n = 0
+        while (days[Self.key(day)]?.dictations ?? 0) > 0 {
+            n += 1
+            day = cal.date(byAdding: .day, value: -1, to: day)!
+        }
+        return n
     }
 
     public mutating func recordReading(words: Int, seconds: Double, on date: Date = Date()) {
@@ -87,6 +149,7 @@ public struct UsageLog: Codable, Sendable, Equatable {
         d.wordsRead += words
         d.secondsRead += seconds
         days[Self.key(date)] = d
+        prune()
     }
 
     /// The last `count` days, oldest first, today last (days with nothing are empty).
@@ -114,9 +177,13 @@ public struct UsageLog: Codable, Sendable, Equatable {
         return grid
     }
 
-    /// The average of the last three turnarounds, or nil before the first dictation.
-    public var recentTurnaround: Double? {
-        let last = turnarounds.suffix(3)
-        return last.isEmpty ? nil : last.reduce(0, +) / Double(last.count)
+    /// The average of the last `count` turnarounds with this speech model and AI model ("" = no AI) where neither model
+    /// had to load first; nil when there are none yet. Also how many it averaged.
+    public func recentTurnaround(speechModel: String, aiModel: String, count: Int = 3) -> (seconds: Double?, count: Int) {
+        let picked = samples.filter {
+            !$0.modelLoaded && $0.seconds > 0 && $0.speechModel.caseInsensitiveCompare(speechModel) == .orderedSame
+                && $0.aiModel.caseInsensitiveCompare(aiModel) == .orderedSame
+        }.suffix(count)
+        return (picked.isEmpty ? nil : picked.reduce(0) { $0 + $1.seconds } / Double(picked.count), picked.count)
     }
 }

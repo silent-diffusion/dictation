@@ -240,7 +240,7 @@ public enum NotesModels {
 
     /// A model that writes text (not an embedding model), and runs here rather than on ollama.com.
     public static func isChatModel(_ m: Installed) -> Bool {
-        !m.name.lowercased().contains("embed") && !m.name.lowercased().contains("bert") && !m.name.lowercased().hasSuffix("-cloud") && !m.name.contains(":cloud")
+        !m.name.lowercased().contains("embed") && !m.name.lowercased().contains("bert") && !ModelID.isOllamaCloud(m.name)
     }
 
     /// The best installed model: the most parameters among those that fit, then the larger file; nothing fits → the

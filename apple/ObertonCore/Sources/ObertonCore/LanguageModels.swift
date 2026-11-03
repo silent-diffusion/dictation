@@ -1,5 +1,8 @@
 import Foundation
 import FoundationModels
+#if canImport(Metal)
+import Metal
+#endif
 
 /// An error worth showing to the user as it is.
 public struct UserFacingError: LocalizedError, Sendable {
@@ -33,7 +36,16 @@ public struct ModelID: Hashable, Sendable, Codable, CustomStringConvertible {
     public var description: String { "\(provider.rawValue):\(name)" }
 
     /// Runs on this device (or on this Mac, for Ollama), so it is allowed while "Keep everything offline" is on.
-    public var isLocal: Bool { provider == .apple || provider == .ollama }
+    public var isLocal: Bool { provider == .apple || (provider == .ollama && !isOllamaCloud) }
+
+    /// An Ollama model that Ollama runs on ollama.com rather than on this Mac (its names end in "-cloud" or ":cloud").
+    /// It goes through the local Ollama like any other model, but "Keep everything offline" blocks it all the same.
+    public var isOllamaCloud: Bool { provider == .ollama && Self.isOllamaCloud(name) }
+
+    public static func isOllamaCloud(_ name: String) -> Bool {
+        let n = name.lowercased()
+        return n.hasSuffix("-cloud") || n.hasSuffix(":cloud") || n.contains("-cloud:")
+    }
 
     public var displayName: String {
         switch provider {
@@ -91,6 +103,12 @@ public struct AppleIntelligenceBackend: LanguageModelBackend {
         case .unavailable(.modelNotReady): "Apple Intelligence is still getting ready (downloading its model). Try again in a few minutes."
         case .unavailable: "Apple Intelligence isn't available right now."
         }
+    }
+
+    /// Load the on-device model ahead of the first dictation.
+    public static func warmUp() {
+        guard unavailableReason == nil else { return }
+        LanguageModelSession(model: .default).prewarm()
     }
 
     public func complete(system: String, examples: [(input: String, output: String)], user: String, maxTokens: Int) async throws -> String {
@@ -171,6 +189,56 @@ public struct OllamaBackend: LanguageModelBackend {
         return (json?["message"] as? [String: Any])?["content"] as? String ?? ""
     }
 
+    /// Load the model into memory without generating anything (an empty chat request), so the first dictation doesn't
+    /// wait for it. Returns whether Ollama answered.
+    @discardableResult
+    public static func warmUp(endpoint: URL, model: String) async -> Bool {
+        var req = URLRequest(url: endpoint.appending(path: "api/chat"), timeoutInterval: 300)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "model": model, "messages": [] as [Any], "options": ["num_ctx": 4096],
+        ] as [String: Any])
+        guard let (_, resp) = try? await URLSession.shared.data(for: req) else { return false }
+        return ((resp as? HTTPURLResponse)?.statusCode ?? 0) / 100 == 2
+    }
+
+    /// Whether Ollama has this model in memory right now.
+    public static func isLoaded(endpoint: URL, model: String) async -> Bool {
+        let loaded = await loadedModels(endpoint: endpoint).map { $0.lowercased() }
+        return loaded.contains(model.lowercased()) || loaded.contains(model.lowercased() + ":latest")
+    }
+
+    private static let sizesLock = NSLock()
+    nonisolated(unsafe) private static var sizes: [String: ModelSize] = [:]
+
+    /// Whether a model is held in memory beyond what the GPU can work on ("large"), and whether every parameter works on
+    /// each word ("dense"), from its listing; for the request timeouts. Remembered once known.
+    public static func size(endpoint: URL, model: String) async -> ModelSize {
+        if ModelID.isOllamaCloud(model) { return ModelSize() }
+        if let known = sizesLock.withLock({ sizes[model] }) { return known }
+        guard let m = await details(endpoint: endpoint).first(where: {
+            $0.name.caseInsensitiveCompare(model) == .orderedSame || $0.name.caseInsensitiveCompare(model + ":latest") == .orderedSame
+        }) else { return ModelSize() } // not installed (yet): ask again next time
+        let size = ModelSize(large: m.heldInRam(gpuBytes: ModelSize.gpuBytes), dense: !m.isMixture)
+        sizesLock.withLock { sizes[model] = size }
+        return size
+    }
+
+    /// The installed models with their size on disk, parameters and family.
+    static func details(endpoint: URL) async -> [LocalModel] {
+        guard let (data, _) = try? await URLSession.shared.data(from: endpoint.appending(path: "api/tags")),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let models = json["models"] as? [[String: Any]] else { return [] }
+        return models.compactMap { m in
+            guard let name = m["name"] as? String else { return nil }
+            let size = (m["size"] as? NSNumber)?.int64Value ?? 0
+            let d = m["details"] as? [String: Any]
+            return LocalModel(name: name, billions: LocalModel.parseBillions(d?["parameter_size"] as? String, bytes: size), bytes: size,
+                              family: d?["family"] as? String ?? "")
+        }
+    }
+
     /// The installed models with their size on disk and parameters (billions), for Extended Notes' "best on this Mac".
     public static func installedDetails(endpoint: URL) async -> [NotesModels.Installed] {
         guard let (data, _) = try? await URLSession.shared.data(from: endpoint.appending(path: "api/tags")),
@@ -218,6 +286,68 @@ public struct OllamaBackend: LanguageModelBackend {
               let models = json["models"] as? [[String: Any]] else { return [] }
         return models.compactMap { $0["name"] as? String }.sorted()
     }
+}
+
+/// How a local model sits in memory, for the request timeouts (Windows' `SizeAsync`).
+public struct ModelSize: Sendable, Equatable {
+    /// Too big for what the GPU can work on, so it runs partly from memory on the processor: slow to load and to answer.
+    public var large = false
+    /// An ordinary model (not a mixture of experts): every parameter works on each word.
+    public var dense = false
+
+    public init(large: Bool = false, dense: Bool = false) {
+        self.large = large
+        self.dense = dense
+    }
+
+    /// What the GPU can work on: on Apple silicon, the share of the unified memory Metal recommends.
+    public static var gpuBytes: Int64? {
+        #if canImport(Metal)
+        if let d = MTLCreateSystemDefaultDevice() { return Int64(d.recommendedMaxWorkingSetSize) }
+        #endif
+        return nil
+    }
+
+    /// The request timeout for a dictation: at least 180 s for a large model, 300 s for a large dense one, else 10 s;
+    /// the setting when that is more (as on Windows).
+    public func dictationTimeout(setting: Double) -> Double { max(large ? (dense ? 300 : 180) : 10, setting) }
+
+    /// The request timeout for background work on long text (Extended Notes): at least 180 s, 420 s for a large model,
+    /// 900 s for a large dense one.
+    public func askTimeout(setting: Double) -> Double { max(!large ? 180 : dense ? 900 : 420, setting) }
+}
+
+/// An installed Ollama model (Windows' `LocalModel`).
+public struct LocalModel: Sendable, Equatable {
+    public var name: String
+    public var billions: Double
+    /// Its size on disk, about what it takes in memory.
+    public var bytes: Int64
+    public var family: String
+
+    /// Ollama's "parameter_size" ("7.6B", "494.03M") in billions; without one, estimated from the file (a 4-bit model
+    /// takes about 0.6 bytes a parameter).
+    public static func parseBillions(_ parameterSize: String?, bytes: Int64) -> Double {
+        let t = (parameterSize ?? "").trimmingCharacters(in: .whitespaces).uppercased()
+        if t.count > 1, let n = Double(t.dropLast()) {
+            switch t.last {
+            case "B": return n
+            case "M": return n / 1000
+            case "K": return n / 1_000_000
+            case "T": return n * 1000
+            default: break
+            }
+        }
+        return (Double(bytes) / 6e8 * 10).rounded() / 10
+    }
+
+    /// A mixture-of-experts model (Qwen3 30B-A3B, gpt-oss): only a few of its parameters work on each word.
+    public var isMixture: Bool {
+        name.firstMatch(of: #/(?i)-a\d+(?:\.\d+)?b\b/#) != nil || family.lowercased().hasSuffix("moe") || family.lowercased() == "gptoss"
+    }
+
+    /// Too big for the GPU (or, with no GPU figure, over 8 GB), so most of it is held in memory.
+    public func heldInRam(gpuBytes: Int64?) -> Bool { gpuBytes.map { bytes > $0 } ?? (bytes > 8 * 1024 * 1024 * 1024) }
 }
 
 // MARK: - Cloud

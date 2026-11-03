@@ -50,6 +50,12 @@ struct MainWindowContent: View {
             .overlay(alignment: .bottom) { PhoneOverlay() }
             #endif
             .obertonTheme(model.settings)
+            // The speech engine couldn't start at launch (Windows' message box).
+            .alert("Oberton", isPresented: Binding(get: { model.startupProblem != nil }, set: { if !$0 { model.startupProblem = nil } })) {
+                Button("OK") { model.startupProblem = nil }
+            } message: {
+                Text(model.startupProblem ?? "")
+            }
     }
 }
 
@@ -165,6 +171,8 @@ enum Snapshots {
             ("settings-appearance", Place(section: .settings, settings: .appearance)),("settings-history", Place(section: .settings, settings: .history)),
             ("settings-models", Place(section: .settings, settings: .models)), ("settings-layout", Place(section: .settings, settings: .layout)),
             ("settings-about", Place(section: .settings, settings: .about)), ("settings-hotkeys", Place(section: .settings, settings: .hotkeys)),
+            ("settings-speech", Place(section: .settings, settings: .speech)), ("settings-microphone", Place(section: .settings, settings: .microphone)),
+            ("settings-general", Place(section: .settings, settings: .general)),
             ("notes", Place(section: .notes)), ("notes-session", Place(section: .notes, noteSessionID: "20261102-1015")),
             ("notes-edited", Place(section: .notes, noteSessionID: "20261102-1015")),
         ]
