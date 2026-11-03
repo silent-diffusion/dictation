@@ -183,6 +183,9 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
                 DispatchQueue.main.async { MainActor.assumeIsolated { MacAppDelegate.updateDockIcon() } }
             })
         }
+        #if OBERTON_DIRECT
+        Updater.shared.start(model: model)
+        #endif
         launched = true
         showAtLaunch()
     }
@@ -415,6 +418,9 @@ enum Snapshots {
             try? png.write(to: URL(fileURLWithPath: dir).appending(path: "overlay.png"))
         }
         MarkdownEditorSnapshots.write(to: dir, model: model)
+        #if OBERTON_DIRECT
+        UpdatesSnapshots.write(to: dir, model: model)
+        #endif
         NSApp.terminate(nil)
     }
 

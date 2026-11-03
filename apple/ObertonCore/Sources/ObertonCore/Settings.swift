@@ -119,6 +119,9 @@ public struct AppSettings: Codable, Sendable, Equatable {
     public var startAtLogin = true
     /// Closing the window keeps Oberton running in the menu bar (Windows: minimize to the tray).
     public var minimizeToTray = true
+    /// Look for a newer version 20 seconds after Oberton starts and say so on the overlay (Windows'
+    /// CheckUpdatesOnStartup). Only the direct download checks; the App Store updates the App Store build.
+    public var checkUpdatesOnStartup = true
     /// Unload a model after this many minutes without use, to free memory. 0 = keep loaded; `unloadImmediately` = as
     /// soon as each dictation or reading is done. It loads again by itself the next time it is needed.
     public var unloadAfterMinutes = 30
@@ -217,6 +220,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
         take(.matchSurroundingText, &matchSurroundingText); take(.typeWhileSpeaking, &typeWhileSpeaking)
         take(.historyDays, &historyDays); take(.saveHistoryAudio, &saveHistoryAudio); take(.audioLimit, &audioLimit); take(.audioDays, &audioDays)
         take(.collapsedSettingsGroups, &collapsedSettingsGroups)
+        take(.checkUpdatesOnStartup, &checkUpdatesOnStartup)
         // One unknown mode drops only that app's override, not the others.
         if let raw = try? c.decode([String: String].self, forKey: .appOverrides) {
             appOverrides = raw.compactMapValues(InsertionMode.init(rawValue:))
