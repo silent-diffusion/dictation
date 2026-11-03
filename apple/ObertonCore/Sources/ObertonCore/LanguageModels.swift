@@ -243,19 +243,8 @@ public struct OllamaBackend: LanguageModelBackend {
         }
     }
 
-    /// The installed models with their size on disk and parameters (billions), for Extended Notes' "best on this Mac".
-    public static func installedDetails(endpoint: URL) async -> [NotesModels.Installed] {
-        guard let (data, _) = try? await URLSession.shared.data(from: endpoint.appending(path: "api/tags")),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let models = json["models"] as? [[String: Any]] else { return [] }
-        return models.compactMap { m in
-            guard let name = m["name"] as? String else { return nil }
-            let size = (m["size"] as? NSNumber)?.int64Value ?? 0
-            let p = ((m["details"] as? [String: Any])?["parameter_size"] as? String ?? "").uppercased()
-            let n = Double(p.filter { $0.isNumber || $0 == "." }) ?? 0
-            return NotesModels.Installed(name: name, bytes: size, billions: p.hasSuffix("M") ? n / 1000 : n)
-        }
-    }
+    /// The installed models with their size on disk, parameters (billions) and family, for Extended Notes' "best on this Mac".
+    public static func installedDetails(endpoint: URL) async -> [NotesModels.Installed] { await details(endpoint: endpoint) }
 
     /// The models Ollama has in memory right now, or empty when it isn't running.
     public static func loadedModels(endpoint: URL) async -> [String] {
@@ -352,6 +341,37 @@ public struct LocalModel: Sendable, Equatable {
 
     /// Too big for the GPU (or, with no GPU figure, over 8 GB), so most of it is held in memory.
     public func heldInRam(gpuBytes: Int64?) -> Bool { gpuBytes.map { bytes > $0 } ?? (bytes > 8 * 1024 * 1024 * 1024) }
+
+    public init(name: String, billions: Double, bytes: Int64, family: String) {
+        self.name = name; self.billions = billions; self.bytes = bytes; self.family = family
+    }
+
+    /// Without a family (Extended Notes' tests and older callers).
+    public init(name: String, bytes: Int64, billions: Double) { self.init(name: name, billions: billions, bytes: bytes, family: "") }
+
+    /// The parameters that work on each word, in billions: what decides the speed. All of them for an ordinary model; for
+    /// a mixture of experts the "a3b" in its name, or else about what its family uses.
+    public var activeBillions: Double {
+        if let m = name.firstMatch(of: #/(?i)-a(\d+(?:\.\d+)?)b\b/#), let a = Double(m.1) { return a }
+        func round1(_ x: Double) -> Double { (x * 10).rounded() / 10 }
+        if family.lowercased() == "qwen3moe" { return round1(billions * 0.108) } // 30.5B, 3.3B at work
+        if family.lowercased() == "gptoss" { return round1(billions * 0.17) }    // 20.9B, 3.6B at work
+        return isMixture ? round1(billions * 0.15) : billions
+    }
+
+    /// What a mixture model leaves free in memory for macOS, speech and the other apps.
+    public static let memoryHeadroom: Int64 = 10 * 1024 * 1024 * 1024
+    /// The most parameters at work per word that the processor alone keeps up with.
+    public static let maxActiveBillionsOnProcessor = 4.5
+    /// This Mac's memory in bytes.
+    public static var systemRam: Int64 { Int64(ProcessInfo.processInfo.physicalMemory) }
+
+    /// Whether this runs from memory rather than from what the GPU works on: a mixture of experts too big for the GPU
+    /// that fits in memory with room to spare and has few enough parameters at work to be quick.
+    public func runsFromMemory(gpuBytes: Int64?, ramBytes: Int64?) -> Bool {
+        guard isMixture, heldInRam(gpuBytes: gpuBytes), let r = ramBytes else { return false }
+        return bytes + Self.memoryHeadroom <= r && activeBillions <= Self.maxActiveBillionsOnProcessor
+    }
 }
 
 // MARK: - Cloud

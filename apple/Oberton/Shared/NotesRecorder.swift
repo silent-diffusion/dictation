@@ -351,7 +351,7 @@ final class NotesRecorder: ObservableObject {
     static func resolve(_ st: AppSettings) async -> ModelID {
         var installed: [NotesModels.Installed] = []
         if let url = try? OllamaBackend.validated(st.ollamaEndpoint) { installed = await OllamaBackend.installedDetails(endpoint: url) }
-        return NotesModels.resolve(st.notesModel, activeModel: st.defaultModel, installed: installed, gpuBytes: gpuBytes).model
+        return NotesModels.resolve(st.notesModel, activeModel: st.defaultModel, installed: installed, gpuBytes: gpuBytes, ramBytes: LocalModel.systemRam).model
     }
 
     /// The memory the GPU may use (Metal's recommended working set): what an Ollama model has to fit in.

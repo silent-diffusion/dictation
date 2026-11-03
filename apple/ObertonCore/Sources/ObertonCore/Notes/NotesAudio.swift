@@ -222,45 +222,58 @@ public enum NotesAudio {
 
 /// Which AI model formats and sums up Extended Notes (NotesModels.cs). The default is the best one on this Mac: the
 /// largest installed Ollama model that fits in the memory the GPU may use (Metal's recommended working set), since notes
-/// run in the background and gain more from a stronger model than they lose to its speed. With no Ollama model, the
-/// active model (Apple Intelligence by default). A model can also be picked by name, or the active model followed.
+/// run in the background and gain more from a stronger model than they lose to its speed. A mixture-of-experts model
+/// (Qwen3 30B-A3B) also fits when it fits in the Mac's memory: only a few billion of its parameters work on each word.
+/// With no Ollama model, the active model (Apple Intelligence by default). A model can also be picked by name, or the
+/// active model followed.
 public enum NotesModels {
     /// The setting's value for "the best model on this Mac" (the default).
     public static let best = ""
     /// The setting's value for "the active model".
     public static let active = "active"
+    /// Without a GPU figure, larger models are too slow to keep up with a lecture.
+    public static let maxBillionsWithoutGpu = 4.5
 
-    /// An installed Ollama model: its name, size on disk and parameters (billions).
-    public struct Installed: Sendable, Equatable {
-        public var name: String
-        public var bytes: Int64
-        public var billions: Double
-        public init(name: String, bytes: Int64, billions: Double) { self.name = name; self.bytes = bytes; self.billions = billions }
-    }
+    /// An installed Ollama model: its name, size on disk, parameters (billions) and family.
+    public typealias Installed = LocalModel
 
     /// A model that writes text (not an embedding model), and runs here rather than on ollama.com.
     public static func isChatModel(_ m: Installed) -> Bool {
-        !m.name.lowercased().contains("embed") && !m.name.lowercased().contains("bert") && !ModelID.isOllamaCloud(m.name)
+        !m.name.lowercased().contains("embed") && !m.family.lowercased().contains("bert") && !m.name.lowercased().contains("bert")
+            && !ModelID.isOllamaCloud(m.name)
     }
 
-    /// The best installed model: the most parameters among those that fit, then the larger file; nothing fits → the
-    /// smallest; nil when none is installed.
-    public static func pickBest(_ installed: [Installed], gpuBytes: Int64?) -> Installed? {
+    /// Whether a model fits: in what the GPU works on when that is known, otherwise small enough for the processor; or a
+    /// mixture of experts that runs from memory (`ramBytes`, nil when not known).
+    public static func fits(_ m: Installed, gpuBytes: Int64?, ramBytes: Int64? = nil) -> Bool {
+        (gpuBytes.map { m.bytes <= $0 } ?? (m.billions <= maxBillionsWithoutGpu)) || m.runsFromMemory(gpuBytes: gpuBytes, ramBytes: ramBytes)
+    }
+
+    /// The best installed model: the most parameters among those that fit, then the larger file (a finer quantization);
+    /// nothing fits → the smallest; nil when none is installed. Never one of Ollama's cloud models (`-cloud`, `:cloud`,
+    /// `-cloud:latest`): they list like installed ones, but run on ollama.com, so the transcript would leave this Mac.
+    public static func pickBest(_ installed: [Installed], gpuBytes: Int64?, ramBytes: Int64? = nil) -> Installed? {
         let chat = installed.filter(isChatModel)
-        let fits = chat.filter { gpuBytes == nil || $0.bytes <= gpuBytes! }
-        return fits.sorted { ($0.billions, $0.bytes, $1.name) > ($1.billions, $1.bytes, $0.name) }.first ?? chat.min { $0.bytes < $1.bytes }
+        return chat.filter { fits($0, gpuBytes: gpuBytes, ramBytes: ramBytes) }
+            .sorted { ($0.billions, $0.bytes, $1.name) > ($1.billions, $1.bytes, $0.name) }.first ?? chat.min { $0.bytes < $1.bytes }
     }
 
-    /// The model the setting means right now. A model picked by name that is no longer installed falls back to the best.
-    public static func resolve(_ setting: String, activeModel: ModelID, installed: [Installed], gpuBytes: Int64?) -> (model: ModelID, why: String) {
+    /// The model the setting means right now, and why (for the log). A model picked by name that is no longer installed
+    /// falls back to the best.
+    public static func resolve(_ setting: String, activeModel: ModelID, installed: [Installed], gpuBytes: Int64?,
+                               ramBytes: Int64? = nil) -> (model: ModelID, why: String) {
         let setting = setting.trimmed
         if setting.lowercased() == active { return (activeModel, "the active model") }
-        if let id = ModelID(setting), id.provider != .ollama { return (id, "chosen") }
+        if let id = ModelID(setting), id.provider != .ollama { return (id, id.isLocal ? "chosen" : "chosen, cloud") }
         let name = ModelID(setting)?.name ?? setting
         if !name.isEmpty, let chosen = installed.first(where: { $0.name.lowercased() == name.lowercased() || $0.name.lowercased() == name.lowercased() + ":latest" }) {
-            return (ModelID(provider: .ollama, name: chosen.name), "chosen")
+            return (ModelID(provider: .ollama, name: chosen.name), ModelID.isOllamaCloud(chosen.name) ? "chosen, cloud" : "chosen")
         }
-        if let b = pickBest(installed, gpuBytes: gpuBytes) { return (ModelID(provider: .ollama, name: b.name), "best on this Mac") }
+        if let b = pickBest(installed, gpuBytes: gpuBytes, ramBytes: ramBytes) {
+            let why = b.runsFromMemory(gpuBytes: gpuBytes, ramBytes: ramBytes) ? "best on this Mac: a mixture of experts that runs from \(gb(ramBytes!)) of memory"
+                : gpuBytes.map { "best on this Mac: the largest that fits in \(gb($0)) of GPU memory" } ?? "best on this Mac without a GPU"
+            return (ModelID(provider: .ollama, name: b.name), why)
+        }
         return (activeModel, "the active model; no Ollama model is installed")
     }
 
