@@ -95,21 +95,28 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         model.platform = platform
         overlay = OverlayController(model: model)
         // Re-register as soon as a shortcut changes in Settings, and let go of them while one is being recorded.
-        // (@Published sends before the value is stored, so the values come from the publishers.)
-        watch = model.$settings.map { [$0.hotkey, $0.cycleProfileHotkey, $0.speakHotkey] }.removeDuplicates()
-            .combineLatest(HotkeyStatus.shared.$recording.map { $0 != nil }.removeDuplicates())
-            .sink { [weak self] keys, paused in self?.registerHotkeys(keys, paused: paused) }
+        // (@Published sends before the value is stored, so the values come from the publishers.) The Extended Notes
+        // marker key is held only while a session records (paused or not); the rest of the time it stays with
+        // whatever app uses it.
+        watch = model.$settings.map { [$0.hotkey, $0.cycleProfileHotkey, $0.speakHotkey, $0.notesMarkerHotkey] }.removeDuplicates()
+            .combineLatest(HotkeyStatus.shared.$recording.map { $0 != nil }.removeDuplicates(),
+                           model.notes.$current.map { $0 != nil }.removeDuplicates())
+            .sink { [weak self] keys, paused, notes in self?.registerHotkeys(keys, paused: paused, notesRecording: notes) }
         Task { await platform.requestPermissions() }
     }
 
+    /// Keep a session that is recording, up to now, and the notes draft.
+    func applicationWillTerminate(_ notification: Notification) { model.notes.shutdown() }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
-    private func registerHotkeys(_ keys: [String], paused: Bool) {
+    private func registerHotkeys(_ keys: [String], paused: Bool, notesRecording: Bool) {
         guard !paused else { hotkeys.register([]); return }
         let errors = hotkeys.register([
             (keys[0], "the dictation shortcut", { [weak self] in self?.model.toggleDictation() }),
             (keys[1], "the profile-switching shortcut", { [weak self] in self?.model.cycleProfile() }),
             (keys[2], "the Read aloud shortcut", { [weak self] in self?.model.readSelection() }),
+            (notesRecording ? keys[3] : "", "the Extended Notes marker shortcut", { [weak self] in self?.model.notes.addMarker() }),
         ])
         HotkeyStatus.shared.error = errors.isEmpty ? nil : errors.joined(separator: "\n")
         if !errors.isEmpty { NSLog("Oberton: %@", errors.joined(separator: " ")) }
@@ -155,13 +162,16 @@ enum Snapshots {
             ("settings-appearance", Place(section: .settings, settings: .appearance)), ("settings-history", Place(section: .settings, settings: .history)),
             ("settings-models", Place(section: .settings, settings: .models)), ("settings-layout", Place(section: .settings, settings: .layout)),
             ("settings-about", Place(section: .settings, settings: .about)), ("settings-hotkeys", Place(section: .settings, settings: .hotkeys)),
+            ("notes", Place(section: .notes)), ("notes-session", Place(section: .notes, noteSessionID: "20261102-1015")),
+            ("notes-edited", Place(section: .notes, noteSessionID: "20261102-1015")),
         ]
         for dark in [false, true] {
             var s = model.settings
             s.theme = dark ? .dark : .light
             for (name, place) in pages {
+                NoteSessionView.snapshotTab = name == "notes-edited" ? .edited : .transcript
                 // Analytics is long: drawn taller so every section shows.
-                let view = RootView(start: place).environmentObject(model).obertonTheme(s).frame(width: 1200, height: name == "analytics" ? 1500 : 780)
+                let view = RootView(start: place).environmentObject(model).obertonTheme(s).frame(width: 1200, height: name == "analytics" ? 2000 : 780)
                 save(view, to: dir, name: "\(name)-\(dark ? "dark" : "light")")
             }
             // Analytics at iPhone width, its cells stacked.

@@ -150,9 +150,13 @@ public final class LiveTranscriber: @unchecked Sendable {
         if engine.isRunning { engine.stop() }
         engine.inputNode.removeTap(onBus: 0)
         #if os(iOS)
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        // Extended Notes may still be recording through the same audio session.
+        if !Self.audioSessionHeld { try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation) }
         #endif
     }
+
+    /// Set while something else (an Extended Notes session) records, so a dictation ending leaves the audio session on.
+    nonisolated(unsafe) public static var audioSessionHeld = false
 
     private func reset() {
         analyzer = nil

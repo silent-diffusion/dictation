@@ -7,5 +7,7 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Oberton records the computer's audio for Extended Notes when you choose Computer audio or Both.</string>
 </dict>
 </plist>

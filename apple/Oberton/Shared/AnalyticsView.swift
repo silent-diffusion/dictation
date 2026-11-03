@@ -41,6 +41,7 @@ struct AnalyticsView: View {
                         .frame(height: 230)
                 }
                 panel(top: 18) { ProfilesCell(tally: tally, on: on) }
+                notes(from: from, now: now)
             }
             .padding(compact ? EdgeInsets(top: 16, leading: 16, bottom: 24, trailing: 16) : EdgeInsets(top: 20, leading: 28, bottom: 24, trailing: 28))
         }
@@ -137,6 +138,47 @@ struct AnalyticsView: View {
             } else {
                 WeightedRow(columns: Array(repeating: .flex(1), count: cells.count)) { ForEach(0..<cells.count, id: \.self) { cells[$0] } }
             }
+        }
+    }
+
+    // MARK: 09 to 11 Extended Notes
+
+    @ViewBuilder private func notes(from: Date?, now: Date) -> some View {
+        let store = model.notes.store
+        let f = NotesFigures.compute(store.sessions, from: from.map { Calendar.current.startOfDay(for: $0) })
+        let ai = store.usage.totals(now: now, days: period ?? 0)
+        let longest = f.longest.first
+        HStack(alignment: .lastTextBaseline) {
+            Text("09 // EXTENDED NOTES").font(Ob.mono(13, .bold)).lineLimit(1)
+            Spacer(minLength: 8)
+            if !compact { Readout("Lectures and meetings // kept apart from dictation").lineLimit(1) }
+        }
+        .padding(.top, 26)
+        let cells: [AnyView] = [
+            AnyView(ReadoutCell(label: "Sessions", value: f.sessions.formatted(),
+                                sub: f.sessions > 0 ? "\(duration(f.seconds / Double(f.sessions))) each on average" : "none in this period", accent: true)),
+            AnyView(ReadoutCell(label: "Time recorded", value: f.seconds > 0 ? duration(f.seconds) : "—",
+                                sub: longest.map { "longest \(duration($0.seconds))" } ?? "lectures, meetings, calls")),
+            AnyView(ReadoutCell(label: "Words captured", value: f.wordsHeard.formatted(),
+                                sub: f.wordsPerMinute.map { "\(Int($0.rounded())) a minute of recording" } ?? "heard by the speech model")),
+            AnyView(ReadoutCell(label: "Your own notes", value: "\(f.wordsTyped.formatted()) w", sub: "typed in during sessions")),
+            AnyView(ReadoutCell(label: "Markers", value: f.markers.formatted(),
+                                sub: f.markers > 0 && f.seconds > 0 ? "one every \(duration(f.seconds / Double(f.markers)))" : "⚑ moments you marked")),
+            AnyView(ReadoutCell(label: "Formatting kept", value: f.steps > 0 ? percent(Double(f.stepsKept) / Double(f.steps)) : "—",
+                                sub: "\(ai.aiRequests.formatted()) AI step\(ai.aiRequests == 1 ? "" : "s"), formatting and summing up")),
+        ]
+        panel(top: 8) {
+            if compact {
+                Grid(horizontalSpacing: 0, verticalSpacing: 0) {
+                    ForEach(0..<3, id: \.self) { r in GridRow { cells[2 * r]; cells[2 * r + 1] } }
+                }
+            } else {
+                WeightedRow(columns: Array(repeating: .flex(1), count: cells.count)) { ForEach(0..<cells.count, id: \.self) { cells[$0] } }
+            }
+        }
+        row([1.4, 1]) {
+            LongestSessionsCell(figures: f)
+            NotesSourcesCell(figures: f)
         }
     }
 
@@ -823,6 +865,78 @@ private struct ProfilesCell: View {
     }
 
     private func cell(_ s: String) -> some View { Text(s).lineLimit(1).frame(maxWidth: .infinity, alignment: .trailing) }
+}
+
+// MARK: 10, 11 Extended Notes
+
+private struct LongestSessionsCell: View {
+    var figures: NotesFigures
+    @EnvironmentObject var nav: Navigator
+    @Environment(\.ob) private var ob
+
+    var body: some View {
+        Cell {
+            VStack(alignment: .leading, spacing: 0) {
+                Head(title: "10 // Longest sessions", right: "Click one to open it")
+                if figures.longest.isEmpty {
+                    Text("Your longest Extended Notes sessions appear here.").font(Ob.sans(12)).foregroundStyle(ob.muted)
+                } else {
+                    ForEach(figures.longest) { n in LongestRow(session: n) { nav.goNotes(n.id) } }
+                }
+            }
+        }
+    }
+}
+
+private struct LongestRow: View {
+    var session: NoteSession
+    var open: () -> Void
+    @Environment(\.ob) private var ob
+    @State private var hover = false
+
+    var body: some View {
+        Ruled {
+            HStack(spacing: 10) {
+                Text(session.started.formatted(.dateTime.day().month(.abbreviated)).uppercased()).font(Ob.mono(10)).foregroundStyle(ob.muted)
+                    .frame(width: 56, alignment: .leading)
+                Text(session.title).font(Ob.sans(13)).foregroundStyle(hover ? ob.accent : ob.ink).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                Text("\(NoteSession.words(session.transcript).formatted()) w").font(Ob.mono(11)).foregroundStyle(ob.muted)
+                Text(duration(session.seconds)).font(Ob.mono(12, .bold)).frame(width: 60, alignment: .trailing)
+            }
+            .contentShape(Rectangle())
+            .onHover { hover = $0 }
+            .onTapGesture(perform: open)
+            .help("Open \"\(session.title)\"")
+        }
+    }
+}
+
+private struct NotesSourcesCell: View {
+    var figures: NotesFigures
+    @Environment(\.ob) private var ob
+
+    var body: some View {
+        Cell {
+            VStack(alignment: .leading, spacing: 0) {
+                Head(title: "11 // What it listened to", right: "By time recorded")
+                if figures.sessions == 0 {
+                    Text("The microphone, the computer's audio, or both: how your sessions split shows here.").font(Ob.sans(12)).foregroundStyle(ob.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    let most = max(1, figures.sources.values.map(\.seconds).max() ?? 1)
+                    ForEach([(NotesSource.mic, "Microphone"), (.computer, "Computer audio"), (.both, "Both")], id: \.0) { source, label in
+                        let v = figures.sources[source]
+                        WeightedRow(columns: [.flex(1), .flex(1.4), .fixed(96)]) {
+                            Text(label.uppercased()).font(Ob.mono(11)).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                            Meter(fraction: (v?.seconds ?? 0) / most)
+                            Text(v.map { "\($0.sessions) · \(duration($0.seconds))" } ?? "—").font(Ob.mono(11)).frame(maxWidth: .infinity, alignment: .trailing)
+                        }
+                        .frame(height: 28)
+                    }
+                }
+            }
+        }
+    }
 }
 
 // MARK: - Formatting

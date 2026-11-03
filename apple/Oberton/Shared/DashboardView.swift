@@ -452,32 +452,134 @@ struct VoicePill: View {
 
 // MARK: - Notes and History cells
 
-/// The notepad: a text box that is always there to type in. (On Windows this cell also starts an Extended Notes
-/// session; that part comes to the Mac with Extended Notes.)
+/// The dashboard's Extended Notes cell (DashboardPage.Notes.cs): only a title and a text box. Before a session the
+/// title's spot is an "Extended notes session" button with a hollow red ring (it starts one); while recording, the ring
+/// is solid red (click it to stop) and the session's name is there (click to rename). The box can always be typed in:
+/// while a session records it is the live transcript; between sessions it is a notepad (notes/draft.txt) that the next
+/// session begins with. Full screen opens the live session, or Extended Notes when nothing records.
 struct NotesCell: View {
     @EnvironmentObject var model: AppModel
+    @EnvironmentObject var nav: Navigator
     @Environment(\.ob) private var ob
+    @State private var draft = ""
+    @State private var renaming = false
+    @State private var title = ""
+    @State private var problem: String?
+    @State private var saved: String?
+    @FocusState private var titleFocused: Bool
+
+    private var notes: NotesRecorder { model.notes }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("NOTEPAD").font(Ob.mono(13, .bold))
-                Decor("記録", size: 10.5)
-                Spacer()
-                Button("● Extended notes session") {}
-                    .buttonStyle(.dashed)
-                    .disabled(true)
-                    .help("Extended Notes isn't on the \(Device.noun) yet")
+            HStack(spacing: 8) {
+                if let s = notes.current { live(s) } else { startButton }
+                Spacer(minLength: 0)
+                Button("⤢ Full screen") {
+                    nav.goNotes(notes.current?.id)
+                    #if os(macOS)
+                    NoteSessionView.toggleFullScreen(model)
+                    #endif
+                }
+                .buttonStyle(.quietSmall)
             }
-            TextEditor(text: $model.settings.notepad)
+            box
+        }
+        .onAppear { draft = notes.store.draft }
+        .onChange(of: notes.isRecording) { was, now in
+            if was && !now, let last = notes.store.sessions.first { saved = last.title }
+            draft = notes.store.draft
+        }
+        .alert("Extended notes", isPresented: Binding(get: { problem != nil }, set: { if !$0 { problem = nil } })) {
+            Button("OK") { problem = nil }
+        } message: { Text(problem ?? "") }
+    }
+
+    private var startButton: some View {
+        Button {
+            Task {
+                do { try await notes.start(source: model.settings.notesSource) } catch { problem = error.localizedDescription }
+                draft = notes.store.draft
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Circle().strokeBorder(ob.record, lineWidth: 1.5).frame(width: 10, height: 10)
+                Text("Extended notes session")
+            }
+        }
+        .buttonStyle(.quietSmall)
+        .help("Start an extended notes session")
+        .accessibilityLabel("Start an extended notes session")
+    }
+
+    private func live(_ s: NoteSession) -> some View {
+        HStack(spacing: 6) {
+            Button { Task { await notes.stop() } } label: {
+                Circle().strokeBorder(ob.record, lineWidth: 1.5).background(Circle().fill(!notes.isPaused && !notes.isFinishing ? ob.record : .clear))
+                    .frame(width: 10, height: 10).frame(width: 22, height: 22).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(notes.isFinishing)
+            .help(notes.isFinishing ? "Finishing…" : "Stop the session")
+            .accessibilityLabel("Stop the extended notes session")
+            if renaming {
+                TextField("", text: $title).textFieldStyle(.plain).font(Ob.mono(13, .bold)).focused($titleFocused)
+                    .onSubmit { commit(s) }
+                    .onChange(of: titleFocused) { if !titleFocused { commit(s) } }
+                    .accessibilityLabel("Session name")
+            } else {
+                Text(s.title.uppercased()).font(Ob.mono(13, .bold)).lineLimit(1).padding(.vertical, 1)
+                    .overlay(alignment: .bottom) { Hairline() }
+                    .onTapGesture { title = s.title; renaming = true; titleFocused = true }
+                    .help("Click to rename")
+            }
+        }
+    }
+
+    private func commit(_ s: NoteSession) {
+        guard renaming else { return }
+        if !title.trimmed.isEmpty && title.trimmed != s.title { s.title = title.trimmed; notes.store.save(s) }
+        renaming = false
+    }
+
+    /// Always editable: the live transcript, or the draft between sessions; a hint while it's empty.
+    private var text: Binding<String> {
+        Binding(get: {
+            if let s = notes.current { _ = notes.revision; return s.transcript }
+            return draft
+        }, set: { new in
+            if let s = notes.current {
+                s.set(.transcript, new, source: nil)
+                model.objectWillChange.send()
+            } else {
+                draft = new
+                notes.store.setDraft(new)
+            }
+        })
+    }
+
+    private var hint: String {
+        if notes.isRecording {
+            return notes.isPaused ? "Paused. You can still type your own notes here." : "Listening. The transcript appears here, and you can type your own notes in it anytime."
+        }
+        return (saved.map { "“\($0)” is saved in Extended Notes. " } ?? "") + "Type here anytime: what you type begins the next session, and its transcript follows."
+    }
+
+    @ViewBuilder private var box: some View {
+        let value = text.wrappedValue
+        if PageScroll<EmptyView>.flat {
+            Text(value.isEmpty ? hint : value).font(Ob.mono(13)).foregroundStyle(value.isEmpty ? ob.muted : ob.ink)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).padding(.horizontal, 5)
+        } else {
+            TextEditor(text: text)
                 .font(Ob.mono(13))
                 .scrollContentBackground(.hidden)
                 .overlay(alignment: .topLeading) {
-                    if model.settings.notepad.isEmpty {
-                        Text("Type anything here. It stays until you clear it.").font(Ob.mono(13)).foregroundStyle(ob.muted)
-                            .padding(.top, 1).padding(.leading, 5).allowsHitTesting(false)
+                    if value.isEmpty {
+                        Text(hint).font(Ob.sans(12.5)).foregroundStyle(ob.muted).padding(.top, 1).padding(.leading, 5).allowsHitTesting(false)
                     }
                 }
+                .accessibilityLabel("Extended notes")
         }
     }
 }

@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import ObertonCore
 import SwiftUI
@@ -35,7 +36,8 @@ final class AppModel: ObservableObject {
     @Published var settings: AppSettings { didSet { settingsFile.save(settings) } }
     @Published var profiles: [Profile] { didSet { profilesFile.save(profiles) } }
     @Published private(set) var history: [HistoryEntry]
-    @Published private(set) var phase: Phase = .idle
+    /// A dictation pauses Extended Notes while it runs (both would hear the same voice).
+    @Published private(set) var phase: Phase = .idle { didSet { notes.setDictating(phase.isBusy) } }
     @Published private(set) var liveText = ""
     @Published private(set) var level: Float = 0
     @Published private(set) var startedAt: Date?
@@ -51,6 +53,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var profileNotice = false
 
     let reader = ReadAloudPlayer()
+    /// Extended Notes: the sessions on disk (notes/), and the one recording now.
+    let notes: NotesRecorder
     weak var platform: PlatformServices?
 
     private let settingsFile = JSONFile<AppSettings>("settings.json")
@@ -64,10 +68,16 @@ final class AppModel: ObservableObject {
     private var noticeTask: Task<Void, Never>?
     private var limitTimer: Timer?
     private var stoppedAt: Date?
+    private var notesChange: AnyCancellable?
 
     init() {
         let loadedSettings = settingsFile.load() ?? AppSettings(), history = historyFile.load() ?? []
         settings = loadedSettings
+        let notesStore = NotesStore(dir: Self.snapshotMode ? nil : NotesStore.defaultDir)
+        // The dashboard notepad became Extended Notes' draft (notes/draft.txt): moved there once.
+        let movesNotepad = !Self.snapshotMode && !loadedSettings.notepad.isEmpty
+        if movesNotepad && notesStore.draft.isEmpty { notesStore.setDraft(loadedSettings.notepad) }
+        notes = NotesRecorder(store: notesStore, settings: { loadedSettings })
         profiles = profilesFile.load() ?? BuiltInProfiles.create()
         self.history = history
         usage = usageFile.load() ?? UsageLog()
@@ -88,6 +98,9 @@ final class AppModel: ObservableObject {
                 ? BuiltInProfiles.rawID
                 : profiles.first { $0.name == BuiltInProfiles.defaultName }?.id
         }
+        if movesNotepad { settings.notepad = "" }
+        notes.settingsSource = { [weak self] in self?.settings ?? loadedSettings }
+        notesChange = notes.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         transcriber.onText = { [weak self] in self?.liveText = $0 }
         transcriber.onLevel = { [weak self] in self?.level = $0 }
         reader.onFinishedReading = { [weak self] words, seconds in
@@ -359,6 +372,45 @@ final class AppModel: ObservableObject {
         }
         usage = log
         words = tally
+        seedSnapshotNotes()
+    }
+
+    /// Snapshot mode only: two finished Extended Notes sessions, in memory.
+    private func seedSnapshotNotes() {
+        let cal = Calendar.current, now = Date()
+        let lecture = NoteSession()
+        lecture.title = "Product sync // weekly"
+        lecture.started = cal.date(byAdding: .hour, value: -3, to: now)!
+        lecture.source = .both
+        lecture.folder = FileManager.default.temporaryDirectory.appending(path: "20261102-1015")
+        lecture.set(.transcript, "Agenda: beta dates, budget\n", source: nil)
+        lecture.appendHeard("okay so um let's start with the beta the overton beta goes out to the first ten testers on friday", seconds: 4)
+        lecture.appendHeard("and then we collect feedback for two weeks before the wider release", seconds: 11)
+        lecture.addMarker(19)
+        lecture.appendHeard("on the budget side the numbers are final we have 1550 for the design work", seconds: 22)
+        let first = lecture.beginFormat()!
+        lecture.endFormat(heard: first.heard, sent: first.sent,
+                          ai: "Agenda: beta dates, budget\nLet's start with the beta. The Oberton beta goes out to the first ten testers on Friday, and then we collect feedback for two weeks before the wider release.\n⚑ 0:19\n\nOn the budget side, the numbers are final: we have 1550 for the design work.",
+                          seconds: first.seconds, failed: false)
+        lecture.set(.formatted, lecture.formatted.replacingOccurrences(of: "the numbers are final", with: "the numbers are now final"), source: nil)
+        lecture.appendHeard("next week we look at the onboarding flow again", seconds: 31)
+        lecture.digests = [NoteDigest(level: 0, first: 0, last: 0, start: 0, end: 30, text: "The beta goes to ten testers on Friday; two weeks of feedback follow. The design budget is final at 1550.")]
+        lecture.summary = "Main idea: The Oberton beta ships to ten testers on Friday.\n\n- Two weeks of feedback before the wider release\n- The design budget is final at 1550\n- Onboarding is reviewed next week\n\nThe team agreed the dates and the budget; the onboarding flow comes up again next week."
+        lecture.summaryByAi = lecture.summary
+        lecture.seconds = 2843
+        lecture.finished = true
+        let call = NoteSession()
+        call.title = "Lecture // Signals and systems"
+        call.started = cal.date(byAdding: .day, value: -2, to: now)!
+        call.source = .mic
+        call.folder = FileManager.default.temporaryDirectory.appending(path: "20261031-0900")
+        call.appendHeard("today we look at the fourier transform and why it matters for sampling", seconds: 3)
+        call.seconds = 4920
+        call.finished = true
+        for s in [lecture, call] {
+            notes.store.add(s)
+            notes.store.usage.record(s, formatRequests: 14, summaryRequests: 5)
+        }
     }
     #endif
 
@@ -400,12 +452,14 @@ final class AppModel: ObservableObject {
     func unloadNow(speech: Bool, ai: Bool, voice: Bool) async -> String {
         var done: [String] = [], skipped: [String] = []
         if speech {
-            if phase.isBusy { skipped.append("the speech model (dictating)") }
+            if notes.needsModels { skipped.append("the speech model (Extended Notes is using it)") }
+            else if phase.isBusy { skipped.append("the speech model (dictating)") }
             else if speechLoaded { await LiveTranscriber.unloadModel(); done.append("speech model") }
         }
         if ai {
             // Apple Intelligence keeps no session between requests here; Ollama keeps its models loaded until told.
-            if phase.isBusy { skipped.append("the AI model (dictating)") }
+            if notes.needsModels { skipped.append("the AI model (Extended Notes is using it)") }
+            else if phase.isBusy { skipped.append("the AI model (dictating)") }
             else if let url = try? OllamaBackend.validated(settings.ollamaEndpoint), await OllamaBackend.unloadAll(endpoint: url) > 0 {
                 done.append("AI model")
             }

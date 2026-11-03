@@ -141,6 +141,9 @@ private struct HotkeysSection: View {
             row("Start / stop dictation", $model.settings.hotkey, reset: ("Reset", AppSettings.defaultHotkey))
             row("Switch to next profile", $model.settings.cycleProfileHotkey, reset: ("Clear", ""))
             row("Read selected text aloud", $model.settings.speakHotkey, reset: ("Reset", AppSettings.defaultSpeakHotkey))
+            row("Extended notes marker", $model.settings.notesMarkerHotkey, reset: ("Clear", ""))
+            Caption("Drops a time marker (⚑ m:ss) into the transcript while an extended notes session records, from whatever app you are in. The key is only taken while a session records; the rest of the time it stays with the app that uses it.", size: 12.5)
+                .padding(.top, 6)
             Text(status.error ?? "✓ Shortcuts are registered.")
                 .font(Ob.sans(13.5)).foregroundStyle(status.error == nil ? ob.ink : ob.record)
                 .fixedSize(horizontal: false, vertical: true)
@@ -347,6 +350,13 @@ private struct ModelsSection: View {
             Readout("Speech recognition").padding(.top, 4)
             ModelRow(name: "Apple Speech", badges: [("Active", .active), ("Installed", .plain)],
                      detail: "Apple's on-device speech recognizer. Downloads its language once, through the system.")
+            Readout("Extended notes · AI").padding(.top, 16)
+            NotesModelMenu(width: 528)
+            Caption("Extended Notes formats and sums up long sessions in the background, so it can use a bigger model than dictation needs. " +
+                    "Best on this \(Device.noun) is the largest installed Ollama model that fits in the memory the GPU may use" +
+                    (NotesRecorder.gpuBytes.map { " (\(NotesModels.gb($0)) here)" } ?? "") +
+                    "; with no Ollama model, the active model. A cloud model would send the whole transcript to that service.", size: 12.5)
+                .padding(.top, 2)
             HStack {
                 Readout("AI cleanup · on this \(Device.noun)")
                 Spacer()
@@ -675,14 +685,19 @@ private struct AboutSection: View {
                 steps([("01 Listen", "The microphone, while you hold the floor."), ("02 Transcribe", "Apple Speech, on this \(Device.noun)."),
                        ("03 Tidy up", "Your profile's AI: Apple Intelligence by default."), ("04 Insert", Device.noun == "Mac" ? "Pasted at the cursor." : "Copied, ready to paste.")])
             }
-            part("D.2.3", "What it keeps", "履歴", nil) {
+            part("D.2.3", "How Extended Notes works", "記録",
+                 "A session runs four steps side by side, each on its own rhythm, so the text keeps up with a lecture of any length while the AI only ever reads as much as fits in its memory at once.") {
+                notesSteps
+            }
+            part("D.2.4", "What it keeps", "履歴", nil) {
                 VStack(alignment: .leading, spacing: 0) {
                     keep("History", "Your recent dictations: what was heard, the AI's edit, what went in, and the app.")
                     keep("Daily counts", "Numbers only: words, dictations, turnaround. Never text.")
+                    keep("Extended notes", "Each session's texts and recording (about 115 MB an hour) in its own folder, and its daily counts apart from dictation's.")
                     keep("Settings", "Profiles and settings. API keys are in the Keychain.")
                 }
             }
-            part("D.2.4", "Design language", "計器",
+            part("D.2.5", "Design language", "計器",
                  "Oberton is drawn like a printed instrument panel: black ink on gray paper, 1px lines, capitalized monospaced labels and readouts, rings of dots for numbers. Dark mode is the same sheet inverted. Color is a signal: the accent marks what is live or matters most, and red means the microphone is recording, nowhere else.") {
                 glossary
             }
@@ -720,6 +735,34 @@ private struct AboutSection: View {
             }
         }
         .overlay(Rectangle().strokeBorder(ob.ink, lineWidth: 1))
+    }
+
+    /// The four steps of an Extended Notes session, each with its rhythm in the accent.
+    private var notesSteps: some View {
+        #if os(macOS)
+        let listen = "The microphone, the Mac's own audio, or both, recorded to the session's folder. Type your own lines in, or press the marker key (⚑) to flag a moment."
+        #else
+        let listen = "The microphone, recorded to the session's folder. Type your own lines in, or tap ⚑ Mark to flag a moment."
+        #endif
+        let steps: [(String, String, String)] = [
+            ("01 Listen", "All the time", listen),
+            ("02 Speech", "As each phrase ends", "Apple Speech adds each finished phrase to the transcript, on this \(Device.noun). If the recognizer restarts, up to 3 minutes of audio wait for it."),
+            ("03 Format", "Every 110 words · 90 s at most", "The AI adds punctuation, paragraphs and headings to the new words. An edit that adds more than a tenth new words, keeps under 40% of them, or brings in a number is refused, and the words stay as heard."),
+            ("04 Summary", "Every ~6 minutes · 10 at most", "Each section of formatted text (about 6,000 characters) is summed up in a sixth of its length; every four summaries fold into one. At Stop: the main idea, three bullets, at most three paragraphs."),
+        ]
+        return HStack(alignment: .top, spacing: 0) {
+            ForEach(Array(steps.enumerated()), id: \.offset) { i, step in
+                if i > 0 { Hairline(vertical: true) }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(step.0.uppercased()).font(Ob.mono(11, .bold))
+                    Text(step.1.uppercased()).font(Ob.mono(11)).foregroundStyle(ob.accent)
+                    Text(step.2).font(Ob.sans(12.5)).foregroundStyle(ob.muted).fixedSize(horizontal: false, vertical: true).padding(.top, 2)
+                }
+                .padding(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
+        }
+        .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
     }
 
     private func keep(_ k: String, _ v: String) -> some View {

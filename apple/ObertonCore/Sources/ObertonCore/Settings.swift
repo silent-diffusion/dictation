@@ -45,11 +45,21 @@ public struct CloudSettings: Codable, Sendable, Equatable {
 }
 
 public struct AppSettings: Codable, Sendable, Equatable {
-    public static let defaultHotkey = "Ctrl+D", defaultCycleProfileHotkey = "Ctrl+Alt+D", defaultSpeakHotkey = "Ctrl+Space"
+    public static let defaultHotkey = "Ctrl+D", defaultCycleProfileHotkey = "Ctrl+Alt+D", defaultSpeakHotkey = "Ctrl+Space",
+        defaultNotesMarkerHotkey = ""
 
     public var hotkey = defaultHotkey
     public var cycleProfileHotkey = defaultCycleProfileHotkey
     public var speakHotkey = defaultSpeakHotkey
+    /// Drop a time marker into the Extended Notes transcript while a session records (paused or not); none by default,
+    /// as on Windows (the session header's ⚑ Mark button does the same).
+    public var notesMarkerHotkey = defaultNotesMarkerHotkey
+    /// What Extended Notes listens to: the microphone, the computer's audio, or both (remembered). The iPhone can only
+    /// hear its microphone.
+    public var notesSource = NotesSource.both
+    /// The AI model for Extended Notes' formatting and summaries: "" = the best on this Mac (the default), "active" =
+    /// the active model, otherwise a model ID. See `NotesModels`.
+    public var notesModel = ""
     /// The AI model used by profiles that don't pick their own. Apple Intelligence where it is available: nothing to
     /// install, nothing leaves the device.
     public var defaultModel = ModelID.appleOnDevice
@@ -88,7 +98,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
     public var sidebarCollapsed = false
     /// The size of everything in the main window, 1 = as designed (Cmd+plus, Cmd+minus, Cmd+0).
     public var uiScale = 1.0
-    /// The dashboard notepad: a text box that is always there to type in.
+    /// The dashboard notepad from before Extended Notes; its text moves to Extended Notes' draft (notes/draft.txt) once.
     public var notepad = ""
 
     public init() {}
@@ -99,6 +109,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         func take<T: Decodable>(_ key: CodingKeys, _ into: inout T) { if let v = try? c.decode(T.self, forKey: key) { into = v } }
         take(.hotkey, &hotkey); take(.cycleProfileHotkey, &cycleProfileHotkey); take(.speakHotkey, &speakHotkey)
+        take(.notesMarkerHotkey, &notesMarkerHotkey); take(.notesSource, &notesSource); take(.notesModel, &notesModel)
         take(.defaultModel, &defaultModel); take(.ollamaEndpoint, &ollamaEndpoint); take(.aiTimeoutSeconds, &aiTimeoutSeconds)
         take(.language, &language); take(.vocabularyHint, &vocabularyHint); take(.activeProfileID, &activeProfileID)
         take(.showOverlay, &showOverlay); take(.overlayPosition, &overlayPosition); take(.overlayOpacity, &overlayOpacity)

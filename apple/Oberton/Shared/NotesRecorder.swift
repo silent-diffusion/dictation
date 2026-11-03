@@ -1,0 +1,652 @@
+import AVFoundation
+import Combine
+import Foundation
+import Metal
+import ObertonCore
+import Speech
+
+/// Runs an Extended Notes session (NotesRecorder.cs): listens (the microphone, the Mac's own audio, or both), writes the
+/// recording, sends it to Apple's speech recognizer on an analyzer of its own, appends each finished piece to the
+/// transcript, formats the new text with the AI about every minute, sums it up every 5 to 10 minutes (`NotesSummary`),
+/// and saves as it goes. Only one session records at a time. A dictation pauses it (`setDictating`).
+@MainActor
+final class NotesRecorder: ObservableObject {
+    /// Format once this many new words have come in, or after `formatEvery` with at least a few.
+    static let formatWords = 110
+    static let formatEvery: TimeInterval = 90
+    /// Audio that arrives while the recognizer isn't running (still starting, or restarting) waits, up to three minutes.
+    nonisolated static let maxBacklog = WavWriter.sampleRate * 180
+
+    let store: NotesStore
+    /// The app's settings as they are now (set by AppModel once it exists).
+    var settingsSource: () -> AppSettings
+    private func settings() -> AppSettings { settingsSource() }
+
+    /// The session recording now; nil when none is.
+    @Published private(set) var current: NoteSession?
+    /// Paused by the user (Pause), not by a dictation.
+    @Published private(set) var userPaused = false
+    @Published private(set) var dictating = false
+    /// Stop was pressed: the last piece is being transcribed and formatted.
+    @Published private(set) var isFinishing = false
+    /// The recognizer is listening; false while it starts or restarts.
+    @Published private(set) var transcribing = false
+    @Published private(set) var isFormatting = false
+    @Published private(set) var isSummarizing = false
+    /// The AI model this session formats and sums up with, once worked out.
+    @Published private(set) var model: ModelID?
+    /// The step being redone (nil when none is), for which session, and how far it got.
+    @Published private(set) var redoing: NotesRedoStep?
+    @Published private(set) var redoSession: NoteSession?
+    @Published private(set) var redoProgress = ""
+    /// Bumped on every tick and change, so views showing the live session redraw.
+    @Published private(set) var revision = 0
+
+    var isRecording: Bool { current != nil }
+    /// Recording, or redoing a step: the speech recognizer and the AI model are in use, so nothing may unload them.
+    var needsModels: Bool { current != nil || redoing != nil }
+    /// Not recording right now: paused by the user, or while a dictation runs.
+    var isPaused: Bool { userPaused || dictating }
+
+    private let feed = NotesFeed()
+    private let engine = AVAudioEngine()
+    private var micConverter: AVAudioConverter?
+    #if os(macOS)
+    private var computerAudio: SystemAudioCapture?
+    #endif
+    private var tick: Timer?
+    private var speechTask: Task<Void, Never>?
+    private var connecting = false
+    private var nextConnect = Date.distantPast
+    private var connectDelay: TimeInterval = 5
+    private var formatRequests = 0, summaryRequests = 0
+    private var modelFor = "", modelResolved = Date.distantPast
+    private var lastFormat = Date(), lastSave = Date(), lastSection = Date()
+    private var dirty = false
+    private var redoTask: Task<Void, Error>?
+
+    init(store: NotesStore, settings: @escaping () -> AppSettings) {
+        self.store = store
+        settingsSource = settings
+    }
+
+    // MARK: Start
+
+    func start(source requested: NotesSource) async throws {
+        if isRecording { return }
+        if redoing != nil {
+            throw UserFacingError("A session is being redone. Wait for it to finish, or stop it from its pipeline, then start a new one.")
+        }
+        #if os(iOS)
+        let source = NotesSource.mic // an iPhone app can't hear other apps' audio
+        #else
+        let source = requested
+        #endif
+        let s = try store.create(source: source)
+        userPaused = false; isFormatting = false; isSummarizing = false
+        formatRequests = 0; summaryRequests = 0
+        model = nil
+        connectDelay = 5
+        lastFormat = Date(); lastSave = Date(); lastSection = Date()
+        do {
+            try feed.begin(wav: s.audioURL!)
+            try startAudio(source)
+        } catch {
+            stopAudio()
+            feed.end()
+            store.delete(s)
+            throw error
+        }
+        // What was typed in the dashboard's notes box beforehand begins the transcript, as the user's own notes.
+        let draft = store.takeDraft().trimmed
+        if !draft.isEmpty {
+            s.set(.transcript, draft + "\n", source: self)
+            store.save(s)
+        }
+        current = s
+        feed.setPaused(false)
+        tick = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in Task { @MainActor in self?.onTick() } }
+        await connectSpeech()
+    }
+
+    private func startAudio(_ source: NotesSource) throws {
+        #if os(iOS)
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothHFP, .mixWithOthers])
+        try session.setActive(true)
+        LiveTranscriber.audioSessionHeld = true
+        #endif
+        let feed = self.feed
+        #if os(macOS)
+        if source == .computer || source == .both {
+            let capture = SystemAudioCapture()
+            if source == .both {
+                try capture.start { feed.mixer.addComputer($0) }
+            } else {
+                try capture.start { feed.take($0) } // the tap runs through silence too, so it paces itself
+            }
+            computerAudio = capture
+        }
+        #endif
+        guard source == .mic || source == .both else { return }
+        let input = engine.inputNode
+        let micFormat = input.outputFormat(forBus: 0)
+        guard micFormat.sampleRate > 0, let target = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(WavWriter.sampleRate), channels: 1, interleaved: false),
+              let converter = AVAudioConverter(from: micFormat, to: target) else {
+            throw UserFacingError("There is no microphone to listen to.")
+        }
+        micConverter = converter
+        let both = source == .both
+        input.installTap(onBus: 0, bufferSize: 4096, format: micFormat) { buffer, _ in
+            let samples = NotesFeed.convert(buffer, with: converter, to: target)
+            feed.take(both ? feed.mixer.mix(withMic: samples) : samples)
+        }
+        engine.prepare()
+        try engine.start()
+    }
+
+    private func stopAudio() {
+        if engine.isRunning { engine.stop() }
+        engine.inputNode.removeTap(onBus: 0)
+        micConverter = nil
+        #if os(macOS)
+        computerAudio?.stop()
+        computerAudio = nil
+        #else
+        LiveTranscriber.audioSessionHeld = false
+        #endif
+    }
+
+    // MARK: Speech
+
+    /// Start the recognizer for this session; on failure, try again later (5 s, 10 s, 20 s, up to a minute apart).
+    private func connectSpeech() async {
+        guard !connecting, current != nil else { return }
+        connecting = true
+        defer { connecting = false }
+        do {
+            let st = settings()
+            let locale = try await LiveTranscriber.prepare(locale: Locale(identifier: st.language))
+            let transcriber = SpeechTranscriber(locale: locale, transcriptionOptions: [], reportingOptions: [], attributeOptions: [.audioTimeRange])
+            let analyzer = SpeechAnalyzer(modules: [transcriber])
+            let words = st.vocabularyHint.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            if !words.isEmpty {
+                let context = AnalysisContext()
+                context.contextualStrings[.general] = words
+                try await analyzer.setContext(context)
+            }
+            guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
+                throw UserFacingError("The speech recognizer has no audio format to take.")
+            }
+            let (stream, input) = AsyncStream<AnalyzerInput>.makeStream()
+            try await analyzer.prepareToAnalyze(in: format)
+            try await analyzer.start(inputSequence: stream)
+            LiveTranscriber.markInUse()
+            guard current != nil else { input.finish(); await analyzer.cancelAndFinishNow(); return }
+            // What was said meanwhile goes first; the live audio follows on. Times count from the session's start.
+            let startSeconds = feed.connect(input: input, format: format)
+            speechTask = Task { [weak self] in
+                do {
+                    for try await result in transcriber.results where result.isFinal {
+                        let text = String(result.text.characters)
+                        let at = startSeconds + max(0, result.range.start.seconds.isFinite ? result.range.start.seconds : 0)
+                        await MainActor.run { self?.onPiece(text, at: at) }
+                    }
+                } catch {}
+                await MainActor.run { self?.onSpeechEnded() }
+            }
+            feed.analyzer = analyzer
+            connectDelay = 5
+            transcribing = true
+        } catch {
+            NSLog("Extended notes: couldn't start the speech recognizer (%@); next try in %.0f s", error.localizedDescription, connectDelay)
+            nextConnect = Date().addingTimeInterval(connectDelay)
+            connectDelay = min(60, connectDelay * 2)
+        }
+    }
+
+    private func onSpeechEnded() {
+        transcribing = false
+        speechTask = nil
+        if current != nil && !isFinishing { feed.disconnect() } // audio waits in the backlog until it starts again
+    }
+
+    /// A finished piece of speech.
+    private func onPiece(_ text: String, at seconds: Double) {
+        guard let s = current else { return }
+        s.appendHeard(text, seconds: seconds, source: self)
+        dirty = true
+        revision += 1
+    }
+
+    private func onTick() {
+        guard let s = current, !isFinishing else { return }
+        s.seconds = feed.seconds
+        if !transcribing && !connecting && Date() >= nextConnect { Task { await connectSpeech() } }
+        if !dictating {
+            // Not while a dictation runs: its AI edit would wait behind a long formatting or summary request.
+            maybeFormat(s)
+            maybeSummarize(s)
+        }
+        if dirty && Date().timeIntervalSince(lastSave) > 10 || Date().timeIntervalSince(lastSave) > 30 { save(s) }
+        revision += 1
+    }
+
+    private func save(_ s: NoteSession) {
+        feed.flush()
+        store.save(s)
+        dirty = false
+        lastSave = Date()
+    }
+
+    // MARK: Formatting and summing up
+
+    private func maybeFormat(_ s: NoteSession) {
+        guard !isFormatting else { return }
+        let words = s.unformattedWords()
+        if words >= Self.formatWords || words >= 15 && Date().timeIntervalSince(lastFormat) >= Self.formatEvery { Task { await format(s) } }
+    }
+
+    private func format(_ s: NoteSession, maxWords: Int? = nil) async {
+        guard !isFormatting, let take = maxWords.map({ s.beginFormatPart(maxWords: $0) }) ?? s.beginFormat() else { return }
+        isFormatting = true
+        // The recognizer's loops go before anything else: the AI would copy them.
+        let input = NotesFormat.collapseRepeats(take.sent)
+        var ai = input, failed = true
+        if Self.onlyMarkers(take.sent) {
+            ai = take.sent; failed = false // nothing but markers since the last step: nothing for the AI to tidy
+        } else {
+            formatRequests += 1
+            do {
+                let reply = try await ask(NotesFormat.instructions(input), NotesFormat.wrap(input), NotesFormat.maxTokens(input))
+                if let accepted = NotesFormat.accept(sent: input, reply: reply) { ai = accepted; failed = false }
+            } catch {
+                NSLog("Extended notes: formatting failed, keeping the text as heard: %@", error.localizedDescription)
+            }
+        }
+        s.endFormat(heard: take.heard, sent: take.sent, ai: ai, seconds: take.seconds, failed: failed, source: self)
+        lastFormat = Date()
+        isFormatting = false
+        dirty = true
+        revision += 1
+    }
+
+    /// Every line is a marker's (or blank).
+    static func onlyMarkers(_ text: String) -> Bool {
+        text.components(separatedBy: "\n").allSatisfy { $0.trimmed.isEmpty || $0.trimmed.hasPrefix(NoteSession.markerFlag) }
+    }
+
+    private func maybeSummarize(_ s: NoteSession) {
+        guard !isSummarizing, !isFormatting else { return }
+        let fresh = s.unsummarizedChars()
+        if fresh >= NotesSummary.sectionChars || fresh >= NotesSummary.sectionMinChars && Date().timeIntervalSince(lastSection) >= NotesSummary.sectionEvery {
+            Task { await summarize(s, final: false) }
+        }
+    }
+
+    /// Sum up what is new (at Stop: everything left), merge, and rewrite the summary.
+    private func summarize(_ s: NoteSession, final: Bool) async {
+        guard !isSummarizing else { return }
+        isSummarizing = true
+        defer { isSummarizing = false; revision += 1 }
+        do {
+            // 1. The new formatted text, a section at a time.
+            var sections = 0, added = 0
+            while sections < (final ? 50 : 1), let section = s.beginSection(maxChars: NotesSummary.inputBudget) {
+                sections += 1
+                summaryRequests += 1
+                let reply = try await ask(NotesSummary.digestPrompt(NotesSummary.digestWords(section.text)), section.text, NotesSummary.digestTokens)
+                guard NotesSummary.isUsable(input: section.text, output: reply) else { s.endSection(nil, start: section.start, end: section.end); break }
+                s.endSection(reply, start: section.start, end: section.end)
+                lastSection = Date(); added += 1
+                dirty = true
+            }
+            if added == 0 { return }
+            // 2. Four summaries of one level become one, shorter; and so on up.
+            var merges = 0
+            while merges < 20, let group = NotesSummary.mergeGroup(s.frontier()) {
+                merges += 1
+                summaryRequests += 1
+                let input = NotesSummary.mergeInput(group)
+                let reply = try await ask(NotesSummary.mergePrompt(NotesSummary.mergeWords(group)), input, NotesSummary.mergeTokens)
+                guard NotesSummary.isUsable(input: input, output: reply) else { break }
+                s.merge(group, text: reply)
+                dirty = true
+            }
+            // 3. The Summary tab: the main idea, key points, at most three paragraphs; the listener's edits kept.
+            let frontier = s.frontier()
+            if frontier.isEmpty { return }
+            let basedOn = s.summary
+            let listener = basedOn.trimmed != s.summaryByAi.trimmed ? basedOn : nil
+            let text = NotesSummary.finalInput(frontier, listener: listener)
+            summaryRequests += 1
+            if let summary = NotesSummary.shape(try await ask(NotesSummary.finalPrompt, text, NotesSummary.finalTokens)),
+               Double(NoteSession.words(summary)) <= Double(NoteSession.words(text)) * 1.5 + 60 {
+                s.endSummary(summary, basedOn: basedOn, source: self)
+            }
+            dirty = true
+        } catch {
+            NSLog("Extended notes: summarizing failed: %@", error.localizedDescription)
+        }
+    }
+
+    private func ask(_ instructions: String, _ text: String, _ maxTokens: Int) async throws -> String {
+        let id = await resolveModel()
+        let backend = try TextProcessor(settings: settings()).backend(for: id)
+        return try await backend.complete(system: instructions, examples: [], user: text, maxTokens: maxTokens)
+    }
+
+    /// The AI model for formatting and summaries (`NotesModels`): worked out again when the setting changes, and every
+    /// ten minutes, since a model may have been installed or removed meanwhile.
+    func resolveModel() async -> ModelID {
+        let st = settings()
+        if let model, st.notesModel == modelFor, Date().timeIntervalSince(modelResolved) < 600 { return model }
+        let resolved = await Self.resolve(st)
+        model = resolved
+        modelFor = st.notesModel
+        modelResolved = Date()
+        return resolved
+    }
+
+    static func resolve(_ st: AppSettings) async -> ModelID {
+        var installed: [NotesModels.Installed] = []
+        if let url = try? OllamaBackend.validated(st.ollamaEndpoint) { installed = await OllamaBackend.installedDetails(endpoint: url) }
+        return NotesModels.resolve(st.notesModel, activeModel: st.defaultModel, installed: installed, gpuBytes: gpuBytes).model
+    }
+
+    /// The memory the GPU may use (Metal's recommended working set): what an Ollama model has to fit in.
+    static var gpuBytes: Int64? { MTLCreateSystemDefaultDevice().map { Int64($0.recommendedMaxWorkingSetSize) } }
+
+    // MARK: Pause, markers, dictation, stop
+
+    func pause() {
+        guard isRecording, !userPaused else { return }
+        userPaused = true
+        feed.setPaused(isPaused)
+    }
+
+    func resume() {
+        guard isRecording, userPaused else { return }
+        userPaused = false
+        feed.setPaused(isPaused)
+    }
+
+    /// The listener marked this moment (the hotkey, or the Mark button): a "⚑ m:ss" line goes into the transcript,
+    /// paused or not, and the session is saved. Nothing once Stop was pressed.
+    func addMarker() {
+        guard let s = current, !isFinishing else { return }
+        s.addMarker(feed.seconds, source: self)
+        save(s)
+        revision += 1
+    }
+
+    /// A dictation started or ended: the session pauses while it runs (both would hear the same voice).
+    func setDictating(_ on: Bool) {
+        guard dictating != on else { return }
+        dictating = on
+        feed.setPaused(isPaused)
+    }
+
+    /// Stop: the last piece is transcribed and formatted, the summary brought up to date, and the session saved.
+    func stop() async {
+        guard let s = current, !isFinishing else { return }
+        isFinishing = true
+        feed.setPaused(true)
+        stopAudio()
+        tick?.invalidate()
+        if let analyzer = feed.analyzer {
+            feed.finishInput()
+            try? await analyzer.finalizeAndFinishThroughEndOfInput()
+            await speechTask?.value
+        }
+        feed.end()
+        s.seconds = feed.seconds
+        while isFormatting || isSummarizing { try? await Task.sleep(for: .milliseconds(200)) }
+        if s.unformattedWords() > 0 { await format(s) }
+        await summarize(s, final: true)
+        s.finished = true
+        store.save(s)
+        store.usage.record(s, formatRequests: formatRequests, summaryRequests: summaryRequests)
+        current = nil
+        isFinishing = false
+        userPaused = false
+        transcribing = false
+        store.sessionsChanged?()
+        await releaseModel()
+    }
+
+    /// The session or redo is done: an Ollama model other than the one dictation uses is let go at once, rather than
+    /// holding its memory until Ollama times it out.
+    private func releaseModel() async {
+        let st = settings()
+        guard let model, model.provider == .ollama, !needsModels, model != st.defaultModel,
+              let url = try? OllamaBackend.validated(st.ollamaEndpoint) else { return }
+        await OllamaBackend.unload(endpoint: url, model: model.name)
+    }
+
+    /// Oberton is quitting: keep everything up to now (and the dashboard draft; no last formatting pass), right away.
+    func shutdown() {
+        store.flushDraft()
+        guard let s = current else { return }
+        stopAudio()
+        tick?.invalidate()
+        feed.finishInput()
+        feed.end()
+        s.seconds = feed.seconds
+        s.finished = true
+        store.saveNow(s)
+        store.usage.record(s, formatRequests: formatRequests, summaryRequests: summaryRequests)
+        current = nil
+    }
+
+    // MARK: Redoing a finished session's steps
+
+    func cancelRedo() { redoTask?.cancel() }
+
+    /// Redo a step of a finished session, and every step after it: transcribe the recording again (then format and sum
+    /// up again), format the whole transcript again (then sum up again), or sum up again. Not while a session records.
+    func redo(_ s: NoteSession, _ step: NotesRedoStep) async throws {
+        if isRecording { throw UserFacingError("A step can be redone once the session recording now has stopped.") }
+        if redoing != nil { throw UserFacingError("Another step is being redone; wait for it to finish.") }
+        redoSession = s
+        model = nil
+        let task = Task { @MainActor in
+            if step == .transcribe {
+                redoing = .transcribe
+                try await retranscribe(s)
+            }
+            if step <= .format {
+                redoing = .format
+                redoProgress = ""
+                s.resetFormatting(source: self)
+                store.save(s)
+                var parts = 0
+                while !s.transcript.u16Tail(s.formattedThrough).trimmed.isEmpty {
+                    try Task.checkCancellation()
+                    redoProgress = "\(s.formattedThrough * 100 / max(1, s.transcript.utf16.count))%"
+                    let before = s.formattedThrough
+                    await format(s, maxWords: Self.formatWords)
+                    if s.formattedThrough <= before { break }
+                    parts += 1
+                    if parts % 5 == 0 { store.save(s) }
+                }
+            }
+            try Task.checkCancellation()
+            redoing = .summary
+            redoProgress = ""
+            s.resetSummary(source: self)
+            await summarize(s, final: true)
+        }
+        redoTask = task
+        defer {
+            redoing = nil
+            redoSession = nil
+            redoProgress = ""
+            redoTask = nil
+            store.save(s)
+            revision += 1
+            Task { await releaseModel() }
+        }
+        try await task.value
+    }
+
+    /// The recording, transcribed again from its file. The transcript is replaced only once the whole recording is
+    /// done, so a cancelled redo changes nothing.
+    private func retranscribe(_ s: NoteSession) async throws {
+        guard let url = s.audioURL, FileManager.default.fileExists(atPath: url.path) else {
+            throw UserFacingError("This session has no recording to transcribe again.")
+        }
+        redoProgress = "reading the recording"
+        let st = settings()
+        let locale = try await LiveTranscriber.prepare(locale: Locale(identifier: st.language))
+        let transcriber = SpeechTranscriber(locale: locale, transcriptionOptions: [], reportingOptions: [], attributeOptions: [.audioTimeRange])
+        let file = try AVAudioFile(forReading: url)
+        let total = max(1, Double(file.length) / file.processingFormat.sampleRate)
+        let analyzer = SpeechAnalyzer(modules: [transcriber])
+        LiveTranscriber.markInUse()
+        let collect = Task { () -> [(seconds: Double, text: String)] in
+            var pieces: [(seconds: Double, text: String)] = []
+            for try await r in transcriber.results where r.isFinal {
+                let at = r.range.start.seconds.isFinite ? r.range.start.seconds : 0
+                pieces.append((at, String(r.text.characters)))
+                let progress = "\(Int(min(99, at / total * 100)))%"
+                await MainActor.run { self.redoProgress = progress }
+            }
+            return pieces
+        }
+        do {
+            try await analyzer.start(inputAudioFile: file, finishAfterFile: true)
+            let pieces = try await withTaskCancellationHandler {
+                try await collect.value
+            } onCancel: {
+                collect.cancel()
+                Task { await analyzer.cancelAndFinishNow() }
+            }
+            try Task.checkCancellation()
+            s.replaceTranscript(pieces.filter { !$0.text.trimmed.isEmpty }, source: self)
+            store.save(s)
+        } catch {
+            await analyzer.cancelAndFinishNow()
+            throw error
+        }
+    }
+}
+
+/// What to redo; every step after it is redone too, since it is made from it.
+enum NotesRedoStep: Int, Comparable {
+    case transcribe, format, summary
+    static func < (a: Self, b: Self) -> Bool { a.rawValue < b.rawValue }
+}
+
+extension String {
+    /// The text from a UTF-16 offset on.
+    func u16Tail(_ from: Int) -> String {
+        let n = utf16.count, a = Swift.max(0, Swift.min(from, n))
+        return String(utf16[utf16.index(utf16.startIndex, offsetBy: a)...]) ?? ""
+    }
+
+    var trimmed: String { trimmingCharacters(in: .whitespacesAndNewlines) }
+}
+
+/// The audio path off the main thread: 16 kHz mono samples from the capture threads go into the recording and to the
+/// recognizer, or wait in the backlog while it isn't running. Paused, they are dropped (the recording's length counts
+/// only what was recorded).
+final class NotesFeed: @unchecked Sendable {
+    let mixer = NotesMixer()
+    private let lock = NSLock()
+    private var wav: WavWriter?
+    private var paused = true
+    private var samples = 0
+    private var backlog: [Float] = []
+    private var input: AsyncStream<AnalyzerInput>.Continuation?
+    private var analyzerFormat: AVAudioFormat?
+    private var converter: AVAudioConverter?
+    private var _analyzer: SpeechAnalyzer?
+    private let source = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(WavWriter.sampleRate), channels: 1, interleaved: false)!
+
+    var analyzer: SpeechAnalyzer? {
+        get { lock.withLock { _analyzer } }
+        set { lock.withLock { _analyzer = newValue } }
+    }
+
+    /// Seconds recorded (pauses not counted).
+    var seconds: Double { lock.withLock { Double(samples) / Double(WavWriter.sampleRate) } }
+
+    func begin(wav url: URL) throws {
+        let w = try WavWriter(url: url)
+        lock.withLock { wav = w; samples = 0; backlog = []; paused = true }
+    }
+
+    func setPaused(_ on: Bool) { lock.withLock { paused = on } }
+
+    func take(_ chunk: [Float]) {
+        guard !chunk.isEmpty else { return }
+        lock.withLock {
+            guard !paused, let wav else { return }
+            wav.write(chunk)
+            samples += chunk.count
+            if let input { send(chunk, to: input) } else {
+                backlog += chunk
+                if backlog.count > NotesRecorder.maxBacklog { backlog.removeFirst(backlog.count - NotesRecorder.maxBacklog) }
+            }
+        }
+    }
+
+    /// The recognizer is running: the backlog goes first. Returns where in the recording its time 0 is.
+    func connect(input: AsyncStream<AnalyzerInput>.Continuation, format: AVAudioFormat) -> Double {
+        lock.withLock {
+            analyzerFormat = format
+            converter = format == source ? nil : AVAudioConverter(from: source, to: format)
+            self.input = input
+            let start = Double(samples - backlog.count) / Double(WavWriter.sampleRate)
+            if !backlog.isEmpty { send(backlog, to: input) }
+            backlog = []
+            return start
+        }
+    }
+
+    func disconnect() { lock.withLock { input?.finish(); input = nil; _analyzer = nil } }
+    func finishInput() { lock.withLock { input?.finish(); input = nil } }
+
+    func flush() { lock.withLock { wav }?.flush() }
+
+    func end() {
+        let w = lock.withLock { () -> WavWriter? in let w = wav; wav = nil; _analyzer = nil; return w }
+        w?.close()
+    }
+
+    /// Called with the lock held.
+    private func send(_ chunk: [Float], to input: AsyncStream<AnalyzerInput>.Continuation) {
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: source, frameCapacity: AVAudioFrameCount(chunk.count)) else { return }
+        buffer.frameLength = AVAudioFrameCount(chunk.count)
+        chunk.withUnsafeBufferPointer { buffer.floatChannelData![0].update(from: $0.baseAddress!, count: chunk.count) }
+        guard let converter, let format = analyzerFormat else { input.yield(AnalyzerInput(buffer: buffer)); return }
+        let capacity = AVAudioFrameCount(Double(chunk.count) * format.sampleRate / source.sampleRate) + 16
+        guard let out = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { return }
+        var used = false
+        var error: NSError?
+        converter.convert(to: out, error: &error) { _, status in
+            if used { status.pointee = .noDataNow; return nil }
+            used = true
+            status.pointee = .haveData
+            return buffer
+        }
+        if error == nil, out.frameLength > 0 { input.yield(AnalyzerInput(buffer: out)) }
+    }
+
+    /// A microphone buffer as 16 kHz mono samples.
+    static func convert(_ buffer: AVAudioPCMBuffer, with converter: AVAudioConverter, to format: AVAudioFormat) -> [Float] {
+        let capacity = AVAudioFrameCount(Double(buffer.frameLength) * format.sampleRate / buffer.format.sampleRate) + 16
+        guard let out = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { return [] }
+        var used = false
+        var error: NSError?
+        converter.convert(to: out, error: &error) { _, status in
+            if used { status.pointee = .noDataNow; return nil }
+            used = true
+            status.pointee = .haveData
+            return buffer
+        }
+        guard error == nil, let data = out.floatChannelData?[0] else { return [] }
+        return Array(UnsafeBufferPointer(start: data, count: Int(out.frameLength)))
+    }
+}

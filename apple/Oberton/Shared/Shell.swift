@@ -3,11 +3,12 @@ import SwiftUI
 
 /// The main window's sections, as in the Windows sidebar.
 enum Section: String, CaseIterable, Hashable {
-    case dashboard, speechToText, readAloud, history, analytics, settings
+    case dashboard, notes, speechToText, readAloud, history, analytics, settings
 
     var title: String {
         switch self {
         case .dashboard: "Dashboard"
+        case .notes: "Extended notes"
         case .speechToText: "Speech to text"
         case .readAloud: "Read aloud"
         case .history: "History"
@@ -19,6 +20,7 @@ enum Section: String, CaseIterable, Hashable {
     var japanese: String {
         switch self {
         case .dashboard: "計器"
+        case .notes: "記録"
         case .speechToText: "口述"
         case .readAloud: "読上"
         case .history: "履歴"
@@ -88,6 +90,8 @@ struct Place: Equatable {
     var profileID: String?
     var settings: SettingsSection = .general
     var historyID: UUID?
+    /// Extended Notes: the session open (its folder's name), or nil for the landing page.
+    var noteSessionID: String?
 }
 
 @MainActor
@@ -103,6 +107,8 @@ final class Navigator: ObservableObject {
     func goSettings(_ s: SettingsSection) { go { $0.section = .settings; $0.settings = s } }
     func goProfile(_ id: String?) { go { $0.section = .speechToText; $0.profileID = id } }
     func goHistory(_ id: UUID?) { go { $0.section = .history; $0.historyID = id } }
+    /// Extended Notes: a session (the live one, or one from the list), or the landing page.
+    func goNotes(_ sessionID: String?) { go { $0.section = .notes; $0.noteSessionID = sessionID } }
 
     private func go(_ change: (inout Place) -> Void) {
         var next = place
@@ -203,6 +209,7 @@ struct RootView: View {
     @ViewBuilder private var page: some View {
         switch nav.place.section {
         case .dashboard: DashboardView()
+        case .notes: NotesView()
         case .speechToText: SpeechToTextView()
         case .readAloud: ReadAloudView()
         case .history: HistoryView()
@@ -250,7 +257,9 @@ struct Sidebar: View {
                 .padding(.bottom, 24)
             VStack(spacing: 2) {
                 ForEach(Section.allCases, id: \.self) { s in
-                    NavCapsule(title: s.title, japanese: s.japanese, icon: s.icon, selected: nav.place.section == s) { nav.go(s) }
+                    NavCapsule(title: s.title, japanese: s.japanese, icon: s.icon, selected: nav.place.section == s) {
+                        if s == .notes { nav.goNotes(nil) } else { nav.go(s) }
+                    }
                 }
             }
             Spacer(minLength: 12)
@@ -297,6 +306,7 @@ extension Section {
     var icon: String {
         switch self {
         case .dashboard: "gauge.with.needle"
+        case .notes: "doc.plaintext"
         case .speechToText: "mic"
         case .readAloud: "speaker.wave.2"
         case .history: "text.alignleft"
