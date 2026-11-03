@@ -19,15 +19,14 @@ struct SpeechSection: View {
             Caption(languageNote, size: 12.5).padding(.top, 6).frame(maxWidth: 560, alignment: .leading)
             FieldLabel("Quiet speech")
             SwitchCard {
-                // Windows also applies this to Extended Notes; on the Mac, Extended Notes records through its own path.
                 ObSwitch("Even out the volume before transcribing",
-                         detail: "Brings quiet stretches up to the level of the rest, so a quiet microphone or turning away from it doesn't lose whole sentences. Silence still gives nothing. On by default; applies to dictation.",
+                         detail: "Brings quiet stretches up to the level of the rest, and finds the words by how far they stand above the room's background noise, so a quiet microphone or turning away from it doesn't lose whole sentences. Silence still gives nothing. On by default; applies to dictation and Extended Notes.",
                          isOn: $model.settings.evenOutVolume)
             }
             .frame(maxWidth: 560)
             FieldLabel("Vocabulary hint")
-            ObField("Kubernetes, Dr. Nguyen, Oberton", text: $model.settings.vocabularyHint).frame(maxWidth: 560)
-            Caption("Names and words the recognizer should expect, separated by commas.", size: 12.5).padding(.top, 6)
+            ObField("", text: $model.settings.vocabularyHint).frame(maxWidth: 560).accessibilityLabel("Vocabulary hint")
+            Caption("Optional names and jargon to bias recognition, e.g. Kubernetes, Dr. Nguyen, Acme Corp.", size: 12.5).padding(.top, 6)
         }
     }
 
@@ -52,12 +51,13 @@ struct SpeechModelList: View {
             ModelRow(name: "Apple Speech",
                      badges: (apple ? [("Active", .active)] : []) + (apple && LiveTranscriber.modelRetained ? [("Loaded", .ok)] : []) + [("Installed", .plain)],
                      detail: "Apple's on-device speech recognizer. Downloads its language once, through the system.",
-                     action: apple ? nil : ("Use this", { model.useSpeechModel("") }))
+                     action: apple ? nil : ("Use this", { model.useSpeechModel("") }), primary: true, enabled: model.whisperDownload == nil)
             ForEach(WhisperModels.all) { row($0) }
-            if let error = model.whisperDownloadError {
-                Text(error).font(Ob.sans(12.5)).foregroundStyle(ob.accent).fixedSize(horizontal: false, vertical: true)
-            }
         }
+        // A failed download is a message box on Windows, with its own words or "The download failed. See the log…".
+        .alert("Oberton", isPresented: Binding(get: { model.whisperDownloadError != nil }, set: { if !$0 { model.whisperDownloadError = nil } })) {
+            Button("OK") {}
+        } message: { Text(model.whisperDownloadError ?? "") }
     }
 
     private func row(_ m: WhisperModel) -> some View {
@@ -71,12 +71,14 @@ struct SpeechModelList: View {
         if model.whisperLoad?.model == m.id { badges.append((model.whisperLoad!.firstTime ? "Preparing…" : "Loading…", .cloud)) }
         badges.append(downloaded ? ("Downloaded", .plain) : ("Not downloaded", .outline))
         if !runs && !downloaded { badges.append(("Too big for this \(Device.noun)", .outline)) }
+        // One download at a time; meanwhile every other row's button is there but disabled (ModelsPage.Row).
         let action: (String, () -> Void)? =
             fetching ? ("Cancel", { model.cancelWhisperDownload() })
-            : !downloaded ? (runs && model.whisperDownload == nil ? ("Download", { model.downloadWhisper(m.id) }) : nil)
+            : !downloaded ? (runs ? ("Download", { model.downloadWhisper(m.id) }) : nil)
             : active ? nil : ("Use this", { model.useSpeechModel(m.id) })
         return ModelRow(name: m.name, badges: badges, detail: "\(m.description) · \(m.size)", action: action,
-                        progress: fetching ? .some(model.whisperDownload?.fraction) : nil)
+                        progress: fetching ? .some(model.whisperDownload?.fraction) : nil,
+                        primary: downloaded, enabled: fetching || model.whisperDownload == nil)
     }
 }
 

@@ -96,6 +96,10 @@ public struct LocalCatalogModel: Sendable, Identifiable, Equatable {
     public var size: String
     /// The memory it needs (a model that runs from memory), 0 for none.
     public var minRamGB: Double = 0
+
+    public init(id: String, name: String, description: String, size: String, minRamGB: Double = 0) {
+        self.id = id; self.name = name; self.description = description; self.size = size; self.minRamGB = minRamGB
+    }
 }
 
 public enum LocalCatalog {

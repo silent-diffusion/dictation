@@ -14,12 +14,14 @@ struct MicrophoneSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Caption("Audio is held in memory only while you dictate, and recognized on this \(Device.noun). Nothing is recorded to disk.")
+            // Windows' words, except that History may keep a dictation's recording here too (Settings › History).
+            Caption("Audio is held in memory only while you dictate and is discarded afterwards, unless History keeps the recording. Recordings are never uploaded.")
             FieldLabel("Microphone")
             ObMenu(options: [(Self.systemDefault, "(System default microphone)")] + devices.map { ($0, $0) }, selection: choice, width: 400)
             FieldLabel("Input level")
             // While a dictation records, its own level shows; otherwise the page's meter (as Windows' AudioPage).
-            LevelBar(level: model.phase == .recording ? model.level : meterLevel).frame(width: 400, height: 10)
+            ProgressBar(fraction: Double(model.phase == .recording ? model.level : meterLevel)).frame(width: 400, height: 10)
+                .accessibilityLabel("Input level")
             Caption(problem ?? "Speak to see the meter move. If it stays flat, choose another microphone or check \(privacyPlace).", size: 12.5)
                 .padding(.top, 8)
         }
@@ -66,22 +68,5 @@ struct MicrophoneSection: View {
         meter?.stop()
         meter = nil
         meterLevel = 0
-    }
-}
-
-/// A level as a block bar.
-struct LevelBar: View {
-    var level: Float
-    @Environment(\.ob) private var ob
-
-    var body: some View {
-        GeometryReader { geo in
-            HStack(spacing: 2) {
-                ForEach(0..<40, id: \.self) { i in
-                    Rectangle().fill(Float(i) / 40 < level ? ob.ink : ob.subtle)
-                }
-            }
-            .frame(width: geo.size.width)
-        }
     }
 }
