@@ -22,6 +22,9 @@ public final class ReadAloudPlayer: NSObject, ObservableObject, AVSpeechSynthesi
 
     /// The text being read, as plain text (Markdown taken out).
     @Published public private(set) var text = ""
+    /// The text with its formatting (headings, lists, quotes, bold, links…), for the player's whole-text view; its
+    /// `plain` is `text`.
+    @Published public private(set) var doc = MarkdownDoc.parse("")
     /// Its sentences (and lines), as ranges of `text`.
     @Published public private(set) var sentences: [NSRange] = []
     /// The sentence being read.
@@ -103,9 +106,11 @@ public final class ReadAloudPlayer: NSObject, ObservableObject, AVSpeechSynthesi
     /// Read `raw` (Markdown is read as the plain text it stands for). A text with nothing to read shows an error.
     public func read(_ raw: String, voice: String?, speed: Double) {
         stop()
-        let plain = MarkdownText.forReading(raw)
+        let parsed = MarkdownDoc.parse(raw)
+        let plain = parsed.plain
         let pieces = ReadAloudText.split(plain)
         guard !pieces.isEmpty else { showError("There's nothing to read in that text."); return }
+        doc = parsed
         text = plain
         sentences = pieces
         chars = pieces.map { ReadAloudText.speakable(plain, $0).count }
@@ -162,7 +167,8 @@ public final class ReadAloudPlayer: NSObject, ObservableObject, AVSpeechSynthesi
     /// occurrence), nil = the end.
     public func showForSnapshot(_ raw: String, word: String?, status: Status, speed: Double = 1, voice: String = "Samantha") {
         stop()
-        text = MarkdownText.forReading(raw)
+        doc = MarkdownDoc.parse(raw)
+        text = doc.plain
         sentences = ReadAloudText.split(text)
         chars = sentences.map { ReadAloudText.speakable(text, $0).count }
         self.speed = speed

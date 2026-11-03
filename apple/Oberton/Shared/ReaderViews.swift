@@ -104,7 +104,7 @@ struct ReaderCard: View {
             .fixedSize(horizontal: false, vertical: true)
             Ruler(progress: player.progress, accent: accent).frame(height: 6).padding(EdgeInsets(top: 12, leading: 2, bottom: 10, trailing: 2))
             if expanded {
-                ReaderFullText(text: player.text, word: currentWord, accent: accent) { player.jump(to: $0) }
+                ReaderFullText(doc: player.doc, word: currentWord, accent: accent) { player.jump(to: $0) }
                     .padding(.leading, 2)
             } else {
                 Text(sentenceLine).font(Ob.sans(16)).lineSpacing(5).lineLimit(2).truncationMode(.tail)
@@ -339,54 +339,49 @@ typealias PlatformFont = UIFont
 /// It keeps the word in view (a third of the way down, only when it nears an edge), except for 5 s after the user
 /// scrolls; a click on a word reads from there. TextKit, for the click's character and the word's place.
 struct ReaderFullText {
-    var text: String
+    var doc: MarkdownDoc
     var word: NSRange
     var accent: Color
     var onClick: (Int) -> Void
 
     static let maxHeight: CGFloat = 380
     static let followPause: TimeInterval = 5
+    private static let dim = ReaderCard.ink.opacity(0.45)
 
     final class Coordinator: NSObject {
-        var text: String?
+        var shown: MarkdownDoc?
         var userScrolledAt = Date.distantPast
         var onClick: (Int) -> Void = { _ in }
+        var display = ReaderDisplay(doc: MarkdownDoc.parse(""))
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    static func attributed(_ text: String) -> NSAttributedString {
-        let p = NSMutableParagraphStyle()
-        p.minimumLineHeight = 23
-        p.maximumLineHeight = 23
-        return NSAttributedString(string: text, attributes: [
-            .font: PlatformFont.systemFont(ofSize: 15),
-            .foregroundColor: PlatformColor(ReaderCard.ink.opacity(0.45)),
-            .paragraphStyle: p,
-        ])
-    }
+    var text: String { doc.plain }
 
-    /// Colour [0, word) white, the word in the accent, the rest dimmed.
-    func paint(_ storage: NSTextStorage) {
+    /// Colour what was read white, the word in the accent, the rest dimmed; bullets and quote bars stay dimmed.
+    func paint(_ storage: NSTextStorage, _ display: ReaderDisplay) {
         let n = storage.length
-        let start = min(max(word.location, 0), n), end = min(NSMaxRange(word), n)
+        let start = min(display.toDisplay(word.location), n), end = min(max(start, display.toDisplay(NSMaxRange(word))), n)
         storage.beginEditing()
         storage.addAttribute(.foregroundColor, value: PlatformColor(ReaderCard.ink), range: NSRange(location: 0, length: start))
         storage.addAttribute(.foregroundColor, value: PlatformColor(accent), range: NSRange(location: start, length: end - start))
-        storage.addAttribute(.foregroundColor, value: PlatformColor(ReaderCard.ink.opacity(0.45)), range: NSRange(location: end, length: n - end))
+        storage.addAttribute(.foregroundColor, value: PlatformColor(Self.dim), range: NSRange(location: end, length: n - end))
+        for r in display.prefixes { storage.addAttribute(.foregroundColor, value: PlatformColor(Self.dim), range: r) }
         storage.endEditing()
     }
 
-    func height(width: CGFloat) -> CGFloat {
-        let r = Self.attributed(text).boundingRect(with: CGSize(width: max(width - 12, 10), height: .greatestFiniteMagnitude),
-                                                   options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
+    func height(width: CGFloat, _ display: ReaderDisplay) -> CGFloat {
+        let r = display.attributed.boundingRect(with: CGSize(width: max(width - 12, 10), height: .greatestFiniteMagnitude),
+                                                options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
         return min(Self.maxHeight, ceil(r.height) + 4)
     }
 
     /// Where the word is, in the text view's coordinates.
-    func wordRect(_ layout: NSLayoutManager, _ container: NSTextContainer) -> CGRect? {
+    func wordRect(_ layout: NSLayoutManager, _ container: NSTextContainer, _ display: ReaderDisplay) -> CGRect? {
         guard layout.numberOfGlyphs > 0 else { return nil }
-        let at = NSRange(location: min(word.location, max(0, (text as NSString).length - 1)), length: max(1, word.length))
+        let start = display.toDisplay(word.location)
+        let at = NSRange(location: min(start, max(0, display.attributed.length - 1)), length: max(1, display.toDisplay(NSMaxRange(word)) - start))
         let glyphs = layout.glyphRange(forCharacterRange: at, actualCharacterRange: nil)
         return layout.boundingRect(forGlyphRange: glyphs, in: container)
     }
@@ -396,6 +391,91 @@ struct ReaderFullText {
         let y = rect.minY - visible.minY
         if y >= 8, y + rect.height <= visible.height - 28 { return nil }
         return max(0, min(rect.minY - visible.height / 3, content - visible.height))
+    }
+}
+
+/// The reading's plain text laid out with its Markdown as formatting (Windows' ReaderWindow.BuildFull): headings
+/// larger with room above, "  •  " bullets and indented numbers, "▍ " quotes in italics, code in mono, bold, italic,
+/// underlined links. The bullets and bars are extra characters, so positions are mapped between the plain text (what
+/// the voice reads) and the shown text.
+struct ReaderDisplay {
+    let attributed: NSAttributedString
+    /// The added characters (bullets, bars), kept dimmed.
+    let prefixes: [NSRange]
+    /// Per line: where it starts in the plain text, and how far the shown text has moved by then.
+    private let starts: [(plain: Int, delta: Int, shown: Int)]
+
+    init(doc: MarkdownDoc) {
+        let out = NSMutableAttributedString()
+        var prefixes: [NSRange] = []
+        var starts: [(Int, Int, Int)] = []
+        let plain = doc.plain as NSString
+        var delta = 0
+        let mono = PlatformFont(name: "CascadiaMono-Regular", size: 13.5) ?? .monospacedSystemFont(ofSize: 13.5, weight: .regular)
+        for (i, line) in doc.lines.enumerated() {
+            let prefix: String = switch line.kind {
+            case .bullet: String(repeating: " ", count: 4 * line.level) + "  •  "
+            case .numbered: String(repeating: " ", count: 4 * line.level) + "  "
+            case .quote: "▍ "
+            default: ""
+            }
+            let size: CGFloat = line.kind == .heading ? (line.level == 1 ? 21 : line.level == 2 ? 18.5 : line.level == 3 ? 16.5 : 15.5) : 15
+            let p = NSMutableParagraphStyle()
+            p.minimumLineHeight = max(23, (size * 1.35).rounded())
+            p.maximumLineHeight = p.minimumLineHeight
+            // Room above a heading (Windows adds an empty line).
+            if line.kind == .heading, i > 0, doc.lines[i - 1].length > 0 { p.paragraphSpacingBefore = 12 }
+            let base: [NSAttributedString.Key: Any] = [.font: PlatformFont.systemFont(ofSize: 15), .paragraphStyle: p]
+            let lineShown = out.length
+            if !prefix.isEmpty {
+                prefixes.append(NSRange(location: out.length, length: (prefix as NSString).length))
+                out.append(NSAttributedString(string: prefix, attributes: base))
+                delta += (prefix as NSString).length
+            }
+            starts.append((line.start, delta, lineShown))
+            // The line's text, split wherever the inline style changes.
+            var at = line.start
+            let end = line.start + line.length
+            while at < end {
+                let style = doc.styleAt(at)
+                var j = at + 1
+                while j < end, doc.styleAt(j) == style { j += 1 }
+                var a = base
+                var font: PlatformFont = line.kind == .code ? mono : .systemFont(ofSize: size, weight: line.kind == .heading ? .semibold : .regular)
+                if style.contains(.bold) { font = .systemFont(ofSize: size, weight: .bold) }
+                if style.contains(.code) { font = mono; a[.backgroundColor] = PlatformColor(white: 1, alpha: 0x1F / 255.0) }
+                if line.kind == .quote || style.contains(.italic) { font = Self.italic(font) }
+                if style.contains(.link) { a[.underlineStyle] = NSUnderlineStyle.single.rawValue }
+                if style.contains(.strike) { a[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
+                a[.font] = font
+                out.append(NSAttributedString(string: plain.substring(with: NSRange(location: at, length: j - at)), attributes: a))
+                at = j
+            }
+            if i < doc.lines.count - 1 { out.append(NSAttributedString(string: "\n", attributes: base)) }
+        }
+        attributed = out
+        self.prefixes = prefixes
+        self.starts = starts
+    }
+
+    /// A position of the plain text in the shown text.
+    func toDisplay(_ plain: Int) -> Int {
+        guard let line = starts.last(where: { $0.plain <= plain }) else { return plain }
+        return plain + line.delta
+    }
+
+    /// A position of the shown text (a click) in the plain text; a click on a bullet is the start of its line.
+    func toPlain(_ shown: Int) -> Int {
+        guard let line = starts.last(where: { $0.shown <= shown }) ?? starts.first else { return shown }
+        return max(line.plain, shown - line.delta)
+    }
+
+    private static func italic(_ f: PlatformFont) -> PlatformFont {
+        #if os(macOS)
+        return NSFont(descriptor: f.fontDescriptor.withSymbolicTraits(f.fontDescriptor.symbolicTraits.union(.italic)), size: f.pointSize) ?? f
+        #else
+        return f.fontDescriptor.withSymbolicTraits(f.fontDescriptor.symbolicTraits.union(.traitItalic)).map { UIFont(descriptor: $0, size: f.pointSize) } ?? f
+        #endif
     }
 }
 
@@ -429,18 +509,20 @@ extension ReaderFullText: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let textView = scroll.documentView as? NSTextView, let storage = textView.textStorage,
               let layout = textView.layoutManager, let container = textView.textContainer else { return }
-        context.coordinator.onClick = onClick
-        if context.coordinator.text != text {
-            context.coordinator.text = text
-            storage.setAttributedString(Self.attributed(text))
-            context.coordinator.userScrolledAt = .distantPast
+        let coordinator = context.coordinator
+        if coordinator.shown != doc {
+            coordinator.shown = doc
+            coordinator.display = ReaderDisplay(doc: doc)
+            storage.setAttributedString(coordinator.display.attributed)
+            coordinator.userScrolledAt = .distantPast
             scroll.contentView.scroll(to: .zero)
         }
-        paint(storage)
-        let coordinator = context.coordinator
+        let display = coordinator.display
+        coordinator.onClick = { onClick(display.toPlain($0)) }
+        paint(storage, display)
         DispatchQueue.main.async {
             guard Date().timeIntervalSince(coordinator.userScrolledAt) >= Self.followPause,
-                  let rect = wordRect(layout, container) else { return }
+                  let rect = wordRect(layout, container, display) else { return }
             let visible = scroll.contentView.bounds
             guard let y = followOffset(rect: rect, visible: visible, content: textView.frame.height) else { return }
             scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
@@ -450,7 +532,7 @@ extension ReaderFullText: NSViewRepresentable {
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSScrollView, context: Context) -> CGSize? {
         let width = proposal.width ?? ReaderCard.expandedWidth - 30
-        return CGSize(width: width, height: height(width: width))
+        return CGSize(width: width, height: height(width: width, context.coordinator.shown == doc ? context.coordinator.display : ReaderDisplay(doc: doc)))
     }
 
     /// Reports the user's own scrolling (wheel, trackpad, scroll bar), not the follow's.
@@ -503,18 +585,20 @@ extension ReaderFullText: UIViewRepresentable {
     }
 
     func updateUIView(_ textView: UITextView, context: Context) {
-        context.coordinator.onClick = onClick
-        if context.coordinator.text != text {
-            context.coordinator.text = text
-            textView.attributedText = Self.attributed(text)
-            context.coordinator.userScrolledAt = .distantPast
+        let coordinator = context.coordinator
+        if coordinator.shown != doc {
+            coordinator.shown = doc
+            coordinator.display = ReaderDisplay(doc: doc)
+            textView.attributedText = coordinator.display.attributed
+            coordinator.userScrolledAt = .distantPast
             textView.setContentOffset(.zero, animated: false)
         }
-        paint(textView.textStorage)
-        let coordinator = context.coordinator
+        let display = coordinator.display
+        coordinator.onClick = { onClick(display.toPlain($0)) }
+        paint(textView.textStorage, display)
         DispatchQueue.main.async {
             guard Date().timeIntervalSince(coordinator.userScrolledAt) >= Self.followPause,
-                  var rect = wordRect(textView.layoutManager, textView.textContainer) else { return }
+                  var rect = wordRect(textView.layoutManager, textView.textContainer, display) else { return }
             rect.origin.y += textView.textContainerInset.top
             let visible = CGRect(origin: textView.contentOffset, size: textView.bounds.size)
             guard let y = followOffset(rect: rect, visible: visible, content: textView.contentSize.height) else { return }
@@ -524,7 +608,7 @@ extension ReaderFullText: UIViewRepresentable {
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
         let width = proposal.width ?? 340
-        return CGSize(width: width, height: height(width: width))
+        return CGSize(width: width, height: height(width: width, context.coordinator.shown == doc ? context.coordinator.display : ReaderDisplay(doc: doc)))
     }
 }
 
