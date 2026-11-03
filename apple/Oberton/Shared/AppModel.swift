@@ -138,10 +138,11 @@ final class AppModel: ObservableObject {
     private var live: LiveInsertion?
 
     /// Whether a dictation with this profile types while you speak: the General switch on, a profile without a
-    /// preview, and a platform that can type into other apps (the Mac).
+    /// preview, and a platform that may type into other apps now (the Mac, with Oberton allowed in Accessibility).
+    /// Windows also leaves it off when there is nowhere to type; that is only known at the hotkey press.
     func typesWhileSpeaking(_ profile: Profile) -> Bool {
         #if os(macOS)
-        settings.typeWhileSpeaking && !profile.showPreview
+        settings.typeWhileSpeaking && !profile.showPreview && CGPreflightPostEventAccess()
         #else
         false
         #endif
