@@ -1,9 +1,9 @@
 import Foundation
 
 /// The text immediately around the caret in the target app (Windows `InsertionContext`). Only a sentence or two on
-/// each side is kept. Nothing on the Mac reads it yet: the App Store sandbox can't read other apps' text, so the
-/// "Fit dictation into the surrounding text" setting has no source. The rules are here for whatever source comes
-/// (an iOS keyboard's document context, or a non-sandboxed Mac build).
+/// each side is kept. The Mac's direct build reads it through Accessibility (`AXReader`); the App Store sandbox can't
+/// read other apps' text, so there "Fit dictation into the surrounding text" is hidden and only live typing's own text
+/// counts as context. It never leaves the device, is never logged, and is not sent to the AI model.
 public struct InsertionContext: Equatable, Sendable {
     public var before: String
     public var after: String
