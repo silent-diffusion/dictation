@@ -97,7 +97,8 @@ struct DashboardView: View {
         switch i {
         case 0:
             let best = days.map(\.words).max() ?? 0
-            meterCell(to: .history) {
+            // The same figures over time: Analytics (DashboardPage.DialPage).
+            meterCell(to: .analytics) {
                 RingMeter(fraction: best > 0 ? Double(today.words) / Double(best) : 0, value: today.words.formatted(), label: "Dictated today",
                           sub: best > 0 ? "words · best day \(best.formatted())" : "no dictation yet", accent: true)
             }
@@ -108,20 +109,32 @@ struct DashboardView: View {
                           label: "Read aloud today", sub: best > 0 ? "words · best day \(best.formatted())" : "nothing read yet")
             }
         case 2:
-            let turn = model.recentTurnaround
-            meterCell(settings: .models) {
-                FanMeter(fraction: (turn ?? 0) / 10, value: turn.map { String(format: "%.1f s", $0) } ?? "—", label: "Turnaround")
+            // The last three dictations with the current speech and AI models, leaving out any that had to load a model.
+            let p = model.activeProfile
+            let ai = model.aiModelName(p)
+            let (turn, count) = model.usage.recentTurnaround(speechModel: model.speechModelName, aiModel: ai)
+            meterCell(to: .analytics) {
+                FanMeter(fraction: min(max((turn ?? 0) / 10, 0), 1), value: turn.map { String(format: "%.1f s", $0) } ?? "—",
+                         label: "Turnaround",
+                         sub: count == 0 ? "no runs yet with these models loaded"
+                             : "last \(count) · Apple Speech" + (ai.isEmpty ? ", no AI" : " + " + model.processor.model(for: p).shortName)
+                                 + ", models already loaded")
             }
         default:
-            // The speech model (DashboardPage's speech dial). The Mac has no unload timer: once used, the model stays
-            // loaded until the system lets it go or it is unloaded here.
+            // The speech model (DashboardPage's speech dial): busy, off, on (kept or let go right after use), or the
+            // minutes left until it unloads.
+            let minutes = model.settings.unloadAfterMinutes
             meterCell(settings: .speech, footer: AnyView(unloadButton)) {
                 if model.phase.isBusy {
                     RingMeter(fraction: 1, value: "busy", label: "Speech model", sub: "dictating now", accent: true)
                 } else if !model.speechLoaded {
                     RingMeter(fraction: 0, value: "off", label: "Speech model", sub: "loads when you dictate")
+                } else if minutes > 0, let left = model.unloadCountdown {
+                    RingMeter(fraction: left / Double(minutes * 60), value: left >= 60 ? "\(Int((left / 60).rounded(.up))) min" : "<1 min",
+                              label: "Speech model", sub: "until it unloads", accent: true,
+                              valueAction: unloadSpeechNow, valueTip: "Click to unload the speech model now")
                 } else {
-                    RingMeter(fraction: 1, value: "on", label: "Speech model", sub: "stays loaded",
+                    RingMeter(fraction: 1, value: "on", label: "Speech model", sub: minutes < 0 ? "unloads right after use" : "stays loaded",
                               valueAction: unloadSpeechNow, valueTip: "Click to unload the speech model now")
                 }
             }
@@ -179,6 +192,9 @@ struct DashboardView: View {
         #if os(macOS)
         parts.append("\(model.settings.cycleProfileHotkey) switches profile")
         #endif
+        let m = model.settings.unloadAfterMinutes
+        let unload = m < 0 ? "right after each use" : m == 0 ? "never" : m >= 60 ? "\((Double(m) / 60).formatted(.number.precision(.fractionLength(0...1)))) h" : "\(m) min"
+        parts.append("models unload " + (m < 0 ? unload : "after \(unload) unused"))
         return parts.joined(separator: "  //  ")
     }
 }
@@ -224,10 +240,14 @@ struct SignalPathCell: View {
                 Readout("Tap a node", size: 12).lineLimit(1)
                 #endif
                 Spacer()
-                Text(model.aiReady || model.activeProfile.isRaw ? "ON-DEVICE // READY" : "AI NOT READY")
-                    .font(Ob.mono(12, .bold))
-                    .foregroundStyle(model.aiReady || model.activeProfile.isRaw ? ob.muted : ob.accent)
-                    .lineLimit(1)
+                // When the models unload ("UNLOAD IN 12:34" in the accent), ticking each second.
+                TimelineView(.periodic(from: .now, by: 1)) { _ in
+                    let note = model.unloadNote
+                    Text(note.uppercased())
+                        .font(Ob.mono(12, .bold))
+                        .foregroundStyle(note.hasPrefix("Unload in") ? ob.accent : ob.muted)
+                        .lineLimit(1)
+                }
             }
         }
     }
@@ -237,24 +257,26 @@ struct SignalPathCell: View {
         let micOn = phase == .starting || phase == .recording
         let speechOn = micOn || phase == .transcribing
         let aiOn = !p.isRaw && phase == .processing
-        let insertOn = phase == .inserting
+        let insertOn = phase == .inserting || phase == .placing
         let id = model.processor.model(for: p)
         let cloud = !id.isLocal
         let lastApp = model.lastEntry?.appName
         #if os(macOS)
-        let insertTitle = "Paste" + (p.showPreview ? " // preview" : "")
+        let s = model.settings
+        let insertTitle = (s.insertion == .typing ? "Type" : s.insertion == .clipboard ? "Paste" : "Paste or type")
+            + (s.typeWhileSpeaking && !p.showPreview ? " // live" : p.showPreview ? " // preview" : "")
         let insertRest = lastApp.map { "last → \($0)" } ?? "at the cursor"
         #else
         let insertTitle = "Copy" + (p.showPreview ? " // preview" : "")
         let insertRest = "to the clipboard"
         #endif
         return [
-            PathNode(label: "MIC", title: "Default microphone", status: micOn ? "Recording" : "Ready", state: micOn ? .busy : .ok) {
+            PathNode(label: "MIC", title: model.settings.microphoneName ?? "Default microphone", status: micOn ? "Recording" : "Ready", state: micOn ? .busy : .ok) {
                 nav.goSettings(.microphone)
             },
             PathNode(label: "SPEECH", title: "Apple Speech",
-                     status: "on-device // " + (phase == .transcribing ? "transcribing" : speechOn ? "listening" : "ready"),
-                     state: speechOn ? .busy : .ok) { nav.goSettings(.speech) },
+                     status: "on-device // " + (phase == .transcribing ? "transcribing" : speechOn ? "listening" : model.speechLoaded ? "loaded" : "not loaded"),
+                     state: speechOn ? .busy : model.speechLoaded ? .ok : .off) { nav.goSettings(.models) },
             p.isRaw
                 ? PathNode(label: "AI", title: "No AI", status: p.name + " // raw words", state: .off) { nav.goProfile(p.id) }
                 : PathNode(label: cloud ? "AI // CLOUD" : "AI", title: id.shortName,
@@ -599,15 +621,15 @@ struct HistoryCell: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 0) {
                     Text("HISTORY").font(Ob.mono(13, .bold)).foregroundStyle(hover ? ob.accent : ob.ink)
-                    Readout(last?.aiEdit != nil ? "Last AI edit" : "Last dictation", size: 10).padding(.top, 6)
+                    Readout(last == nil || last?.aiEdit?.isEmpty == false ? "Last AI edit" : "Last dictation // No AI edit", size: 10).padding(.top, 6)
                     if let last {
-                        Text(meta(last)).font(Ob.mono(11)).foregroundStyle(ob.muted).lineLimit(1)
+                        Text(meta(last)).font(Ob.mono(11)).foregroundStyle(ob.muted).lineLimit(1).truncationMode(.tail)
                     }
                 }
                 Spacer()
                 VStack(alignment: .trailing, spacing: 0) {
                     Text(model.history.count.formatted()).font(Ob.mono(28, .bold)).foregroundStyle(hover ? ob.accent : ob.ink)
-                    Readout(model.settings.historyLimit > 0 ? "of \(model.settings.historyLimit) kept" : "kept, no limit", size: 10)
+                    Readout(kept, size: 10)
                 }
             }
             .contentShape(Rectangle())
@@ -616,7 +638,7 @@ struct HistoryCell: View {
             .help("Open History")
 
             PageScroll {
-                Text(last.map { $0.aiEdit ?? $0.inserted } ?? "Nothing dictated yet. Your last dictation shows here.")
+                Text(last.map(Self.shown) ?? "Nothing dictated yet. Your last dictation shows here.")
                     .font(Ob.mono(14))
                     .foregroundStyle(last == nil ? ob.muted : ob.ink)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -645,15 +667,30 @@ struct HistoryCell: View {
                 .help("Insert the last dictation's transcription (the words as heard) into the app it went to")
                 #endif
                 Spacer(minLength: 0)
-                CopyButton(text: last.map { $0.aiEdit ?? $0.inserted } ?? "")
+                CopyButton(text: last.map(Self.shown) ?? "")
             }
         }
     }
 
+    /// "OF 50 KEPT", "KEPT · LAST MONTH" or "KEPT, NO LIMIT".
+    private var kept: String {
+        let s = model.settings
+        return s.historyLimit > 0 ? "of \(s.historyLimit.formatted()) kept"
+            : s.historyDays > 0 ? "kept · last \(HistoryStore.daysLabel(s.historyDays))" : "kept, no limit"
+    }
+
+    /// What the cell shows of a dictation: the AI's edit; without one, what went in (or what was heard).
+    static func shown(_ e: HistoryEntry) -> String {
+        if let ai = e.aiEdit, !ai.isEmpty { return ai }
+        return e.inserted.isEmpty ? e.transcription : e.inserted
+    }
+
+    /// "Mail · 14:32 · 12 words".
     private func meta(_ e: HistoryEntry) -> String {
-        var parts = [e.date.formatted(.relative(presentation: .named)).uppercased()]
-        if let app = e.appName { parts.append(app.uppercased()) }
-        parts.append("\(e.words) WORDS")
-        return parts.joined(separator: " // ")
+        var parts: [String] = []
+        if let app = e.appName { parts.append(app) }
+        parts.append(HistoryEntry.when(e.date))
+        parts.append("\(e.words.formatted()) word" + (e.words == 1 ? "" : "s"))
+        return parts.joined(separator: " · ")
     }
 }

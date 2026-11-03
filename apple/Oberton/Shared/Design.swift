@@ -84,6 +84,47 @@ extension View {
     func obertonTheme(_ settings: AppSettings) -> some View { modifier(ObertonTheme(settings: settings)) }
 }
 
+/// The text size: the whole window scaled, 70% to 200% in Windows' steps (MainWindow.Zoom), saved as `uiScale`.
+enum TextSize {
+    static let steps = [0.7, 0.8, 0.9, 1.0, 1.1, 1.25, 1.4, 1.5, 1.75, 2.0]
+    static let min = 0.7, max = 2.0
+
+    static func clamped(_ scale: Double) -> Double {
+        Swift.min(Swift.max(scale.isFinite && scale > 0 ? scale : 1, min), max)
+    }
+
+    /// One step larger (+1) or smaller (-1) than `scale`.
+    static func step(from scale: Double, _ direction: Int) -> Double {
+        let now = clamped(scale)
+        return direction > 0 ? steps.first { $0 > now + 0.001 } ?? max : steps.last { $0 < now - 0.001 } ?? min
+    }
+
+    // The shortcuts as tooltips and captions name them (Windows: Ctrl+0, Ctrl+B, Alt+Left).
+    static let resetKey = "⌘0"
+    static let menuKey = "⌘B"
+    static let backKey = "⌘["
+}
+
+/// Lays the window out at 1/scale of its size and scales it up to fill (WPF's LayoutTransform on the root), so
+/// everything grows or shrinks together.
+struct ZoomedWindow<Content: View>: View {
+    var scale: Double
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        if abs(scale - 1) < 0.001 {
+            content
+        } else {
+            GeometryReader { geo in
+                content
+                    .frame(width: geo.size.width / scale, height: geo.size.height / scale)
+                    .scaleEffect(scale, anchor: .topLeading)
+                    .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
+            }
+        }
+    }
+}
+
 // MARK: - Text
 
 /// A readout: small capitals in the mono face, muted, letter-spaced ("SIGNAL PATH", "ENGINE // STATUS").
@@ -407,6 +448,7 @@ struct RingMeter: View {
                     .frame(maxWidth: 144, maxHeight: .infinity, alignment: .bottom).padding(.bottom, 2)
             }
         }
+        .help("\(label): \(value) (\(sub))") // DashboardPage's dial tooltip
     }
 }
 
@@ -415,6 +457,7 @@ struct FanMeter: View {
     var fraction: Double
     var value: String
     var label: String
+    var sub = ""
     @Environment(\.ob) private var ob
 
     var body: some View {
@@ -437,9 +480,14 @@ struct FanMeter: View {
                     ctx.fill(Path(ellipseIn: CGRect(x: cx - 4, y: cy - 4, width: 8, height: 8)), with: .color(ob.ink))
                 }
                 Text(value).font(Ob.mono(21, .bold)).padding(.top, 98)
-                Readout(label, size: 8.5).frame(maxHeight: .infinity, alignment: .bottom).padding(.bottom, 2)
+                VStack(spacing: 2) {
+                    Readout(label, size: 8.5)
+                    if !sub.isEmpty { Text(sub).font(Ob.sans(10)).foregroundStyle(ob.muted).lineLimit(1).truncationMode(.tail).frame(maxWidth: 144) }
+                }
+                .frame(maxHeight: .infinity, alignment: .bottom).padding(.bottom, 2)
             }
         }
+        .help(sub.isEmpty ? "\(label): \(value)" : "\(label): \(value) (\(sub))")
     }
 }
 
@@ -485,30 +533,33 @@ struct StatusDot: View {
 // MARK: - Shared bits
 
 enum Clipboard {
-    static func copy(_ s: String) {
+    /// False when the pasteboard wouldn't take the text.
+    @discardableResult
+    static func copy(_ s: String) -> Bool {
         #if os(macOS)
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(s, forType: .string)
+        return NSPasteboard.general.setString(s, forType: .string)
         #else
         UIPasteboard.general.string = s
+        return true
         #endif
     }
 }
 
-/// COPY that says COPIED for a moment.
+/// COPY that flashes what happened for 1.5 s: COPIED ✓, NOTHING YET, or BUSY, TRY AGAIN (DashboardPage.CopyShown).
 struct CopyButton: View {
     var text: String
     var small = true
-    @State private var copied = false
+    @State private var flash: String?
 
     var body: some View {
-        Button(copied ? "Copied" : "Copy") {
-            Clipboard.copy(text)
-            copied = true
-            Task { try? await Task.sleep(for: .seconds(1.2)); copied = false }
+        Button(flash ?? "Copy") {
+            let label = text.isEmpty ? "Nothing yet" : Clipboard.copy(text) ? "Copied ✓" : "Busy, try again"
+            flash = label
+            Task { try? await Task.sleep(for: .seconds(1.5)); if flash == label { flash = nil } }
         }
         .buttonStyle(small ? .quietSmall : .quiet)
-        .disabled(text.isEmpty)
+        .help("Copy the text shown")
     }
 }
 

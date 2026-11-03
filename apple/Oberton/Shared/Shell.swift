@@ -124,9 +124,11 @@ final class Navigator: ObservableObject {
         place = next
     }
 
+    /// To the place shown before this one, or the dashboard when there is none (MainWindow.GoBack).
     func goBack() {
-        guard let last = back.popLast() else { return }
-        place = last
+        guard place.section != .dashboard else { return }
+        drawerOpen = false
+        place = back.popLast() ?? Place()
     }
 }
 
@@ -141,7 +143,52 @@ struct RootView: View {
     private var compact: Bool { sizeClass == .compact }
     private var sidebarOpen: Bool { compact ? nav.drawerOpen : !model.settings.sidebarCollapsed }
 
+    /// The text size (Settings › Appearance, ⌘+ / ⌘− / ⌘0), shown for a moment after it changes.
+    @State private var zoomToast: String?
+    @State private var zoomToastShown = false
+    #if os(macOS)
+    @State private var mouseBack: Any?
+    #endif
+
     var body: some View {
+        ZoomedWindow(scale: TextSize.clamped(model.settings.uiScale)) { window }
+            .overlay(alignment: .bottom) {
+                if let zoomToast {
+                    Text(zoomToast).font(Ob.mono(12)).foregroundStyle(ob.onInk)
+                        .padding(.horizontal, 18).padding(.vertical, 8)
+                        .background(Capsule().fill(ob.ink))
+                        .opacity(zoomToastShown ? 1 : 0)
+                        .padding(.bottom, 28)
+                        .allowsHitTesting(false)
+                }
+            }
+            .background(ob.paper.ignoresSafeArea())
+            .onChange(of: model.settings.uiScale) { showZoomToast(TextSize.clamped(model.settings.uiScale)) }
+            #if os(macOS)
+            .onAppear {
+                // The mouse's back button (button 3) goes back, as on Windows.
+                mouseBack = NSEvent.addLocalMonitorForEvents(matching: .otherMouseDown) { [nav] event in
+                    if event.buttonNumber == 3 { MainActor.assumeIsolated { nav.goBack() }; return nil }
+                    return event
+                }
+            }
+            .onDisappear { if let mouseBack { NSEvent.removeMonitor(mouseBack) }; mouseBack = nil }
+            #endif
+    }
+
+    /// "TEXT SIZE 125%  //  ⌘0 RESETS" for 1.2 s, then a fade.
+    private func showZoomToast(_ scale: Double) {
+        let text = "TEXT SIZE \(Int((scale * 100).rounded()))%" + (abs(scale - 1) < 0.001 ? "" : "  //  \(TextSize.resetKey) RESETS")
+        zoomToast = text
+        withAnimation(.easeOut(duration: 0.12)) { zoomToastShown = true }
+        Task {
+            try? await Task.sleep(for: .seconds(1.2))
+            guard zoomToast == text else { return }
+            withAnimation(.easeIn(duration: 0.3)) { zoomToastShown = false }
+        }
+    }
+
+    private var window: some View {
         ZStack(alignment: .topLeading) {
             // The page: below the top bar while the sidebar is hidden, beside the sidebar while it is open.
             page
@@ -177,11 +224,29 @@ struct RootView: View {
         }
         #if os(macOS)
         .background {
-            // Back: Cmd+[ (and the mouse's back button through the menu command); the sidebar: Cmd+B.
+            // Back: Cmd+[ (the mouse's back button: the monitor above); the sidebar: Cmd+B; the text size: Cmd+plus/minus/0.
             Button("") { nav.goBack() }.keyboardShortcut("[", modifiers: .command).hidden()
             Button("") { model.settings.sidebarCollapsed.toggle() }.keyboardShortcut("b", modifiers: .command).hidden()
+            Button("") { zoom(+1) }.keyboardShortcut("=", modifiers: .command).hidden()
+            Button("") { zoom(+1) }.keyboardShortcut("+", modifiers: .command).hidden()
+            Button("") { zoom(-1) }.keyboardShortcut("-", modifiers: .command).hidden()
+            Button("") { setZoom(1) }.keyboardShortcut("0", modifiers: .command).hidden()
+        }
+        #else
+        .background {
+            // A hardware keyboard on iPad: the same shortcuts.
+            Button("") { zoom(+1) }.keyboardShortcut("=", modifiers: .command).hidden()
+            Button("") { zoom(-1) }.keyboardShortcut("-", modifiers: .command).hidden()
+            Button("") { setZoom(1) }.keyboardShortcut("0", modifiers: .command).hidden()
         }
         #endif
+    }
+
+    private func zoom(_ direction: Int) { setZoom(TextSize.step(from: model.settings.uiScale, direction)) }
+
+    /// A change to the same size still shows the toast (Windows' SetZoom always shows it).
+    private func setZoom(_ scale: Double) {
+        if abs(model.settings.uiScale - scale) < 0.001 { showZoomToast(scale) } else { model.settings.uiScale = scale }
     }
 
     private var topBarHeight: CGFloat { 56 }
@@ -192,12 +257,13 @@ struct RootView: View {
             MenuGlyphButton(open: sidebarOpen) {
                 if compact { nav.drawerOpen.toggle() } else { model.settings.sidebarCollapsed.toggle() }
             }
-            if nav.place.section != .dashboard && !nav.back.isEmpty && !(sidebarOpen && compact) {
+            // Back is everywhere except the dashboard (where the app starts), as on Windows.
+            if nav.place.section != .dashboard && !(sidebarOpen && compact) {
                 Button { nav.goBack() } label: {
                     Image(systemName: "arrow.left").font(.system(size: 13)).frame(width: 36, height: 36).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help("Back")
+                .help("Back (\(TextSize.backKey))")
                 .accessibilityLabel("Back")
             }
         }
@@ -245,7 +311,7 @@ struct MenuGlyphButton: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(open ? "Hide the menu" : "Show the menu")
+        .help((open ? "Hide the menu" : "Show the menu") + " (\(TextSize.menuKey))")
         .accessibilityLabel(open ? "Hide the menu" : "Show the menu")
     }
 }
@@ -265,7 +331,7 @@ struct Sidebar: View {
                 .padding(.bottom, 24)
             VStack(spacing: 2) {
                 ForEach(Section.allCases, id: \.self) { s in
-                    NavCapsule(title: s.title, japanese: s.japanese, icon: s.icon, selected: nav.place.section == s) {
+                    NavCapsule(title: s.title, japanese: s.japanese, icon: s, selected: nav.place.section == s) {
                         if s == .notes { nav.goNotes(nil) } else { nav.go(s) }
                     }
                 }
@@ -287,13 +353,15 @@ struct Sidebar: View {
                 Decor("倍音", size: 10.5)
             }
             .padding(.bottom, 2)
-            statusRow(model.phase == .recording || model.phase == .transcribing ? .busy : .ok, "Speech · on-device")
-            let profile = model.activeProfile
-            statusRow(profile.isRaw ? .off : model.phase == .processing ? .busy : model.aiReady ? .ok : .off,
-                      "AI · " + (profile.isRaw ? "off (Raw)" : model.processor.model(for: profile).shortName))
-            Readout(model.settings.cloud.keepOffline ? "On-device // offline\nEverything stays on this \(Device.noun)" : "Cloud AI allowed",
+            // Windows' Status.Speech / Status.Ai: the model and whether it is loaded, the dot filled when it is fine.
+            statusRow(model.speechOK ? .ok : .busy, model.speechStatus)
+            statusRow(aiStatus.ok ? .ok : .busy, aiStatus.text)
+            Readout(model.settings.cloud.keepOffline
+                        ? "On-device // offline\nEverything stays on this \(Device.noun)"
+                        : "Cloud AI allowed\nProfiles with a cloud model send their text to it",
                     size: 10)
                 .lineSpacing(3)
+                .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 6)
         }
         .padding(.horizontal, 2)
@@ -301,26 +369,72 @@ struct Sidebar: View {
         .overlay(alignment: .top) { Hairline() }
     }
 
+    /// "AI: Ready · qwen2.5:3b", as TextProcessing's status line (the Mac can't ask Ollama for GPU use per request).
+    private var aiStatus: (text: String, ok: Bool) {
+        let profile = model.activeProfile
+        let id = model.processor.model(for: profile)
+        if profile.isRaw { return ("AI: off · \(profile.name) uses no AI", true) }
+        if !id.isLocal {
+            return model.settings.cloud.keepOffline
+                ? ("AI: \(id.shortName) is a cloud model; \"Keep everything offline\" blocks it", false)
+                : ("AI: Ready · \(id.shortName) (cloud)", true)
+        }
+        if model.aiReady { return ("AI: Ready · \(id.shortName)", true) }
+        switch id.provider {
+        case .apple: return ("AI: Apple Intelligence isn't available", false)
+        default: return ("AI: AI model '\(id.shortName)' not installed", false)
+        }
+    }
+
     private func statusRow(_ state: DotState, _ text: String) -> some View {
         HStack(spacing: 8) {
             StatusDot(state: state)
-            Text(text).font(Ob.mono(11.5)).lineLimit(1).truncationMode(.tail)
+            Text(text).font(Ob.sans(11.5)).lineLimit(1).truncationMode(.tail).help(text)
         }
         .padding(.vertical, 2)
     }
 }
 
-extension Section {
-    var icon: String {
-        switch self {
-        case .dashboard: "gauge.with.needle"
-        case .notes: "doc.plaintext"
-        case .speechToText: "mic"
-        case .readAloud: "speaker.wave.2"
-        case .history: "text.alignleft"
-        case .analytics: "chart.bar.xaxis"
-        case .settings: "gearshape"
+/// The sidebar's line icons, drawn on a 16 pt square from MainWindow.xaml's paths (stroke 1.2, round caps).
+struct NavIcon: Shape {
+    var section: Section
+
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        func line(_ pts: (Double, Double)...) { p.addLines(pts.map { CGPoint(x: $0.0, y: $0.1) }) }
+        func circle(_ x: Double, _ y: Double, _ r: Double) { p.addEllipse(in: CGRect(x: x - r, y: y - r, width: 2 * r, height: 2 * r)) }
+        /// An arc around (x, y), from one angle to the other in degrees (0 = right, 90 = down), as points (no flip
+        /// questions about which way "clockwise" goes).
+        func arc(_ x: Double, _ y: Double, _ r: Double, _ from: Double, _ to: Double, move: Bool = true) {
+            let n = 24
+            for i in 0...n {
+                let a = (from + (to - from) * Double(i) / Double(n)) * .pi / 180
+                let pt = CGPoint(x: x + r * cos(a), y: y + r * sin(a))
+                if i == 0 && move { p.move(to: pt) } else { p.addLine(to: pt) }
+            }
         }
+        switch section {
+        case .dashboard:
+            circle(8, 8, 6.5); line((8, 8), (11, 5)); circle(8, 8, 1)
+        case .notes:
+            line((3, 1.5), (13, 1.5), (13, 14.5), (3, 14.5)); p.closeSubpath()
+            line((5.5, 5), (10.5, 5)); line((5.5, 8), (10.5, 8)); line((5.5, 11), (8.5, 11))
+        case .speechToText:
+            arc(8, 4, 2.5, 180, 360); p.addLine(to: CGPoint(x: 10.5, y: 7.5)); arc(8, 7.5, 2.5, 0, 180, move: false); p.closeSubpath()
+            arc(8, 7.5, 5, 180, 0); line((8, 12.5), (8, 15))
+        case .readAloud:
+            line((1.5, 6), (1.5, 10), (4.5, 10), (8.5, 13), (8.5, 3), (4.5, 6)); p.closeSubpath()
+            arc(8.551, 8, 3.5, -45.58, 45.58); arc(9.031, 8, 6, -48.59, 48.59)
+        case .history:
+            line((2, 4), (14, 4)); line((2, 8), (14, 8)); line((2, 12), (9, 12))
+        case .analytics:
+            line((2.5, 14.5), (2.5, 9)); line((6.5, 14.5), (6.5, 4)); line((10.5, 14.5), (10.5, 7)); line((14, 14.5), (14, 1.5))
+        case .settings:
+            circle(8, 8, 2)
+            line((8, 1), (8, 4)); line((8, 12), (8, 15)); line((1, 8), (4, 8)); line((12, 8), (15, 8))
+            line((3, 3), (5, 5)); line((11, 11), (13, 13)); line((13, 3), (11, 5)); line((5, 11), (3, 13))
+        }
+        return p.applying(CGAffineTransform(translationX: rect.minX, y: rect.minY).scaledBy(x: rect.width / 16, y: rect.height / 16))
     }
 }
 
@@ -344,7 +458,7 @@ struct Logo: View {
 struct NavCapsule: View {
     var title: String
     var japanese: String?
-    var icon: String?
+    var icon: Section?
     var size: CGFloat = 12
     var selected: Bool
     var action: () -> Void
@@ -354,7 +468,10 @@ struct NavCapsule: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 10) {
-                if let icon { Image(systemName: icon).font(.system(size: 13, weight: .light)).frame(width: 16) }
+                if let icon {
+                    NavIcon(section: icon).stroke(style: StrokeStyle(lineWidth: 1.2, lineCap: .round, lineJoin: .round))
+                        .frame(width: 16, height: 16).padding(.trailing, 2)
+                }
                 Text(title.uppercased()).font(Ob.mono(size, selected ? .semibold : .regular)).lineLimit(1)
                 Spacer(minLength: 4)
                 if let japanese { Decor(japanese, size: 10.5, color: selected ? ob.onInk : ob.ink).opacity(0.6) }
