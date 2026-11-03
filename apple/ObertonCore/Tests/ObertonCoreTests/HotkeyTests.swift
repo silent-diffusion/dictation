@@ -17,7 +17,33 @@ import Testing
         #expect(Hotkey("Control+Option+Command+d") == Hotkey("ctrl + alt + cmd + D"))
         #expect(Hotkey("Win+K")?.modifiers == [.command])
         #expect(Hotkey("Ctrl+Enter")?.key == "Return")
-        #expect(Hotkey("Ctrl+Back")?.key == "Delete")
+        #expect(Hotkey("Ctrl+Back")?.key == "Back")
+        #expect(Hotkey("Ctrl+Backspace")?.keyCode == 0x33) // kVK_Delete, the Mac's backspace
+        #expect(Hotkey("Ctrl+Delete")?.keyCode == 0x75)    // kVK_ForwardDelete, as WPF's Delete
+    }
+
+    @Test func writesWPFKeyNamesAsWindowsStoresThem() {
+        // HotkeyManager.Format: key.ToString() gives "D1", "OemMinus", "Back"…
+        #expect(Hotkey(modifiers: [.control], key: Hotkey.keyName(forKeyCode: 0x12)!)?.text == "Ctrl+D1")
+        #expect(Hotkey(modifiers: [.control], key: Hotkey.keyName(forKeyCode: 0x1B)!)?.text == "Ctrl+OemMinus")
+        #expect(Hotkey(modifiers: [.control], key: Hotkey.keyName(forKeyCode: 0x2B)!)?.text == "Ctrl+OemComma")
+        #expect(Hotkey(modifiers: [.control], key: Hotkey.keyName(forKeyCode: 0x33)!)?.text == "Ctrl+Back")
+        #expect(Hotkey(modifiers: [.control], key: Hotkey.keyName(forKeyCode: 0x52)!)?.text == "Ctrl+NumPad0")
+    }
+
+    @Test func readsWhatEarlierMacVersionsStored() {
+        #expect(Hotkey("Ctrl+1")?.text == "Ctrl+D1")
+        #expect(Hotkey("Ctrl+-")?.text == "Ctrl+OemMinus")
+        #expect(Hotkey("Ctrl+,")?.text == "Ctrl+OemComma")
+        #expect(Hotkey("Ctrl+=")?.text == "Ctrl+OemPlus")
+        #expect(Hotkey("Ctrl++")?.text == "Ctrl+OemPlus")
+        #expect(Hotkey("Ctrl+Oem2")?.text == "Ctrl+OemQuestion")
+        #expect(Hotkey.same("Ctrl+1", "ctrl+d1"))
+    }
+
+    @Test func carbonModifierBits() {
+        #expect(Hotkey("Ctrl+Space")?.carbonModifiers == 0x1000)          // controlKey
+        #expect(Hotkey("Ctrl+Alt+Shift+Cmd+D")?.carbonModifiers == 0x1B00)
     }
 
     @Test func formatsInTheWindowsOrder() {
