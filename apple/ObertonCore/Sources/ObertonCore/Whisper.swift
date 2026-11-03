@@ -468,8 +468,12 @@ final class NoSpeechProbe: LogitsFiltering, @unchecked Sendable {
         var values = [Float](repeating: 0, count: n)
         switch logits.dataType {
         case .float16:
+            #if arch(arm64)
             let p = logits.dataPointer.bindMemory(to: Float16.self, capacity: n)
             for i in 0..<n { values[i] = Float(p[i]) }
+            #else
+            for i in 0..<n { values[i] = logits[i].floatValue } // no Float16 on Intel Macs
+            #endif
         case .float32:
             let p = logits.dataPointer.bindMemory(to: Float.self, capacity: n)
             for i in 0..<n { values[i] = p[i] }
