@@ -43,8 +43,13 @@ struct AboutSection: View {
             part("D.2.4", "What it keeps", "履歴") {
                 prose(Text("Everything stays in Oberton's data folder on this \(Device.noun), outside the app, so updates never touch it:"))
                 VStack(alignment: .leading, spacing: 0) {
-                    keep("History", "Each dictation's text, AI edit and app, and its recording: by number or by age, text and recordings set apart (Settings › History).")
-                    keep("Daily counts", "Numbers only, for the dashboard and Analytics: words, time, turnaround, readings and apps. Never any text, audio or window titles.")
+                    // Window titles and sites: the direct build only (they need Accessibility).
+                    keep("History", Distribution.isDirect
+                         ? "Each dictation's text, AI edit, app and window, and its recording: by number or by age, text and recordings set apart (Settings › History)."
+                         : "Each dictation's text, AI edit and app, and its recording: by number or by age, text and recordings set apart (Settings › History).")
+                    keep("Daily counts", Distribution.isDirect
+                         ? "Numbers only, for the dashboard and Analytics: words, time, turnaround, readings, apps and a browser's site names. Never any text, audio or window titles."
+                         : "Numbers only, for the dashboard and Analytics: words, time, turnaround, readings and apps. Never any text, audio or window titles.")
                     keep("Word tally", "Counts of the words, phrases, corrections and fillers you dictate, overall and per app. Never whole sentences. Can be turned off.")
                     keep("Extended notes", "Each session's recording, transcript, formatted text and summary, until you delete it, and its own counts, kept apart from dictation.")
                 }

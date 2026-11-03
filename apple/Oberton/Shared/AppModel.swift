@@ -20,6 +20,9 @@ protocol PlatformServices: AnyObject {
     func insert(_ text: String) async throws -> String
     /// The name of the app the text is going into, if known.
     var targetAppName: String? { get }
+    /// That app's window title when the dictation started (Windows' InsertionTarget.Title), for History and the web
+    /// sites; nil where it can't be read (iPhone, the Mac's App Store build).
+    var targetWindowTitle: String? { get async }
     /// The text selected in the frontmost app, or nil.
     func selectedText() async -> String?
     func clipboardText() -> String?
@@ -35,6 +38,7 @@ protocol PlatformServices: AnyObject {
 
 extension PlatformServices {
     func captureTarget(readContext: Bool) { captureTarget() }
+    var targetWindowTitle: String? { nil }
     func insertionContext() async -> InsertionContext? { nil }
     func liveTarget() -> LiveTarget? { nil }
     var nowhereToPaste: Bool { false }
@@ -249,7 +253,9 @@ final class AppModel: ObservableObject {
         notes = NotesRecorder(store: notesStore, settings: { loadedSettings })
         profiles = profilesFile.load() ?? BuiltInProfiles.create()
         self.history = history
-        if let loaded = usageFile.load() {
+        if var loaded = usageFile.load() {
+            // Sites are new (version 2): filled in once for the dictations History still has (UsageStore).
+            if loaded.fillSites(from: history), !Self.snapshotMode { usageFile.save(loaded) }
             usage = loaded
         } else {
             // The first time: count what History already has, so the dashboard doesn't start from zero.
@@ -515,9 +521,10 @@ final class AppModel: ObservableObject {
             }
         }
         // An AI edit only when the AI really changed the text: not when it failed, nor when the safety net kept it all.
+        let windowTitle = await platform?.targetWindowTitle
         var entry = HistoryEntry(transcription: raw, aiEdit: result.modified ? result.text : nil, inserted: result.text,
                                  profileName: profile.name, model: profile.isRaw ? nil : processor.model(for: profile).description,
-                                 appName: platform?.targetAppName, seconds: seconds, turnaroundSeconds: 0, warning: result.warning,
+                                 appName: platform?.targetAppName, windowTitle: windowTitle, seconds: seconds, turnaroundSeconds: 0, warning: result.warning,
                                  safetyNet: result.safetyNet)
         entry.date = startedAt ?? entry.date
         if profile.showPreview, live?.hasTyped != true { // the profile may have been switched mid-dictation
@@ -1095,6 +1102,9 @@ final class AppModel: ObservableObject {
             ("ping jessica about the design review tomorrow", "Ping Jessica about the design review tomorrow."),
             ("make sure that the swift ui preview builds", "Make sure that the SwiftUI preview builds."),
         ]
+        // Browser tabs, for the sites under Safari (the direct build only: the App Store build reads no titles).
+        let tabs = ["Inbox (3) - you@example.com - Gmail", "Pull requests - GitHub", "Quarterly plan - Google Docs", "Trip ideas - Claude",
+                    "Lo-fi beats - YouTube", "Some page - Hacker News", "My letter to the bank", "Feed | LinkedIn"]
         var rng = SystemRandomNumberGenerator()
         for back in 0..<120 {
             let day = cal.date(byAdding: .day, value: -back, to: now)!
@@ -1107,13 +1117,15 @@ final class AppModel: ObservableObject {
                 let profile = profiles[Int.random(in: 0..<(k % 3 == 0 ? 4 : 2), using: &rng)]
                 let raw = profile == "Raw"
                 let rejected = !raw && Int.random(in: 0..<12, using: &rng) == 0
+                let app = apps[min(Int.random(in: 0..<7, using: &rng), 4)]
+                let tab = tabs[min(Int.random(in: 0..<10, using: &rng), tabs.count - 1)]
                 var e = HistoryEntry(transcription: heard, aiEdit: raw ? nil : rejected ? heard : edit, inserted: raw || rejected ? heard : edit,
-                                     profileName: profile, model: nil, appName: apps[min(Int.random(in: 0..<7, using: &rng), 4)],
-                                     seconds: Double.random(in: 3...9, using: &rng), turnaroundSeconds: Double.random(in: 0.6...2.2, using: &rng),
+                                     profileName: profile, model: nil, appName: app,
+                                     windowTitle: app == "Safari" && Distribution.isDirect && back < 90 ? tab : nil, seconds: Double.random(in: 3...9, using: &rng), turnaroundSeconds: Double.random(in: 0.6...2.2, using: &rng),
                                      warning: rejected ? "Safety net" : nil)
                 e.date = time
                 log.recordDictation(words: e.words * 6, seconds: e.seconds * 5, turnaround: e.turnaroundSeconds, usedAI: !raw, keptAI: !raw && !rejected,
-                                    app: e.appName, on: time)
+                                    app: e.appName, site: e.site, on: time)
                 tally.record(e, now: now)
             }
             if Int.random(in: 0..<3, using: &rng) > 0 {
@@ -1137,9 +1149,10 @@ final class AppModel: ObservableObject {
     /// Snapshot mode only: a few dictations in the scratch history folder, one with a recording and a rerun.
     private func seedSnapshotHistory() {
         let now = Date()
-        func entry(_ heard: String, _ edit: String?, app: String?, minutesAgo: Double, safetyNet: Bool = false, inserted: Bool = true) -> HistoryEntry {
+        func entry(_ heard: String, _ edit: String?, app: String?, title: String? = nil, minutesAgo: Double, safetyNet: Bool = false,
+                   inserted: Bool = true) -> HistoryEntry {
             var e = HistoryEntry(transcription: heard, aiEdit: edit, inserted: safetyNet ? heard : edit ?? heard, profileName: edit == nil ? "Raw" : "Light Cleanup",
-                                 model: nil, appName: app, seconds: 40, turnaroundSeconds: 1.1,
+                                 model: nil, appName: app, windowTitle: Distribution.isDirect ? title : nil, seconds: 40, turnaroundSeconds: 1.1,
                                  warning: safetyNet ? "The AI's edit failed the safety net, so your original words were inserted unchanged." : nil,
                                  safetyNet: safetyNet, wasInserted: inserted)
             e.date = now.addingTimeInterval(-minutesAgo * 60)
@@ -1153,8 +1166,9 @@ final class AppModel: ObservableObject {
         historyStore.add(entry("ping jessica about the design review tomorrow", "Ping Jessica about the design review tomorrow.", app: "Slack",
                                minutesAgo: 200, safetyNet: true), pcm: tone)
         historyStore.add(entry("can you go ahead and send the release notes to the team", "Can you go ahead and send the release notes to the team?",
-                               app: "Safari", minutesAgo: 90, inserted: false), pcm: tone)
-        var rerun = entry("um so the overton release goes out on friday", "So the Overton release goes out on Friday.", app: "Mail", minutesAgo: 12)
+                               app: "Safari", title: "Team update - you@example.com - Gmail", minutesAgo: 90, inserted: false), pcm: tone)
+        var rerun = entry("um so the overton release goes out on friday", "So the Overton release goes out on Friday.", app: "Mail",
+                          title: "Release notes – Inbox", minutesAgo: 12)
         rerun.earlier = HistoryVersion(transcription: rerun.transcription, aiEdit: rerun.aiEdit, inserted: rerun.inserted, safetyNet: false,
                                        warning: nil, profileName: rerun.profileName, wasInserted: true)
         rerun.transcription = "um so the oberton release goes out on friday"

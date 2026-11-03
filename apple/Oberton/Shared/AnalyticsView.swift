@@ -441,10 +441,11 @@ private struct AppsCell: View {
     var body: some View {
         let apps = Self.top(usage)
         let total = max(1, usage.reduce(0) { $0 + $1.day.dictations })
-        // Lane J: Windows says "Click an app or site: …" and lists a browser's sites under it ("↳ GMAIL", "↳ OTHER").
+        // Sites need the window title, which only the direct build reads: the App Store build doesn't offer them.
         return PanelCell {
             VStack(alignment: .leading, spacing: 0) {
-                Head(title: "02 // Output by app", right: sizeClass == .compact ? "Tap one: the words below follow it" : "Click an app: the words below follow it")
+                Head(title: "02 // Output by app", right: sizeClass == .compact ? "Tap one: the words below follow it"
+                     : Distribution.isDirect ? "Click an app or site: the words below follow it" : "Click an app: the words below follow it")
                 if apps.isEmpty {
                     #if os(iOS)
                     Text("On iPhone the text goes to the clipboard, so Oberton can't tell which app it ends up in. On the Mac, each app you dictate into shows here.")
@@ -457,6 +458,21 @@ private struct AppsCell: View {
                     ForEach(apps, id: \.app) { app, n in
                         let key = WordTally.appKey(app)
                         AppRow(text: app, tip: app, count: n, total: total, key: key, selected: selected) { selected = key; label = app }
+                        // A browser: its sites under it (the top four, the rest together), each with its own bar.
+                        let sites = UsageLog.sitesOf(usage.map(\.day), app)
+                        if !sites.isEmpty {
+                            let rest = sites.dropFirst(4).reduce(0) { $0 + $1.count } + max(0, n - sites.reduce(0) { $0 + $1.count })
+                            ForEach(sites.prefix(4), id: \.site) { site, m in
+                                let siteKey = WordTally.appKey(app, site), tip = "\(site) in \(app)"
+                                AppRow(text: "↳ " + site, tip: tip, count: m, total: total, key: siteKey, selected: selected, site: true) {
+                                    selected = siteKey; label = tip
+                                }
+                            }
+                            if rest > 0 {
+                                AppRow(text: "↳ Other", tip: sites.count > 4 ? "Other sites in \(app)" : "\(app), from before sites were counted",
+                                       count: rest, total: total, key: nil, selected: selected, site: true, pick: nil)
+                            }
+                        }
                     }
                 }
             }
@@ -464,8 +480,9 @@ private struct AppsCell: View {
     }
 }
 
-/// One row of Output by app: the name, a bar of blocks, and the count. Clicking it shows that app's words below; ALL
-/// APPS shows everything. The row shown is in the accent (AnalyticsPage.AppRow).
+/// One row of Output by app: the name, a bar of blocks, and the count. A site row is indented, smaller and muted.
+/// Clicking a row shows that app's (or site's) words below; ALL APPS shows everything; a row without `pick` (a browser's
+/// other sites) can't be clicked. The row shown is in the accent (AnalyticsPage.AppRow).
 private struct AppRow: View {
     var text: String
     var tip: String
@@ -473,34 +490,41 @@ private struct AppRow: View {
     var total: Int
     var key: String?
     var selected: String?
-    var pick: () -> Void
+    var site = false
+    var pick: (() -> Void)?
     @Environment(\.ob) private var ob
     @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var hover = false
 
     var body: some View {
         // ALL APPS (no key) is the one shown while no app is picked; keys compared ignoring case.
-        let on = key == nil ? selected == nil : selected.map { key!.caseInsensitiveCompare($0) == .orderedSame } == true
+        let on = pick != nil && (key == nil ? selected == nil : selected.map { key!.caseInsensitiveCompare($0) == .orderedSame } == true)
         let compact = sizeClass == .compact
-        Button(action: pick) {
-            WeightedRow(columns: compact ? [.flex(1.2), .flex(2), .fixed(44)] : [.flex(0.8), .flex(2.4), .fixed(52)]) {
-                Text((on ? "▸ " : "") + text.uppercased()).font(Ob.mono(11, on ? .bold : .regular))
-                    .foregroundStyle(on ? ob.accent : ob.ink).lineLimit(1).truncationMode(.tail).padding(.trailing, 10)
-                    .help(tip)
-                BlockBar(fraction: Double(count) / Double(total), blocks: compact ? 20 : 30, color: on ? ob.accent : ob.ink)
-                    .help("\(tip): \(count.formatted()) dictation\(count == 1 ? "" : "s")")
-                Text(count.formatted()).font(Ob.mono(11)).foregroundStyle(on ? ob.accent : ob.ink)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-            }
-            .frame(height: 26)
-            .background(hover ? ob.accentWash : .clear)
-            .contentShape(Rectangle())
+        let color = on ? ob.accent : site ? ob.muted : ob.ink
+        let row = WeightedRow(columns: compact ? [.flex(1.2), .flex(2), .fixed(44)] : [.flex(0.8), .flex(2.4), .fixed(52)]) {
+            Text((on ? "▸ " : "") + text.uppercased()).font(Ob.mono(site ? 10 : 11, on ? .bold : .regular))
+                .foregroundStyle(color).lineLimit(1).truncationMode(.tail).padding(.leading, site ? 12 : 0).padding(.trailing, 10)
+                .help(tip)
+            BlockBar(fraction: Double(count) / Double(total), blocks: compact ? 20 : 30, color: color, height: site ? 7 : 10)
+                .help("\(tip): \(count.formatted()) dictation\(count == 1 ? "" : "s")")
+            Text(count.formatted()).font(Ob.mono(site ? 10 : 11)).foregroundStyle(color)
+                .frame(maxWidth: .infinity, alignment: .trailing)
         }
-        .buttonStyle(.plain)
-        .handCursor()
-        .onHover { hover = $0 }
-        .help(key == nil ? "Show the words of every app" : "Show the words dictated into \(tip)")
-        .accessibilityAddTraits(on ? .isSelected : [])
+        .frame(height: site ? 22 : 26)
+        if let pick {
+            Button(action: pick) {
+                row
+                    .background(hover ? ob.accentWash : .clear)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .handCursor()
+            .onHover { hover = $0 }
+            .help(key == nil ? "Show the words of every app" : "Show the words dictated into \(tip)")
+            .accessibilityAddTraits(on ? .isSelected : [])
+        } else {
+            row
+        }
     }
 }
 
@@ -509,6 +533,7 @@ private struct BlockBar: View {
     var fraction: Double
     var blocks: Int
     var color: Color
+    var height = 10.0
     @Environment(\.ob) private var ob
 
     var body: some View {
@@ -521,7 +546,7 @@ private struct BlockBar: View {
                 if b < filled { ctx.fill(Path(r), with: .color(color)) } else { ctx.stroke(Path(r.insetBy(dx: 0.5, dy: 0.5)), with: .color(ob.divider), lineWidth: 1) }
             }
         }
-        .frame(height: 10)
+        .frame(height: height)
     }
 }
 

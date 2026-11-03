@@ -76,9 +76,8 @@ struct HistorySettingsSection: View {
             }
             Button("Reset word tally…") { confirmResetTally = true }.buttonStyle(.quiet).padding(.top, 8)
             label("Dashboard counts", top: 24)
-            // Lane J: Windows says "(the app's name only; in a browser, also the site's name, such as Gmail)" here; put
-            // the site clause back in the direct build once the dashboard counts sites.
-            Caption("The dashboard keeps its own daily tallies in usage.json next to History: per day, how many dictations and words, seconds spoken, the turnaround, AI edits kept, texts read aloud, and dictations per app (the app's name only). Never any text, audio or window titles. They stay when you delete History or turn it off.")
+            // Sites need the window title, which only the direct build reads.
+            Caption("The dashboard keeps its own daily tallies in usage.json next to History: per day, how many dictations and words, seconds spoken, the turnaround, AI edits kept, texts read aloud, and dictations per app (the app's name only\(Distribution.isDirect ? "; in a browser, also the site's name, such as Gmail" : "")). Never any text, audio or window titles. They stay when you delete History or turn it off.")
             Button("Reset dashboard counts…") { confirmReset = true }.buttonStyle(.quiet).padding(.top, 8)
         }
         .onAppear { size = model.historySizeBytes }

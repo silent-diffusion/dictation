@@ -921,9 +921,7 @@ struct HistoryCell: View {
         return e.inserted.isEmpty ? e.transcription : e.inserted
     }
 
-    /// "Mail · 14:32 · 12 words" (HistoryEntry.AppName, When and Words).
-    // Lane J (wave 3, DASH-099): web sites are counted in Usage.swift and shown in Analytics and History; Windows'
-    // dashboard names only the app here and in the INSERT node, so nothing on this page changes when sites land.
+    /// "Mail · 14:32 · 12 words" (HistoryEntry.AppName, When and Words): the app only, never its site, as Windows.
     private func meta(_ e: HistoryEntry) -> String {
         "\(e.appLabel) · \(Self.when(e.date, now: now)) · \(e.words.formatted()) word" + (e.words == 1 ? "" : "s")
     }

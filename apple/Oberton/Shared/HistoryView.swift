@@ -343,10 +343,12 @@ struct HistoryDetail: View {
         .onDisappear { player.stop() }
     }
 
-    /// "Inserted into Mail" or "Not inserted (meant for Mail)". Lane J: Windows adds " · {window title}" here (direct
-    /// build only, from AXReader.windowTitle once History keeps it).
+    /// "Inserted into Mail · Inbox – Mail" or "Not inserted (meant for Mail)": the window title when one was kept (the
+    /// direct build).
     private var where_: String {
-        entry.didInsert ? "Inserted into \(entry.appLabel)" : "Not inserted (meant for \(entry.appLabel))"
+        let s = entry.didInsert ? "Inserted into \(entry.appLabel)" : "Not inserted (meant for \(entry.appLabel))"
+        guard let title = entry.windowTitle, !title.isEmpty else { return s }
+        return s + " · " + title
     }
 
     private var safetyNet: Bool { entry.isSafetyNet }

@@ -34,8 +34,14 @@ final class MacPlatform: PlatformServices {
 
     var targetAppName: String? { target?.app.localizedName }
 
-    /// The dictation window's title, when Accessibility could read it (the direct build): for History.
-    var targetWindowTitle: String? { target?.title }
+    /// The dictation window's title, when Accessibility could read it (the direct build): for History and the web
+    /// sites. "" for a window without one (as Windows' GetWindowText); nil without Accessibility (the App Store build).
+    var targetWindowTitle: String? {
+        get async {
+            _ = await spot.value // read with the spot, at the hotkey press
+            return target?.title
+        }
+    }
 
     /// Nothing to type into had the cursor when the dictation started (Windows `PasteSpotKind.None`).
     var nowhereToPaste: Bool {
@@ -65,7 +71,7 @@ final class MacPlatform: PlatformServices {
         let read = Task {
             await AXReader.bounded(.milliseconds(400), fallback: Read(spot: .unknown)) {
                 let window = AXReader.focusedWindow(pid)
-                return Read(window: window, title: window.flatMap(AXReader.title), spot: AXReader.spot(pid, bundleID: bundleID),
+                return Read(window: window, title: window.map { AXReader.title($0) ?? "" }, spot: AXReader.spot(pid, bundleID: bundleID),
                             context: readContext ? AXReader.context(pid) : nil)
             }
         }
