@@ -53,12 +53,23 @@ struct OnboardingView: View {
     }
     #endif
 
+    /// The Whisper model this setup downloads: the one a new install picked for this device (AppModel), or one chosen
+    /// in Settings that isn't downloaded yet; nil when Apple Speech is all there is to get.
+    private var whisperToGet: String? {
+        if let id = model.pendingSpeechModel, !id.isEmpty { return id }
+        if let id = model.settings.whisperModel, !WhisperModels.isDownloaded(id) { return id }
+        return nil
+    }
+
     private var steps: [String] {
+        var all = ["Microphone"]
         #if os(macOS)
-        ["Microphone", "Accessibility", "Speech model", "Apple Intelligence"]
-        #else
-        ["Microphone", "Speech model", "Apple Intelligence"]
+        all.append("Accessibility")
         #endif
+        all.append("Speech model")
+        if whisperToGet != nil { all.append("Whisper") }
+        all.append("Apple Intelligence")
+        return all
     }
 
     var body: some View {
@@ -90,7 +101,7 @@ struct OnboardingView: View {
                 #endif
                 Hairline()
                 row(done: speechReady, warn: false, name: "Speech model",
-                    what: model.settings.whisperModel ?? "Apple Speech · \(languageName) · downloaded once, then works offline") {}
+                    what: whisperToGet ?? model.settings.whisperModel ?? "Apple Speech · \(languageName) · downloaded once, then works offline") {}
                 Hairline()
                 row(done: AppleIntelligenceBackend.unavailableReason == nil, warn: false, name: "Apple Intelligence",
                     what: AppleIntelligenceBackend.unavailableReason.map { $0 + " Until then, profiles that use it insert what you said as is." }
@@ -188,7 +199,7 @@ struct OnboardingView: View {
 
     /// "About 1.6 GB in total, saved to ~/Library/…" (Windows' plan line), or Apple's own download.
     private var planText: String {
-        if let id = model.settings.whisperModel, let m = WhisperModels.model(id) {
+        if let id = whisperToGet, let m = WhisperModels.model(id) {
             return "About \(m.size) in total, saved to \((AppPaths.dataDir.path as NSString).abbreviatingWithTildeInPath)."
         }
         return "The speech model is a one-time download from Apple, a few hundred MB, kept by the system."
@@ -234,16 +245,16 @@ struct OnboardingView: View {
         try Task.checkCancellation()
         #endif
         n += 1
-        if let whisper = model.settings.whisperModel, WhisperModels.model(whisper) != nil {
-            try await downloadWhisper(whisper, step: n)
-        } else {
+        // Apple Speech for the language first: dictation works with it until the Whisper model is in.
+        let whisper = whisperToGet
+        do {
             begin(n, "Speech model", "Checking \(languageName)…")
             do {
                 let downloaded = try await LiveTranscriber.download(locale: model.settings.speechLocale) { f in
                     fraction = f
                     if let f, f < 1 { detail = "Downloading the \(languageName) speech model  (\(Int(f * 100))%)" }
                 }
-                speechReady = true
+                speechReady = whisper == nil
                 detail = downloaded ? "Downloaded." : "Already on this \(Device.noun)."
             } catch is CancellationError {
                 throw CancellationError()
@@ -251,6 +262,11 @@ struct OnboardingView: View {
                 Log.warn("Setup: speech model download failed: \(e.localizedDescription)")
                 throw Problem(message: "A download failed. Check your internet connection and click Retry.")
             }
+        }
+        if let whisper, WhisperModels.model(whisper) != nil {
+            try Task.checkCancellation()
+            n += 1
+            try await downloadWhisper(whisper, step: n)
         }
         try Task.checkCancellation()
         n += 1
@@ -273,7 +289,9 @@ struct OnboardingView: View {
     private func downloadWhisper(_ id: String, step: Int) async throws {
         begin(step, "Downloading the speech model (\(id))")
         if !WhisperModels.isDownloaded(id) {
-            if model.whisperDownload?.id != id { model.downloadWhisper(id) }
+            if model.whisperDownload?.id != id {
+                if model.pendingSpeechModel == id { model.startDefaultSpeechDownload() } else { model.downloadWhisper(id) }
+            }
             while model.whisperDownload?.id == id {
                 if Task.isCancelled {
                     model.cancelWhisperDownload()
@@ -288,6 +306,8 @@ struct OnboardingView: View {
                 throw Problem(message: "A download failed. Check your internet connection and click Retry.")
             }
         }
+        // Already there: AppModel switches dictation over to it.
+        if model.pendingSpeechModel == id { model.startDefaultSpeechDownload() }
         speechReady = true
         fraction = 1
         detail = ""

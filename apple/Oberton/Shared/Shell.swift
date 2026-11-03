@@ -426,24 +426,9 @@ struct Sidebar: View {
 }
 
 extension AppModel {
-    /// "AI: Ready · qwen2.5:3b", as TextProcessing's status line (the Mac can't ask Ollama for GPU use per request):
-    /// the sidebar's footer and Settings › Model unloading's "Now:" lines.
-    var aiStatusLine: (text: String, ok: Bool) {
-        let model = self
-        let profile = model.activeProfile
-        let id = model.processor.model(for: profile)
-        if profile.isRaw { return ("AI: off · \(profile.name) uses no AI", true) }
-        if !id.isLocal {
-            return model.settings.cloud.keepOffline
-                ? ("AI: \(id.shortName) is a cloud model; \"Keep everything offline\" blocks it", false)
-                : ("AI: Ready · \(id.shortName) (cloud)", true)
-        }
-        if model.aiReady { return ("AI: Ready · \(id.shortName)", true) }
-        switch id.provider {
-        case .apple: return ("AI: Apple Intelligence isn't available", false)
-        default: return ("AI: AI model '\(id.shortName)' not installed", false)
-        }
-    }
+    /// Windows' Status.Ai line ("AI: Ready · qwen3:8b · GPU", "AI: Loading …"), kept by the engine: the sidebar's
+    /// footer and Settings › Model unloading's "Now:" lines.
+    var aiStatusLine: (text: String, ok: Bool) { (aiStatus, aiStatusOK) }
 }
 
 /// The sidebar's line icons, drawn on a 16 pt square from MainWindow.xaml's paths (stroke 1.2, round caps).
