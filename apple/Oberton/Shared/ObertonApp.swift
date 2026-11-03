@@ -402,6 +402,7 @@ enum Snapshots {
            let png = rep.representation(using: .png, properties: [:]) {
             try? png.write(to: URL(fileURLWithPath: dir).appending(path: "overlay.png"))
         }
+        MarkdownEditorSnapshots.write(to: dir, model: model)
         NSApp.terminate(nil)
     }
 

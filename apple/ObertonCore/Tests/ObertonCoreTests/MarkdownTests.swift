@@ -129,3 +129,35 @@ import Testing
         #expect(NotesModels.pickBest([cloud, cloud2], gpuBytes: 12 * gb) == nil)
     }
 }
+
+@Suite struct NotesEditingTests {
+    @Test func enterContinuesAList() {
+        #expect(NotesMarkdown.enter(line: "- milk", caret: 6) == .continue("- "))
+        #expect(NotesMarkdown.enter(line: "  * nested", caret: 10) == .continue("  * "))
+        #expect(NotesMarkdown.enter(line: "9) nine", caret: 7) == .continue("10) "))
+        #expect(NotesMarkdown.enter(line: "2. two", caret: 1) == .plain) // inside the marker
+        #expect(NotesMarkdown.enter(line: "- ", caret: 2) == .endList)
+        #expect(NotesMarkdown.enter(line: "Just text", caret: 4) == .plain)
+    }
+
+    @Test func escapedMarkupKnowsWhereItCameFrom() {
+        let md = #"a \*b\* c"#
+        let ns = md as NSString
+        let spans = NotesMarkdown.parse(md)[0].spans
+        #expect(spans.map(\.text).joined() == "a *b* c")
+        for s in spans { #expect(ns.substring(with: NSRange(location: s.offset, length: s.text.utf16.count)) == s.text) }
+    }
+
+    @Test func aSummarySentenceLeadsToItsSection() {
+        let s = NoteSession()
+        s.digests = [NoteDigest(level: 0, first: 0, last: 0, start: 0, end: 600, text: "The beta goes to ten testers on Friday."),
+                     NoteDigest(level: 0, first: 1, last: 1, start: 600, end: 1200, text: "The design budget is final at 1550."),
+                     NoteDigest(level: 1, first: 0, last: 1, start: 0, end: 1200, text: "Budget design final everything.")]
+        let summary = "Main idea: plans.\n- The design budget is final\n- Testers get the beta Friday"
+        let ns = summary as NSString
+        #expect(s.summaryMoment(summary, caret: ns.range(of: "budget").location) == 600)
+        #expect(s.summaryMoment(summary, caret: ns.range(of: "Testers").location) == 0)
+        #expect(s.summaryMoment("", caret: 0) == nil)
+        #expect(s.summaryMoment("Nothing alike.", caret: 3) == nil)
+    }
+}

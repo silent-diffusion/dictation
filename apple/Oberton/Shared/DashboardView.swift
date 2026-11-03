@@ -547,6 +547,7 @@ struct NotesCell: View {
             if renaming {
                 TextField("", text: $title).textFieldStyle(.plain).font(Ob.mono(13, .bold)).focused($titleFocused)
                     .onSubmit { commit(s) }
+                    .onKeyPress(.escape) { title = s.title; commit(s); return .handled } // Esc puts the name back
                     .onChange(of: titleFocused) { if !titleFocused { commit(s) } }
                     .accessibilityLabel("Session name")
             } else {
@@ -565,19 +566,19 @@ struct NotesCell: View {
     }
 
     /// Always editable: the live transcript, or the draft between sessions; a hint while it's empty.
-    private var text: Binding<String> {
-        Binding(get: {
-            if let s = notes.current { _ = notes.revision; return s.transcript }
-            return draft
-        }, set: { new in
-            if let s = notes.current {
-                s.set(.transcript, new, source: nil)
-                model.objectWillChange.send()
-            } else {
-                draft = new
-                notes.store.setDraft(new)
-            }
-        })
+    private var text: String {
+        if let s = notes.current { _ = notes.revision; return s.transcript }
+        return draft
+    }
+
+    private func edit(_ new: String) {
+        if let s = notes.current {
+            s.set(.transcript, new, source: nil)
+            model.objectWillChange.send()
+        } else {
+            draft = new
+            notes.store.setDraft(new)
+        }
     }
 
     private var hint: String {
@@ -587,21 +588,23 @@ struct NotesCell: View {
         return (saved.map { "“\($0)” is saved in Extended Notes. " } ?? "") + "Type here anytime: what you type begins the next session, and its transcript follows."
     }
 
+    /// Read as Markdown; a click opens that line as plain text to edit (typing goes on at the end).
     @ViewBuilder private var box: some View {
-        let value = text.wrappedValue
-        if PageScroll<EmptyView>.flat {
-            Text(value.isEmpty ? hint : value).font(Ob.mono(13)).foregroundStyle(value.isEmpty ? ob.muted : ob.ink)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).padding(.horizontal, 5)
-        } else {
-            TextEditor(text: text)
-                .font(Ob.mono(13))
-                .scrollContentBackground(.hidden)
-                .overlay(alignment: .topLeading) {
-                    if value.isEmpty {
-                        Text(hint).font(Ob.sans(12.5)).foregroundStyle(ob.muted).padding(.top, 1).padding(.leading, 5).allowsHitTesting(false)
-                    }
-                }
-                .accessibilityLabel("Extended notes")
+        let value = text
+        Group {
+            if PageScroll<EmptyView>.flat {
+                MarkdownReadingView(text: value, size: 13).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .padding(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8)).clipped()
+            } else {
+                // The session's transcript and the draft are different texts: a fresh view for each.
+                MarkdownEditor(text: value, size: 13, label: "Extended notes", inset: CGSize(width: 8, height: 6), onEdit: edit)
+                    .id(notes.current?.id ?? "draft")
+            }
+        }
+        .overlay(alignment: .topLeading) {
+            if value.isEmpty {
+                Text(hint).font(Ob.sans(12.5)).foregroundStyle(ob.muted).padding(EdgeInsets(top: 9, leading: 12, bottom: 0, trailing: 12)).allowsHitTesting(false)
+            }
         }
     }
 }

@@ -167,9 +167,12 @@ public enum NotesMarkdown {
         while i < s.count {
             let c = s[i]
             if c == UInt16(UInt8(ascii: "\\")), i + 1 < s.count, escapable.contains(s[i + 1]) {
-                if plain.isEmpty { plainStart = i + 1 }
-                plain.append(s[i + 1])
+                // A span of its own (Windows adds it to the plain run): every span's offset then points at its own text,
+                // so the editor knows the backslash is markup.
+                flush(i)
+                spans.append(Span(text(s, i + 1, i + 2), offset + i + 1, bold: bold, italic: italic))
                 i += 2
+                plainStart = i
                 continue
             }
             if c == tick, case let close = index(s, [tick], i + 1), close > 0 {
@@ -243,7 +246,7 @@ public enum NotesMarkdown {
         return -1
     }
 
-    static func white(_ u: UInt16) -> Bool { Unicode.Scalar(u).map { CharacterSet.whitespacesAndNewlines.contains($0) } ?? false }
+    public static func white(_ u: UInt16) -> Bool { Unicode.Scalar(u).map { CharacterSet.whitespacesAndNewlines.contains($0) } ?? false }
     static func letterOrDigit(_ u: UInt16) -> Bool { Unicode.Scalar(u).map { CharacterSet.alphanumerics.contains($0) } ?? false }
 
     static func trim(_ s: String) -> String { s.trimmingCharacters(in: .whitespacesAndNewlines) }

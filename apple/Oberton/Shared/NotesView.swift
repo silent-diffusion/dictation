@@ -232,7 +232,8 @@ struct NoteSessionView: View {
     static var snapshotTab = Tab.transcript
     @State private var renaming = false
     @State private var title = ""
-    @State private var selection: TextSelection?
+    /// Where the cursor is in the tab's text (UTF-16), for the Play button.
+    @State private var caretOffset: Int?
     @State private var copied: String?
     @State private var problem: String?
     @State private var asking: NotesRedoStep?
@@ -251,11 +252,12 @@ struct NoteSessionView: View {
             Button("← Extended notes") { nav.goNotes(nil) }.buttonStyle(.quietSmall).padding(.bottom, 8)
             header
             Rule().padding(.vertical, 10)
+            // A step redoes itself (and what follows it) from the recording, once the session has stopped.
             NotesPipelineView(steps: live ? NotesSteps.live(model, chosen: session.source, idleModel: nil) : NotesSteps.redo(model, session),
-                              open: live ? [nil, nil, nil, nil] : [{ asking = .transcribe }, { asking = .transcribe }, { asking = .format }, { asking = .summary }])
+                              open: [.transcribe, .transcribe, .format, .summary].map { step in { ask(step) } })
                 .padding(.bottom, 8)
             HStack {
-                ForEach(Tab.allCases, id: \.self) { t in Pill(t.rawValue, on: tab == t) { tab = t } }
+                ForEach(Tab.allCases, id: \.self) { t in Pill(t.rawValue, on: tab == t) { tab = t; caretOffset = nil } }
                 Spacer()
                 Readout(hint, size: 10).lineLimit(1)
             }
@@ -372,31 +374,45 @@ struct NoteSessionView: View {
                 EditedLegend()
             }
         } else if PageScroll<EmptyView>.flat {
-            // The snapshot renderer can't draw a text editor: the text as it reads.
-            Text(text.wrappedValue).font(Ob.sans(14.5)).lineSpacing(5).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .padding(EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14))
+            // The snapshot renderer can't draw a text view: the text as it reads.
+            MarkdownReadingView(text: text, size: 14.5).padding(EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14))
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).clipped()
                 .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
         } else {
-            TextEditor(text: text, selection: $selection)
-                .font(Ob.sans(14.5))
-                .scrollContentBackground(.hidden)
-                .padding(EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10))
+            // Read as Markdown; a click opens that line as plain text to edit (typing goes on at the end).
+            MarkdownEditor(text: text, size: 14.5, label: tab.rawValue, onEdit: edit, onCaret: { caretOffset = $0 }, jump: jumpItem)
+                .id(tab)
                 .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
-                .accessibilityLabel(tab.rawValue)
         }
     }
 
-    /// The tab's text; typing edits the session (anchors and formatting marks move with it) and saves a moment later.
-    private var text: Binding<String> {
-        let doc = self.doc
-        return Binding(get: { _ = notes.revision; return session.get(doc) }, set: { new in
-            session.set(doc, new, source: nil)
-            model.objectWillChange.send()
-            // The recorder saves its own session; the user's edits of a finished one are saved here, after a pause.
-            guard !live else { return }
-            saveSoon?.cancel()
-            saveSoon = Task { try? await Task.sleep(for: .seconds(2)); if !Task.isCancelled { notes.store.save(session) } }
-        })
+    /// The tab's text, as the session has it now.
+    private var text: String {
+        _ = notes.revision
+        return session.get(doc)
+    }
+
+    /// Typing edits the session (anchors and formatting marks move with it) and saves a moment later.
+    private func edit(_ new: String) {
+        session.set(doc, new, source: nil)
+        model.objectWillChange.send()
+        // The recorder saves its own session; the user's edits of a finished one are saved here, after a pause.
+        guard !live else { return }
+        saveSoon?.cancel()
+        saveSoon = Task { try? await Task.sleep(for: .seconds(2)); if !Task.isCancelled { notes.store.save(session) } }
+    }
+
+    // MARK: Jump to this moment
+
+    /// The right-click item: the moment the text there was said (the Summary leads to its section by its words).
+    private func jumpItem(_ at: Int) -> MarkdownJump? {
+        let seconds = doc == .summary ? session.summaryMoment(session.summary, caret: at) : session.secondsAt(doc, at)
+        let title = live ? "Jump to this moment in the recording (once the session has stopped)"
+            : seconds.map { "Jump to this moment in the recording  ·  \(Self.length($0))" } ?? "Jump to this moment in the recording"
+        return MarkdownJump(title: title, enabled: seconds != nil && !live && hasRecording) {
+            // Play (▶) then goes on from here rather than from the cursor's own moment.
+            if let seconds { player.play(at: seconds, session, caretSeconds: session.secondsAt(doc, at)) }
+        }
     }
 
     private func flushSave() {
@@ -405,12 +421,7 @@ struct NoteSessionView: View {
     }
 
     /// Where the cursor is in the tab's text, in UTF-16 units.
-    private var caret: Int? {
-        guard let selection, case .selection(let range) = selection.indices else { return nil }
-        let t = session.get(doc)
-        guard range.lowerBound <= t.endIndex else { return nil }
-        return t.utf16.distance(from: t.startIndex, to: range.lowerBound)
-    }
+    private var caret: Int? { caretOffset.map { min($0, session.get(doc).utf16.count) } }
 
     // MARK: Export
 
@@ -502,6 +513,12 @@ struct NoteSessionView: View {
         case .format: return "Format the whole transcript again? The formatted text and the summary are made again, so edits typed into them are replaced. The transcript stays as it is."
         default: return "Write the summary again? Edits typed into the summary are replaced."
         }
+    }
+
+    /// A click on a step of the session's pipeline: confirm, then redo it (or stop the one running).
+    private func ask(_ step: NotesRedoStep) {
+        if live { problem = "A step can be redone once the session has stopped."; return }
+        asking = step
     }
 
     private func redo(_ step: NotesRedoStep) {
@@ -891,7 +908,8 @@ struct NotesModelMenu: View {
 
     private var options: [(String, String)] {
         let st = model.settings
-        let best = NotesModels.pickBest(installed, gpuBytes: NotesRecorder.gpuBytes)
+        let gpu = NotesRecorder.gpuBytes, ram = LocalModel.systemRam
+        let best = NotesModels.pickBest(installed, gpuBytes: gpu, ramBytes: ram)
         var list: [(String, String)] = [
             (NotesModels.best, best.map { "Best on this \(Device.noun) · \($0.name)" } ?? "Best on this \(Device.noun) · \(st.defaultModel.shortName) (no Ollama model)"),
             (NotesModels.active, "Same as the active model · \(st.defaultModel.shortName)"),
@@ -899,17 +917,28 @@ struct NotesModelMenu: View {
         if st.defaultModel != .appleOnDevice && AppleIntelligenceBackend.unavailableReason == nil {
             list.append((ModelID.appleOnDevice.description, ModelID.appleOnDevice.displayName))
         }
-        let gpu = NotesRecorder.gpuBytes
         list += installed.filter(NotesModels.isChatModel).sorted { ($0.billions, $1.name) > ($1.billions, $0.name) }.map { m in
             (ModelID(provider: .ollama, name: m.name).description,
-             "\(m.name) · \(String(format: "%.1f", m.billions))B" + (gpu == nil || m.bytes <= gpu! ? "" : " · slow on this \(Device.noun)"))
+             "\(m.name) · \(Self.billions(m.billions))B"
+                + (m.runsFromMemory(gpuBytes: gpu, ramBytes: ram) ? " (\(Self.billions(m.activeBillions))B at work) · runs from memory"
+                   : NotesModels.fits(m, gpuBytes: gpu, ramBytes: ram) ? "" : " · slow on this \(Device.noun)"))
         }
         if !st.cloud.keepOffline {
+            // Ollama's cloud models run on ollama.com, so they are listed as cloud models.
+            list += installed.filter { ModelID.isOllamaCloud($0.name) && !$0.name.lowercased().contains("embed") }.sorted { $0.name < $1.name }.map { m in
+                (ModelID(provider: .ollama, name: m.name).description, "\(m.name) · cloud: the transcript goes to ollama.com")
+            }
             for c in CloudCatalog.anthropic where KeyStore.get(.anthropic) != nil { list.append((c.id.description, "\(c.title) · cloud: the transcript goes to Anthropic")) }
             if KeyStore.get(.openai) != nil { list.append(("openai:\(st.cloud.openAIModel)", "\(st.cloud.openAIModel) · cloud: the transcript goes to OpenAI")) }
         }
-        if !list.contains(where: { $0.0 == st.notesModel }) { list.append((st.notesModel, st.notesModel + " · not available")) }
+        if !list.contains(where: { $0.0.lowercased() == st.notesModel.lowercased() }) { list.append((st.notesModel, st.notesModel + " · not available")) }
         return list
+    }
+
+    /// "7.6", "30" (Windows' {0:0.#}).
+    static func billions(_ b: Double) -> String {
+        let r = (b * 10).rounded() / 10
+        return r == r.rounded() ? String(Int(r)) : String(format: "%.1f", r)
     }
 }
 
@@ -929,6 +958,8 @@ final class NotesPlayer: ObservableObject {
     private var timer: Timer?
     private var lastCaret: Double?
     private var failed = false
+    /// A moment to play from as soon as the recording is ready.
+    private var pendingSeek: Double?
 
     var duration: Double { player?.duration ?? prepared?.seconds ?? 0 }
 
@@ -944,6 +975,7 @@ final class NotesPlayer: ObservableObject {
             p.prepareToPlay()
             prepared = result
             player = p
+            if let at = pendingSeek { pendingSeek = nil; play(at: at, s) }
         }
     }
 
@@ -959,6 +991,19 @@ final class NotesPlayer: ObservableObject {
         playing = true
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: true) { [weak self] _ in Task { @MainActor in self?.onTick() } }
+    }
+
+    /// Jump to a moment and play from there (the right-click menu); the recording is made ready first if need be.
+    func play(at seconds: Double, _ s: NoteSession, caretSeconds: Double? = nil) {
+        lastCaret = caretSeconds ?? lastCaret
+        guard let player else {
+            pendingSeek = seconds
+            prepare(s)
+            return
+        }
+        player.currentTime = seconds
+        position = seconds
+        play(from: nil)
     }
 
     func pause() {
