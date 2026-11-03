@@ -55,10 +55,22 @@ extension EnvironmentValues {
     }
 }
 
-/// The type: a monospaced face for the interface (Cascadia Mono on Windows, SF Mono here), a sans for prose, and a
-/// Japanese face for the decorative words.
+/// The type: a monospaced face for the interface (Cascadia Mono, bundled as on Windows; SF Mono if it didn't load), a
+/// sans for prose, and a Japanese face for the decorative words.
 enum Ob {
-    static func mono(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font { .system(size: size, weight: weight, design: .monospaced) }
+    static func mono(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
+        hasCascadia ? .custom("Cascadia Mono", fixedSize: size).weight(weight) : .system(size: size, weight: weight, design: .monospaced)
+    }
+
+    /// Whether the bundled Cascadia Mono (Resources/Fonts, copied to the bundle's Resources and registered through Info.plist) is available.
+    static let hasCascadia: Bool = {
+        #if os(macOS)
+        NSFont(name: "CascadiaMono-Regular", size: 12) != nil
+        #else
+        UIFont(name: "CascadiaMono-Regular", size: 12) != nil
+        #endif
+    }()
+
     static func sans(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font { .system(size: size, weight: weight) }
     static func jp(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font { .custom("Hiragino Sans", size: size).weight(weight) }
 }
