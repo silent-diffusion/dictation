@@ -10,6 +10,8 @@ public final class LiveTranscriber: @unchecked Sendable {
     public var onText: ((String) -> Void)?
     /// Called on the main queue with the microphone level, 0…1, for the meter.
     public var onLevel: ((Float) -> Void)?
+    /// Called on the audio thread with each microphone buffer as it comes in (History keeps the recording).
+    public var onAudio: ((AVAudioPCMBuffer) -> Void)?
 
     private let engine = AVAudioEngine()
     private var analyzer: SpeechAnalyzer?
@@ -104,6 +106,7 @@ public final class LiveTranscriber: @unchecked Sendable {
     }
 
     private func feed(_ buffer: AVAudioPCMBuffer) {
+        onAudio?(buffer)
         if let data = buffer.floatChannelData?[0], buffer.frameLength > 0 {
             var sum: Float = 0
             for i in 0..<Int(buffer.frameLength) { sum += data[i] * data[i] }

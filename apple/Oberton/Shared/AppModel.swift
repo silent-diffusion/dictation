@@ -82,7 +82,11 @@ final class AppModel: ObservableObject {
 
     private let settingsFile = JSONFile<AppSettings>("settings.json")
     private let profilesFile = JSONFile<[Profile]>("profiles.json")
-    private let historyFile = JSONFile<[HistoryEntry]>("history.json")
+    /// History on disk: history/<entry>/entry.json and audio.wav (in a scratch folder for the debug snapshots).
+    private let historyStore: HistoryStore
+    /// The recording of the dictation running now, for History's audio.wav.
+    private let historyAudio = HistoryAudioRecorder()
+    private var historyPrune: Timer?
     private let usageFile = JSONFile<UsageLog>("usage.json")
     private let wordsFile = JSONFile<WordTally>("words.json")
     private let transcriber = LiveTranscriber()
@@ -96,7 +100,12 @@ final class AppModel: ObservableObject {
     private var notesChange: AnyCancellable?
 
     init() {
-        let loadedSettings = settingsFile.load() ?? AppSettings(), history = historyFile.load() ?? []
+        let loadedSettings = settingsFile.load() ?? AppSettings()
+        historyStore = Self.snapshotMode
+            ? HistoryStore(dir: FileManager.default.temporaryDirectory.appending(path: "oberton-snapshot-history-\(UUID().uuidString)"))
+            : HistoryStore(dir: HistoryStore.defaultDir, legacyFile: AppPaths.dataDir.appending(path: "history.json"))
+        historyStore.prune(loadedSettings)
+        let history = historyStore.entries
         settings = loadedSettings
         let notesStore = NotesStore(dir: Self.snapshotMode ? nil : NotesStore.defaultDir)
         // The dashboard notepad became Extended Notes' draft (notes/draft.txt): moved there once.
@@ -128,6 +137,11 @@ final class AppModel: ObservableObject {
         notesChange = notes.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         transcriber.onText = { [weak self] in self?.liveText = $0 }
         transcriber.onLevel = { [weak self] in self?.level = $0 }
+        transcriber.onAudio = { [historyAudio] in historyAudio.append($0) }
+        // Kept by age: what has grown too old goes even when nothing new comes in.
+        historyPrune = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.pruneHistory() }
+        }
         reader.onFinishedReading = { [weak self] words, seconds in
             guard let self else { return }
             self.usage.recordReading(words: words, seconds: seconds)
@@ -171,6 +185,7 @@ final class AppModel: ObservableObject {
         liveText = ""
         pending = nil
         receipt = nil
+        historyAudio.begin()
         phase = .starting
         startedAt = Date()
         work = Task {
@@ -259,7 +274,9 @@ final class AppModel: ObservableObject {
             phase = .done(entry.warning ?? receipt)
             if readBackRequested { reader.read(entry.inserted, voice: voice ?? settings.ttsVoice, speed: settings.ttsBaseSpeed) }
         } catch {
-            record(entry)
+            var failed = entry
+            failed.wasInserted = false
+            record(failed)
             fail(error)
             return
         }
@@ -362,15 +379,52 @@ final class AppModel: ObservableObject {
             words.record(entry)
             wordsFile.save(words)
         }
+        let pcm = historyAudio.finish()
         guard settings.keepHistory else { return }
-        history.insert(entry, at: 0)
-        if settings.historyLimit > 0, history.count > settings.historyLimit { history.removeLast(history.count - settings.historyLimit) }
-        historyFile.save(history)
+        historyStore.add(entry, pcm: settings.saveHistoryAudio ? pcm : nil)
+        pruneHistory()
     }
 
     func deleteHistory(_ ids: Set<HistoryEntry.ID>) {
-        history.removeAll { ids.contains($0.id) }
-        historyFile.save(history)
+        historyStore.delete(ids)
+        history = historyStore.entries
+    }
+
+    /// Apply what Settings › History keeps now (also right after it is lowered, and every hour).
+    func pruneHistory() {
+        historyStore.prune(settings)
+        history = historyStore.entries
+    }
+
+    /// How many dictations keeping the newest `limit` or the last `days` days would delete right away.
+    func historyWouldDelete(limit: Int, days: Int) -> Int { historyStore.wouldDelete(limit: limit, days: days) }
+
+    /// Bytes History takes on disk, texts and recordings.
+    var historySizeBytes: Int64 { historyStore.sizeBytes }
+
+    var historyFolder: URL { historyStore.dir ?? HistoryStore.defaultDir }
+
+    /// History › Run again: transcribe the recording afresh and clean it up again; returns what to say (✓ or ⚠).
+    func rerunHistory(_ id: HistoryEntry.ID, progress: @escaping @MainActor (String) -> Void) async -> String {
+        guard let entry = history.first(where: { $0.id == id }) else { return "" }
+        do {
+            let (changed, message) = try await HistoryRerun.run(entry, profiles: profiles, active: activeProfile, settings: settings,
+                                                                progress: progress)
+            historyStore.save(changed)
+            history = historyStore.entries
+            return "✓ " + message
+        } catch {
+            return "⚠ " + ((error as? UserFacingError)?.message ?? "Running it again failed; the dictation was left as it was. (\(error.localizedDescription))")
+        }
+    }
+
+    /// History's USE THE RERUN / PUT BACK THE EARLIER RESULT.
+    func swapHistoryEarlier(_ id: HistoryEntry.ID) -> String {
+        guard let entry = history.first(where: { $0.id == id }) else { return "" }
+        let swapped = HistoryRerun.swapEarlier(entry)
+        historyStore.save(swapped)
+        history = historyStore.entries
+        return swapped.showingEarlier == true ? "Put back the result from before it was run again." : "Back to the rerun's result."
     }
 
     /// Put a text into the app the last dictation went to (History's "Insert transcription into the last app").
@@ -447,6 +501,39 @@ final class AppModel: ObservableObject {
         usage = log
         words = tally
         seedSnapshotNotes()
+        seedSnapshotHistory()
+    }
+
+    /// Snapshot mode only: a few dictations in the scratch history folder, one with a recording and a rerun.
+    private func seedSnapshotHistory() {
+        let now = Date()
+        func entry(_ heard: String, _ edit: String?, app: String?, minutesAgo: Double, safetyNet: Bool = false, inserted: Bool = true) -> HistoryEntry {
+            var e = HistoryEntry(transcription: heard, aiEdit: edit, inserted: safetyNet ? heard : edit ?? heard, profileName: edit == nil ? "Raw" : "Light Cleanup",
+                                 model: nil, appName: app, seconds: 40, turnaroundSeconds: 1.1,
+                                 warning: safetyNet ? "The AI's edit failed the safety net, so your original words were inserted unchanged." : nil,
+                                 safetyNet: safetyNet, wasInserted: inserted)
+            e.date = now.addingTimeInterval(-minutesAgo * 60)
+            return e
+        }
+        let tone = Data((0..<(16000 * 40)).flatMap { i -> [UInt8] in
+            let v = Int16(3000 * sin(Double(i) * 2 * .pi * 220 / 16000))
+            return [UInt8(truncatingIfNeeded: v), UInt8(truncatingIfNeeded: v >> 8)]
+        })
+        historyStore.add(entry("i think uh we should move the standup to ten", nil, app: "Notes", minutesAgo: 300), pcm: nil)
+        historyStore.add(entry("ping jessica about the design review tomorrow", "Ping Jessica about the design review tomorrow.", app: "Slack",
+                               minutesAgo: 200, safetyNet: true), pcm: tone)
+        historyStore.add(entry("can you go ahead and send the release notes to the team", "Can you go ahead and send the release notes to the team?",
+                               app: "Safari", minutesAgo: 90, inserted: false), pcm: tone)
+        var rerun = entry("um so the overton release goes out on friday", "So the Overton release goes out on Friday.", app: "Mail", minutesAgo: 12)
+        rerun.earlier = HistoryVersion(transcription: rerun.transcription, aiEdit: rerun.aiEdit, inserted: rerun.inserted, safetyNet: false,
+                                       warning: nil, profileName: rerun.profileName, wasInserted: true)
+        rerun.transcription = "um so the oberton release goes out on friday"
+        rerun.aiEdit = "The Oberton release goes out on Friday."
+        rerun.inserted = rerun.aiEdit!
+        rerun.wasInserted = false
+        rerun.runAgainAt = now.addingTimeInterval(-60)
+        historyStore.add(rerun, pcm: tone)
+        history = historyStore.entries
     }
 
     /// Snapshot mode only: two finished Extended Notes sessions, in memory.
@@ -489,8 +576,8 @@ final class AppModel: ObservableObject {
     #endif
 
     func clearHistory() {
-        history = []
-        historyFile.save(history)
+        historyStore.clear()
+        history = historyStore.entries
     }
 
     // MARK: Read aloud
