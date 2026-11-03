@@ -8,8 +8,8 @@ import SwiftUI
 struct UnloadingSection: View {
     @EnvironmentObject var model: AppModel
     @State private var result = ""
-    @State private var busy = false
-    @State private var aiStatus = ""
+    /// The buttons whose unloading is under way (only the clicked one is disabled).
+    @State private var busy: Set<String> = []
 
     private static let choices: [(Int, String)] = [
         (AppSettings.unloadImmediately, "Immediately after use"), (1, "1 minute"), (3, "3 minutes"), (5, "5 minutes"),
@@ -25,17 +25,18 @@ struct UnloadingSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Caption("Models take memory while they are loaded (the speech recognition model, the AI model and the Read aloud voice). Oberton can unload them when you haven't used them for a while.")
+            Caption("Models take memory while they are loaded (several GB of GPU memory for speech recognition and the AI). Oberton can unload them when you haven't used them for a while.")
 
             FieldLabel("Unload a model after it has been unused for").padding(.top, -8)
             ObMenu(options: choices, selection: $model.settings.unloadAfterMinutes).frame(width: 240)
-            Caption("Applies to the speech recognition model, the local AI model and the Read aloud voice. “Immediately after use” frees them a few seconds after each dictation or reading ends (they stay loaded while in use).")
+            Caption("Applies to the speech recognition model, the local AI model and the Read aloud voice. \"Immediately after use\" frees them a few seconds after each dictation or reading ends (they stay loaded while in use).", bottom: 0)
                 .padding(.top, 8)
 
             Box(padding: 0) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("No waiting when you dictate").font(Ob.sans(13.5, .semibold))
-                    Caption("Press the hotkey and start talking right away, even if a model was unloaded. Recording starts at once; the speech model loads meanwhile (a few seconds) and then catches up on everything you said. The AI model loads while you speak, too.")
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("No waiting when you dictate").font(Ob.sans(Ob.body, .semibold))
+                    Caption("Press the hotkey and start talking right away, even if a model was unloaded. Recording starts at once; the speech model loads meanwhile (a few seconds) and then catches up on everything you said. The AI model loads while you speak, too.", bottom: 0)
+                        .padding(.top, 4)
                 }
                 .padding(EdgeInsets(top: 14, leading: 18, bottom: 14, trailing: 18))
             }
@@ -44,51 +45,38 @@ struct UnloadingSection: View {
             FieldLabel("Unload now").padding(.top, 2)
             Box(padding: 0) {
                 VStack(alignment: .leading, spacing: 0) {
-                    Caption("Free the memory right away instead of waiting. Each model loads again by itself the next time it's needed.")
-                        .padding(.bottom, 10)
+                    Caption("Free the memory right away instead of waiting. Each model loads again by itself the next time it's needed.", bottom: 10)
                     FlowButtons {
-                        Button("Unload everything") { unload(speech: true, ai: true, voice: true) }.buttonStyle(.primary)
-                        Button("Speech model") { unload(speech: true, ai: false, voice: false) }.buttonStyle(.quiet)
-                        Button("AI model") { unload(speech: false, ai: true, voice: false) }.buttonStyle(.quiet)
-                        Button("Read aloud voice") { unload(speech: false, ai: false, voice: true) }.buttonStyle(.quiet)
+                        unloadButton("Unload everything", "all", primary: true)
+                        unloadButton("Speech model", "speech")
+                        unloadButton("AI model", "ai")
+                        unloadButton("Read aloud voice", "voice")
                     }
-                    .disabled(busy)
-                    if !result.isEmpty { Caption(result).padding(.top, 4) }
+                    .padding(.bottom, 8)
+                    // Always there, empty until a button is used.
+                    Caption(result.isEmpty ? " " : result, bottom: 0).padding(.top, 4)
                 }
-                .padding(EdgeInsets(top: 14, leading: 18, bottom: 6, trailing: 18))
+                .padding(EdgeInsets(top: 14, leading: 18, bottom: 14, trailing: 18))
             }
 
-            Caption("Now: \(model.speechStatus)\n\(aiStatus)\nRead aloud voice: \(model.reader.isLoaded ? "loaded" : "not loaded")")
+            // The footer's own lines (Status.Speech, Status.Ai).
+            Caption("Now: \(model.speechStatus)\n\(model.aiStatusLine.text)\nRead aloud voice: \(model.reader.isLoaded ? "loaded" : "not loaded")", bottom: 0)
                 .padding(.top, 16)
         }
-        .task { await refreshAI() }
     }
 
-    private func unload(speech: Bool, ai: Bool, voice: Bool) {
-        busy = true
-        result = "Unloading…"
-        Task {
-            result = await model.unloadNow(speech: speech, ai: ai, voice: voice)
-            busy = false
-            await refreshAI()
+    private func unloadButton(_ title: String, _ what: String, primary: Bool = false) -> some View {
+        Button(title) {
+            busy.insert(what)
+            result = "Unloading…"
+            Task {
+                result = await model.unloadNow(speech: what == "all" || what == "speech", ai: what == "all" || what == "ai",
+                                               voice: what == "all" || what == "voice")
+                busy.remove(what)
+            }
         }
-    }
-
-    /// The AI line (Windows' Status.Ai): the active profile's model and whether it is ready or in memory.
-    private func refreshAI() async {
-        let profile = model.activeProfile
-        guard !profile.isRaw else { aiStatus = "AI: off (\(profile.name) uses none)"; return }
-        let id = model.processor.model(for: profile)
-        switch id.provider {
-        case .apple:
-            aiStatus = "AI: " + (AppleIntelligenceBackend.unavailableReason ?? "Ready · \(id.displayName)")
-        case .ollama:
-            if id.isOllamaCloud { aiStatus = "AI: \(id.displayName) · runs on ollama.com"; return }
-            guard let url = try? OllamaBackend.validated(model.settings.ollamaEndpoint) else { aiStatus = "AI: the Ollama address isn't on this Mac"; return }
-            aiStatus = "AI: \(id.displayName) · " + (await OllamaBackend.isLoaded(endpoint: url, model: id.name) ? "loaded" : "not loaded")
-        case .anthropic, .openai:
-            aiStatus = "AI: \(id.displayName) · cloud (nothing to load)"
-        }
+        .buttonStyle(primary ? .primary : .quiet)
+        .disabled(busy.contains(what))
     }
 }
 
