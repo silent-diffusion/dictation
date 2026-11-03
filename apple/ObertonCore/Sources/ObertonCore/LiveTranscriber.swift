@@ -24,6 +24,21 @@ public final class LiveTranscriber: @unchecked Sendable {
 
     public init() {}
 
+    private static let retainedLock = NSLock()
+    nonisolated(unsafe) private static var retained = false
+
+    /// The speech model has been used since it was last let go: the system keeps it in memory for a while after each
+    /// use. Extended Notes' own analyzer counts too (`markInUse`).
+    public static var modelRetained: Bool { retainedLock.withLock { retained } }
+    public static func markInUse() { retainedLock.withLock { retained = true } }
+
+    /// Free the speech model's memory now (the dashboard's Unload everything); it loads again on the next dictation.
+    /// The downloaded model stays on the device.
+    public static func unloadModel() async {
+        await SpeechModels.endRetention()
+        retainedLock.withLock { retained = false }
+    }
+
     /// Make sure the speech model for this language is on the device (downloads it once, through the system).
     public static func prepare(locale: Locale) async throws -> Locale {
         guard SpeechTranscriber.isAvailable else { throw UserFacingError("On-device speech recognition isn't available on this device.") }
@@ -39,6 +54,7 @@ public final class LiveTranscriber: @unchecked Sendable {
 
     public func start(locale: Locale, vocabulary: [String]) async throws {
         let locale = try await Self.prepare(locale: locale)
+        Self.markInUse()
         #if os(iOS)
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playAndRecord, mode: .measurement, options: [.duckOthers, .defaultToSpeaker, .allowBluetoothHFP])

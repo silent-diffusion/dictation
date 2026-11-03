@@ -390,6 +390,37 @@ final class AppModel: ObservableObject {
         return list
     }
 
+    // MARK: Unloading
+
+    /// The speech model is in memory: used since it was last let go (the system keeps it a while after each use).
+    var speechLoaded: Bool { LiveTranscriber.modelRetained }
+
+    /// Unload models right now, on request (the dashboard's speech dial), as App.UnloadNowAsync does on Windows. Never
+    /// while a dictation or a reading is using them. Returns what happened, for display.
+    func unloadNow(speech: Bool, ai: Bool, voice: Bool) async -> String {
+        var done: [String] = [], skipped: [String] = []
+        if speech {
+            if phase.isBusy { skipped.append("the speech model (dictating)") }
+            else if speechLoaded { await LiveTranscriber.unloadModel(); done.append("speech model") }
+        }
+        if ai {
+            // Apple Intelligence keeps no session between requests here; Ollama keeps its models loaded until told.
+            if phase.isBusy { skipped.append("the AI model (dictating)") }
+            else if let url = try? OllamaBackend.validated(settings.ollamaEndpoint), await OllamaBackend.unloadAll(endpoint: url) > 0 {
+                done.append("AI model")
+            }
+        }
+        if voice {
+            if reader.isSpeaking { skipped.append("the Read aloud voice (reading)") }
+            else if reader.isLoaded { reader.unload(); done.append("Read aloud voice") }
+        }
+        var msg = !done.isEmpty ? "Unloaded: " + done.joined(separator: ", ") + ". They load again when needed."
+            : skipped.isEmpty ? "Nothing was loaded." : ""
+        if !skipped.isEmpty { msg = (msg + " Kept " + skipped.joined(separator: " and ") + ".").trimmingCharacters(in: .whitespaces) }
+        objectWillChange.send() // the speech dial now reads "off"
+        return msg
+    }
+
     func refreshOllama() async {
         guard let url = try? OllamaBackend.validated(settings.ollamaEndpoint) else { ollamaModels = []; return }
         ollamaModels = await OllamaBackend.installedModels(endpoint: url)

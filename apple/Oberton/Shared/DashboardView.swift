@@ -8,10 +8,34 @@ struct DashboardView: View {
     @EnvironmentObject var nav: Navigator
     @Environment(\.ob) private var ob
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @State private var toast: String?
+    @State private var toastShown = false
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
             if sizeClass == .compact { phone(now: context.date) } else { desk(now: context.date) }
+        }
+        // A short note (what Unload everything did), at the bottom.
+        .overlay(alignment: .bottom) {
+            if let toast {
+                Text(toast).font(Ob.mono(12)).foregroundStyle(ob.onInk).multilineTextAlignment(.center).frame(maxWidth: 480)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 18).padding(.vertical, 8)
+                    .background(Capsule().fill(ob.ink))
+                    .opacity(toastShown ? 1 : 0)
+                    .padding(.bottom, 34)
+                    .allowsHitTesting(false)
+            }
+        }
+    }
+
+    private func showToast(_ message: String) {
+        toast = message
+        withAnimation(.easeOut(duration: 0.12)) { toastShown = true }
+        Task {
+            try? await Task.sleep(for: .seconds(2.5))
+            guard toast == message else { return }
+            withAnimation(.easeIn(duration: 0.3)) { toastShown = false }
         }
     }
 
@@ -89,16 +113,45 @@ struct DashboardView: View {
                 FanMeter(fraction: (turn ?? 0) / 10, value: turn.map { String(format: "%.1f s", $0) } ?? "—", label: "Turnaround")
             }
         default:
-            let edits = days.reduce(0) { $0 + $1.aiEdits }, kept = days.reduce(0) { $0 + $1.aiKept }
-            meterCell(to: .speechToText) {
-                RingMeter(fraction: edits > 0 ? Double(kept) / Double(edits) : 0, value: edits > 0 ? "\(Int((Double(kept) / Double(edits) * 100).rounded()))%" : "—",
-                          label: "AI edits kept", sub: edits > 0 ? "last 30 days" : "no AI edits yet")
+            // The speech model (DashboardPage's speech dial). The Mac has no unload timer: once used, the model stays
+            // loaded until the system lets it go or it is unloaded here.
+            meterCell(settings: .speech, footer: AnyView(unloadButton)) {
+                if model.phase.isBusy {
+                    RingMeter(fraction: 1, value: "busy", label: "Speech model", sub: "dictating now", accent: true)
+                } else if !model.speechLoaded {
+                    RingMeter(fraction: 0, value: "off", label: "Speech model", sub: "loads when you dictate")
+                } else {
+                    RingMeter(fraction: 1, value: "on", label: "Speech model", sub: "stays loaded",
+                              valueAction: unloadSpeechNow, valueTip: "Click to unload the speech model now")
+                }
             }
         }
     }
 
-    private func meterCell<C: View>(to section: Section? = nil, settings: SettingsSection? = nil, @ViewBuilder _ content: () -> C) -> some View {
-        Cell(link: true, padding: EdgeInsets(top: 6, leading: 6, bottom: 6, trailing: 6)) { content() }
+    /// UNLOAD EVERYTHING, at the bottom of the speech meter: the speech model, the AI model and the voice.
+    private var unloadButton: some View {
+        Button("Unload everything") {
+            Task { showToast(await model.unloadNow(speech: true, ai: true, voice: true)) }
+        }
+        .buttonStyle(.quietSmall)
+        .disabled(model.phase.isBusy)
+        .help("Free the memory of the speech model, the AI model and the Read aloud voice now (they load again when needed)")
+        .padding(.top, 4).padding(.bottom, 2)
+    }
+
+    /// The speech dial's number: free the speech model's memory right away.
+    private func unloadSpeechNow() {
+        Task { _ = await model.unloadNow(speech: true, ai: false, voice: false) }
+    }
+
+    private func meterCell<C: View>(to section: Section? = nil, settings: SettingsSection? = nil, footer: AnyView? = nil,
+                                    @ViewBuilder _ content: () -> C) -> some View {
+        Cell(link: true, padding: EdgeInsets(top: 6, leading: 6, bottom: 6, trailing: 6)) {
+            VStack(spacing: 0) {
+                content()
+                if let footer { footer }
+            }
+        }
             .frame(minHeight: 150)
             .onTapGesture {
                 if let settings { nav.goSettings(settings) } else if let section { nav.go(section) }

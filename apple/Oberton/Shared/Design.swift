@@ -369,7 +369,11 @@ struct RingMeter: View {
     var label: String
     var sub: String
     var accent = false
+    /// The number is its own button (underlined); the rest of the meter still opens its page.
+    var valueAction: (() -> Void)? = nil
+    var valueTip: String? = nil
     @Environment(\.ob) private var ob
+    @State private var valueHover = false
 
     var body: some View {
         DesignSize(width: 150, height: 150) {
@@ -385,8 +389,17 @@ struct RingMeter: View {
                     }
                 }
                 VStack(spacing: 2) {
-                    Text(value).font(Ob.mono(21, .bold)).foregroundStyle(accent ? ob.accent : ob.ink).lineLimit(1).minimumScaleFactor(0.5)
-                        .frame(maxWidth: 92)
+                    if let valueAction {
+                        Text(value).font(Ob.mono(21, .bold)).underline().foregroundStyle(accent || valueHover ? ob.accent : ob.ink).lineLimit(1)
+                            .minimumScaleFactor(0.5).frame(maxWidth: 92)
+                            .contentShape(Rectangle())
+                            .onHover { valueHover = $0 }
+                            .onTapGesture { valueAction() }
+                            .help(valueTip ?? "")
+                    } else {
+                        Text(value).font(Ob.mono(21, .bold)).foregroundStyle(accent ? ob.accent : ob.ink).lineLimit(1).minimumScaleFactor(0.5)
+                            .frame(maxWidth: 92)
+                    }
                     Readout(label, size: 8.5)
                 }
                 .padding(.top, 46)

@@ -171,6 +171,27 @@ public struct OllamaBackend: LanguageModelBackend {
         return (json?["message"] as? [String: Any])?["content"] as? String ?? ""
     }
 
+    /// The models Ollama has in memory right now, or empty when it isn't running.
+    public static func loadedModels(endpoint: URL) async -> [String] {
+        guard let (data, _) = try? await URLSession.shared.data(from: endpoint.appending(path: "api/ps")),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let models = json["models"] as? [[String: Any]] else { return [] }
+        return models.compactMap { $0["name"] as? String }
+    }
+
+    /// Ask Ollama to let every model it holds go now (keep_alive 0). Returns how many it let go.
+    public static func unloadAll(endpoint: URL) async -> Int {
+        var count = 0
+        for name in await loadedModels(endpoint: endpoint) {
+            var req = URLRequest(url: endpoint.appending(path: "api/generate"), timeoutInterval: 15)
+            req.httpMethod = "POST"
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = try? JSONSerialization.data(withJSONObject: ["model": name, "keep_alive": 0] as [String: Any])
+            if let (_, resp) = try? await URLSession.shared.data(for: req), ((resp as? HTTPURLResponse)?.statusCode ?? 0) / 100 == 2 { count += 1 }
+        }
+        return count
+    }
+
     /// The models installed in Ollama, or empty when it isn't running.
     public static func installedModels(endpoint: URL) async -> [String] {
         guard let (data, _) = try? await URLSession.shared.data(from: endpoint.appending(path: "api/tags")),

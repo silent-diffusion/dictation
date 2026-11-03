@@ -30,7 +30,15 @@ public final class ReadAloudPlayer: NSObject, ObservableObject, AVSpeechSynthesi
     /// What is being read, for the player's header ("SAMANTHA").
     public private(set) var voiceName = ""
 
-    private let synth = AVSpeechSynthesizer()
+    /// Made on first use and let go by `unload()`, so the voice's memory can be freed between readings.
+    private var voiceEngine: AVSpeechSynthesizer?
+    private var synth: AVSpeechSynthesizer {
+        if let voiceEngine { return voiceEngine }
+        let s = AVSpeechSynthesizer()
+        s.delegate = self
+        voiceEngine = s
+        return s
+    }
     private var voiceID: String?
     /// Where the current utterance starts in `text`, so a restart from a word keeps highlights aligned.
     private var offset = 0
@@ -39,7 +47,17 @@ public final class ReadAloudPlayer: NSObject, ObservableObject, AVSpeechSynthesi
 
     public override init() {
         super.init()
-        synth.delegate = self
+    }
+
+    /// The voice is loaded (it has read something since it was last let go).
+    public var isLoaded: Bool { voiceEngine != nil }
+
+    /// Let the voice go (the dashboard's Unload everything); it loads again on the next reading. Not while reading.
+    public func unload() {
+        guard !isSpeaking, let engine = voiceEngine else { return }
+        engine.stopSpeaking(at: .immediate)
+        engine.delegate = nil
+        voiceEngine = nil
     }
 
     public static var voices: [AVSpeechSynthesisVoice] {
@@ -81,12 +99,13 @@ public final class ReadAloudPlayer: NSObject, ObservableObject, AVSpeechSynthesi
     }
 
     public func togglePause() {
+        guard let synth = voiceEngine else { return }
         if synth.isPaused { synth.continueSpeaking(); isPaused = false } else if synth.isSpeaking { synth.pauseSpeaking(at: .word); isPaused = true }
     }
 
     public func stop() {
         finishCounting()
-        synth.stopSpeaking(at: .immediate)
+        voiceEngine?.stopSpeaking(at: .immediate)
         isSpeaking = false
         isPaused = false
         spokenRange = nil
