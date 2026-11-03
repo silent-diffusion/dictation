@@ -406,13 +406,14 @@ struct KeyChips: View {
     @Environment(\.ob) private var ob
 
     var body: some View {
-        HStack(spacing: 4) {
+        // DashboardPage.SignalPath's chips: corner radius 9, padding 8,1, and a "+" readout 4 either side.
+        HStack(spacing: 0) {
             ForEach(Array(hotkey.split(separator: "+").enumerated()), id: \.offset) { i, part in
-                if i > 0 { Readout("+", size: size) }
+                if i > 0 { Readout("+").padding(.horizontal, 4) }
                 Text(part.trimmingCharacters(in: .whitespaces).uppercased())
                     .font(Ob.mono(size))
-                    .padding(.horizontal, 9).padding(.vertical, 2) // App.xaml's Chip
-                    .overlay(Capsule().strokeBorder(ob.ink, lineWidth: 1))
+                    .padding(.horizontal, 8).padding(.vertical, 1)
+                    .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(ob.ink, lineWidth: 1))
             }
         }
     }
@@ -519,7 +520,7 @@ struct RingMeter: View {
     }
 }
 
-/// The turnaround gauge: a half fan of ticks and a needle.
+/// The turnaround gauge: a half fan of ticks and a needle, the value under the hub and the label at the bottom.
 struct FanMeter: View {
     var fraction: Double
     var value: String
@@ -547,11 +548,8 @@ struct FanMeter: View {
                     ctx.fill(Path(ellipseIn: CGRect(x: cx - 4, y: cy - 4, width: 8, height: 8)), with: .color(ob.ink))
                 }
                 Text(value).font(Ob.mono(21, .bold)).padding(.top, 98)
-                VStack(spacing: 2) {
-                    Readout(label, size: 8.5)
-                    if !sub.isEmpty { Text(sub).font(Ob.sans(10)).foregroundStyle(ob.muted).lineLimit(1).truncationMode(.tail).frame(maxWidth: 144) }
-                }
-                .frame(maxHeight: .infinity, alignment: .bottom).padding(.bottom, 2)
+                // Only the label on the face; the sub line is in the tooltip (DashboardPage.Dial with fan).
+                Readout(label, size: 8.5).lineLimit(1).frame(maxWidth: 144, maxHeight: .infinity, alignment: .bottom).padding(.bottom, 2)
             }
         }
         .help(sub.isEmpty ? "\(label): \(value)" : "\(label): \(value) (\(sub))")
