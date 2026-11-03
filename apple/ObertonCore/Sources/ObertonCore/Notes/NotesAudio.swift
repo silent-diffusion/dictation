@@ -239,8 +239,7 @@ public enum NotesModels {
 
     /// A model that writes text (not an embedding model), and runs here rather than on ollama.com.
     public static func isChatModel(_ m: Installed) -> Bool {
-        !m.name.lowercased().contains("embed") && !m.family.lowercased().contains("bert") && !m.name.lowercased().contains("bert")
-            && !ModelID.isOllamaCloud(m.name)
+        !m.name.lowercased().contains("embed") && !m.family.lowercased().contains("bert") && !ModelID.isOllamaCloud(m.name)
     }
 
     /// Whether a model fits: in what the GPU works on when that is known, otherwise small enough for the processor; or a
@@ -266,7 +265,8 @@ public enum NotesModels {
         if setting.lowercased() == active { return (activeModel, "the active model") }
         if let id = ModelID(setting), id.provider != .ollama { return (id, id.isLocal ? "chosen" : "chosen, cloud") }
         let name = ModelID(setting)?.name ?? setting
-        if !name.isEmpty, let chosen = installed.first(where: { $0.name.lowercased() == name.lowercased() || $0.name.lowercased() == name.lowercased() + ":latest" }) {
+        func same(_ a: String, _ b: String) -> Bool { let a = a.lowercased(), b = b.lowercased(); return a == b || a == b + ":latest" || a + ":latest" == b }
+        if !name.isEmpty, let chosen = installed.first(where: { same($0.name, name) }) {
             return (ModelID(provider: .ollama, name: chosen.name), ModelID.isOllamaCloud(chosen.name) ? "chosen, cloud" : "chosen")
         }
         if let b = pickBest(installed, gpuBytes: gpuBytes, ramBytes: ramBytes) {

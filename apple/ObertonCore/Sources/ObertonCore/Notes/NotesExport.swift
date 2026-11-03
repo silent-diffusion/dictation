@@ -15,11 +15,14 @@ public enum NotesExport {
         return out.replacingOccurrences(of: #"\s+$"#, with: "", options: .regularExpression) + "\n"
     }
 
+    /// The language dates are written in (the user's; tests pin one).
+    nonisolated(unsafe) public static var locale = Locale.current
+
     /// The line under the title: the date and the length recorded.
     static func when(_ s: NoteSession) -> String {
         let t = Int(s.seconds)
         let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US")
+        f.locale = locale // the day and month named in the user's language, as Windows' current culture
         f.dateFormat = "EEEE d MMMM yyyy, HH:mm"
         return f.string(from: s.started) + String(format: " · %d:%02d:%02d", t / 3600, t / 60 % 60, t % 60)
     }

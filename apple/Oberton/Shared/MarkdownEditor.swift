@@ -67,6 +67,9 @@ final class MarkdownEditorController: NSObject {
     private var applying = false
     private var clicking = false
     private var loaded = false
+    /// The rendering follows a change made elsewhere at most every 300 ms (MarkdownPresenter's render timer).
+    private var renderSoon: DispatchWorkItem?
+    private var followEnd = false
 
     override init() {
         let look = MarkdownLook(size: 14, palette: Palette(dark: false, accentChoice: .cobalt))
@@ -112,8 +115,18 @@ final class MarkdownEditorController: NSObject {
         }
         applying = false
         if let o = open { open = min(o, MarkdownStyler.lines(storage.string as NSString).count - 1) }
+        followEnd = followEnd || (atEnd && open == nil)
+        if first { render(); return }
+        guard renderSoon == nil else { return }
+        let work = DispatchWorkItem { [weak self] in self?.renderSoon = nil; self?.render() }
+        renderSoon = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+    }
+
+    private func render() {
         restyle()
-        if atEnd && open == nil { scrollToEndSoon() }
+        if followEnd && open == nil { scrollToEndSoon() }
+        followEnd = false
     }
 
     /// The user typed: the session takes the text; the lines around are rendered again.
@@ -312,14 +325,16 @@ final class MarkdownEditorController: NSObject {
             menu.addItem(.separator())
         }
         if editing {
-            for (title, action) in [("Cut", #selector(NSText.cut(_:))), ("Copy", #selector(NSText.copy(_:))), ("Paste", #selector(NSText.paste(_:)))] {
-                let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            // As WPF's ApplicationCommands: the shortcut shown, Paste only with text on the clipboard.
+            let canPaste = NSPasteboard.general.canReadItem(withDataConformingToTypes: [NSPasteboard.PasteboardType.string.rawValue])
+            for (title, action, key) in [("Cut", #selector(NSText.cut(_:)), "x"), ("Copy", #selector(NSText.copy(_:)), "c"), ("Paste", #selector(NSText.paste(_:)), "v")] {
+                let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
                 item.target = tv
-                item.isEnabled = title == "Paste" || tv.selectedRange().length > 0
+                item.isEnabled = title == "Paste" ? canPaste : tv.selectedRange().length > 0
                 menu.addItem(item)
             }
         } else {
-            let copy = NSMenuItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "")
+            let copy = NSMenuItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
             copy.target = tv
             copy.isEnabled = sel.length > 0
             menu.addItem(copy)
@@ -408,6 +423,10 @@ final class MarkdownTextView: NSTextView {
 
     override func cancelOperation(_ sender: Any?) { controller?.escape() }
 
+    /// Tab moves to the next control rather than typing a tab (Windows' AcceptsTab="False").
+    override func insertTab(_ sender: Any?) { window?.selectNextKeyView(nil) }
+    override func insertBacktab(_ sender: Any?) { window?.selectPreviousKeyView(nil) }
+
     /// While nothing is open, the keys scroll; deleting does nothing.
     override func keyDown(with event: NSEvent) {
         if let c = controller, c.closed, event.modifierFlags.intersection([.command, .control, .option]).isEmpty {
@@ -471,7 +490,8 @@ extension MarkdownEditorController: UITextViewDelegate {
     func textViewDidChangeSelection(_ textView: UITextView) { selectionChanged() }
 
     func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
-        text == "\n" ? !newline() : true
+        if text == "\t" { return false } // Tab doesn't type a tab (Windows' AcceptsTab="False")
+        return text == "\n" ? !newline() : true
     }
 
     /// The long-press menu: Jump to this moment first, then the usual items.

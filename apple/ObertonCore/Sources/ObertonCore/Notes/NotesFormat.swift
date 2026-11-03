@@ -41,8 +41,18 @@ public enum NotesFormat {
 
     /// A sentence for comparing: lower case, letters, digits and single spaces only.
     static func key(_ s: String) -> String {
-        let kept = String(s.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) || $0 == " " }.map(Character.init)).lowercased()
+        let kept = String(s.unicodeScalars.filter { letterOrDigit($0) || $0 == " " }.map(Character.init)).lowercased()
         return kept.split(separator: " ").joined(separator: " ")
+    }
+
+    /// .NET's `char.IsLetterOrDigit`: a letter (Lu, Ll, Lt, Lm, Lo) or a decimal digit (Nd), in the Basic Multilingual
+    /// Plane (a UTF-16 unit; "½" or a combining mark is neither).
+    static func letterOrDigit(_ c: Unicode.Scalar) -> Bool {
+        guard c.value <= 0xFFFF else { return false }
+        switch c.properties.generalCategory {
+        case .uppercaseLetter, .lowercaseLetter, .titlecaseLetter, .modifierLetter, .otherLetter, .decimalNumber: return true
+        default: return false
+        }
     }
 
     struct Edit { var start: Int; var length: Int; var with: String }
@@ -112,7 +122,7 @@ public enum NotesFormat {
         if t.isEmpty || isMarkerLine(t) { return false }
         guard t.unicodeScalars.contains(where: { isForeign($0, keepCJK: keepCJK) }) else { return false }
         let rest = stripForeign(t, keepCJK: keepCJK).trimmed
-        return !rest.contains(where: { $0.isLetter || $0.isNumber }) || matches(rest, timestampOnly)
+        return !rest.unicodeScalars.contains(where: letterOrDigit) || matches(rest, timestampOnly)
     }
 
     /// The reply, cleaned: junk lines out, foreign characters out, markers only where the text had them, labels the

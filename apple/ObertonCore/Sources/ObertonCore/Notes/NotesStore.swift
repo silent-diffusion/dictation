@@ -40,18 +40,32 @@ public final class NotesStore: @unchecked Sendable {
         let folders = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
         var loaded: [NoteSession] = []
         for folder in folders where folder.hasDirectoryPath {
-            guard let data = try? Data(contentsOf: folder.appending(path: "session.json")),
-                  let s = try? Self.decoder.decode(NoteSession.self, from: data) else { continue }
+            let file = folder.appending(path: "session.json")
+            guard let data = try? Data(contentsOf: file) else { continue }
+            guard let s = try? Self.decoder.decode(NoteSession.self, from: data) else {
+                Self.keepBad(file)
+                continue
+            }
             s.folder = folder
             if !s.finished {
                 // Oberton quit (or crashed) while it recorded: everything up to the last save is kept.
                 s.finished = true
                 save(s)
+                NSLog("Extended notes: closed a session left open")
             }
             loaded.append(s)
         }
         sessions = loaded.sorted { $0.started > $1.started }
         NotesAudio.sweep(keeping: Set(sessions.map(\.id)))
+    }
+
+    /// A file that can't be read is kept beside it as "<name>.bad" before it is skipped or started afresh (Windows'
+    /// JsonStore.Load), so nothing is lost for good.
+    static func keepBad(_ file: URL) {
+        NSLog("Could not read %@; keeping a .bad copy", file.lastPathComponent)
+        let bad = file.appendingPathExtension("bad")
+        try? FileManager.default.removeItem(at: bad)
+        try? FileManager.default.copyItem(at: file, to: bad)
     }
 
     /// A new session with its folder, first in the list.
@@ -69,12 +83,15 @@ public final class NotesStore: @unchecked Sendable {
         s.started = now
         s.source = source
         s.folder = folder
-        s.title = "Session // " + now.formatted(.dateTime.day().month(.abbreviated)) + " " + now.formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute())
+        s.title = "Session // " + Self.titleDate.string(from: now)
         sessions.insert(s, at: 0)
         save(s)
         sessionsChanged?()
         return s
     }
+
+    /// "3 Nov 14:05": the day before the month, a 24-hour time (Windows' `d MMM HH:mm`), in the user's language.
+    static let titleDate: DateFormatter = { let f = DateFormatter(); f.dateFormat = "d MMM HH:mm"; return f }()
 
     /// Save a session: encoded here (the main thread owns it), written in the background.
     public func save(_ s: NoteSession) {
@@ -139,8 +156,10 @@ public final class NotesStore: @unchecked Sendable {
     }
 }
 
-/// One day of Extended Notes, as counts only: never any text or audio.
+/// One day of Extended Notes, as counts only: never any text or audio. The day is stored as a calendar date
+/// ("2026-11-03", as Windows' DateOnly), so a change of time zone doesn't split it in two.
 public struct NotesUsageDay: Codable, Sendable, Equatable {
+    /// Local midnight of the day.
     public var day: Date
     public var sessions = 0
     public var seconds = 0.0
@@ -150,6 +169,46 @@ public struct NotesUsageDay: Codable, Sendable, Equatable {
     public var summaryRequests = 0
     /// Sessions per source: "Mic", "Computer" or "Both".
     public var sources: [String: Int] = [:]
+
+    public init(day: Date) { self.day = day }
+
+    enum CodingKeys: String, CodingKey { case day, sessions, seconds, wordsHeard, wordsTyped, formatRequests, summaryRequests, sources }
+
+    static let dayFormat: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.calendar = Calendar(identifier: .gregorian)
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let raw = try c.decode(String.self, forKey: .day)
+        // Earlier files kept the day as the instant of its midnight ("2026-11-02T23:00:00Z").
+        if let d = Self.dayFormat.date(from: raw) { day = d }
+        else if let d = ISO8601DateFormatter().date(from: raw) { day = Calendar.current.startOfDay(for: d) }
+        else { throw DecodingError.dataCorruptedError(forKey: .day, in: c, debugDescription: "not a day: \(raw)") }
+        sessions = try c.decodeIfPresent(Int.self, forKey: .sessions) ?? 0
+        seconds = try c.decodeIfPresent(Double.self, forKey: .seconds) ?? 0
+        wordsHeard = try c.decodeIfPresent(Int.self, forKey: .wordsHeard) ?? 0
+        wordsTyped = try c.decodeIfPresent(Int.self, forKey: .wordsTyped) ?? 0
+        formatRequests = try c.decodeIfPresent(Int.self, forKey: .formatRequests) ?? 0
+        summaryRequests = try c.decodeIfPresent(Int.self, forKey: .summaryRequests) ?? 0
+        sources = try c.decodeIfPresent([String: Int].self, forKey: .sources) ?? [:]
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(Self.dayFormat.string(from: day), forKey: .day)
+        try c.encode(sessions, forKey: .sessions)
+        try c.encode(seconds, forKey: .seconds)
+        try c.encode(wordsHeard, forKey: .wordsHeard)
+        try c.encode(wordsTyped, forKey: .wordsTyped)
+        try c.encode(formatRequests, forKey: .formatRequests)
+        try c.encode(summaryRequests, forKey: .summaryRequests)
+        try c.encode(sources, forKey: .sources)
+    }
 }
 
 /// The counts over a period, summed from its days; `aiRequests` is formatting and summary steps together.
@@ -172,7 +231,22 @@ public final class NotesUsage: @unchecked Sendable {
     /// `url` nil keeps the counts in memory only.
     public init(url: URL?) {
         self.url = url
-        data = url.flatMap { try? Data(contentsOf: $0) }.flatMap { try? NotesStore.decoder.decode(FileData.self, from: $0) } ?? FileData()
+        guard let url, let raw = try? Data(contentsOf: url) else { data = FileData(); return }
+        if let read = try? NotesStore.decoder.decode(FileData.self, from: raw) {
+            // Days read from an older file, merged where two came to the same calendar day.
+            var days: [NotesUsageDay] = []
+            for d in read.days.sorted(by: { $0.day < $1.day }) {
+                if let i = days.firstIndex(where: { $0.day == d.day }) {
+                    days[i].sessions += d.sessions; days[i].seconds += d.seconds; days[i].wordsHeard += d.wordsHeard
+                    days[i].wordsTyped += d.wordsTyped; days[i].formatRequests += d.formatRequests; days[i].summaryRequests += d.summaryRequests
+                    for (k, v) in d.sources { days[i].sources[k, default: 0] += v }
+                } else { days.append(d) }
+            }
+            data = FileData(version: read.version, days: days)
+        } else {
+            NotesStore.keepBad(url)
+            data = FileData()
+        }
     }
 
     public var days: [NotesUsageDay] { data.days }
