@@ -85,6 +85,10 @@ enum Ob {
     }()
 
     static func sans(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font { .system(size: size, weight: weight) }
+    /// The window's own text size: WPF draws text without a size of its own at 12 (MainWindow sets none).
+    static let body: CGFloat = 12
+    /// Extra space between lines for text set at `size` to land on a WPF LineHeight of `lineHeight`.
+    static func lineSpacing(_ size: CGFloat, lineHeight: CGFloat) -> CGFloat { max(0, lineHeight - size * 1.2) }
     static func jp(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font { .custom("Hiragino Sans", size: size).weight(weight) }
 }
 
@@ -99,8 +103,11 @@ struct ObertonTheme: ViewModifier {
         content
             .environment(\.ob, palette)
             .environment(\.showJapanese, settings.showJapanese)
-            .tint(palette.ink) // the system controls' own accent is ink, so that color stays a signal
+            .tint(palette.ink) // the system controls' own accent is ink, so that color stays a signal (Light/Dark.xaml's Fluent keys)
             .foregroundStyle(palette.ink)
+            // Windows draws keyboard focus itself, as an accent border on each styled control (App.xaml's
+            // IsKeyboardFocused triggers), so the system's ring is off; the controls draw theirs.
+            .focusEffectDisabled()
             .preferredColorScheme(settings.theme == .system ? nil : dark ? .dark : .light)
     }
 }
@@ -210,16 +217,17 @@ struct PageTitle<Trailing: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .bottom, spacing: 14) {
-                Text(title.uppercased()).font(Ob.mono(size, .bold)).lineLimit(1).minimumScaleFactor(0.5)
-                if let japanese { Decor(japanese, size: size - 4, color: ob.divider, weight: .bold) }
+            // Decor.cs PageHeader: a long title is cut with "…" (the readout keeps its room), the decor 2 above the
+            // baseline, the readout right-aligned 6 above the rule.
+            HStack(alignment: .bottom, spacing: 0) {
+                Text(title.uppercased()).font(Ob.mono(size, .bold)).lineLimit(1).truncationMode(.tail)
+                if let japanese { Decor(japanese, size: size - 4, color: ob.divider, weight: .bold).fixedSize().padding(.leading, 14).padding(.bottom, 2) }
                 Spacer(minLength: 16)
-                trailing.padding(.bottom, 4)
+                trailing.multilineTextAlignment(.trailing).fixedSize().padding(.bottom, 6).layoutPriority(1)
             }
             Rule().padding(.top, 6)
             if let summary {
-                Text(summary).font(Ob.sans(13)).foregroundStyle(ob.muted).lineSpacing(4)
-                    .fixedSize(horizontal: false, vertical: true).padding(.top, 14)
+                Caption(summary).padding(.top, 14)
             }
         }
     }
@@ -240,14 +248,17 @@ struct FieldLabel: View {
     }
 }
 
-/// Helper prose under a control: sans, muted, wrapping.
+/// Helper prose under a control (App.xaml's Caption): the window's 12, muted, wrapping, lines 19 apart, and 12 below it
+/// unless the Windows page sets its own margin (`bottom: 0`).
 struct Caption: View {
     var text: String
-    var size: CGFloat = 13
+    var size: CGFloat = Ob.body
+    var bottom: CGFloat = 12
     @Environment(\.ob) private var ob
-    init(_ text: String, size: CGFloat = 13) { self.text = text; self.size = size }
+    init(_ text: String, size: CGFloat = Ob.body, bottom: CGFloat = 12) { self.text = text; self.size = size; self.bottom = bottom }
     var body: some View {
-        Text(text).font(Ob.sans(size)).foregroundStyle(ob.muted).lineSpacing(4).fixedSize(horizontal: false, vertical: true)
+        Text(text).font(Ob.sans(size)).foregroundStyle(ob.muted).lineSpacing(Ob.lineSpacing(size, lineHeight: 19))
+            .fixedSize(horizontal: false, vertical: true).padding(.bottom, bottom)
     }
 }
 
@@ -305,26 +316,36 @@ struct Box<Content: View>: View {
 
 // MARK: - Buttons
 
-/// Capsules. Filled ink = the main action; ink outline = the others; dashed = something to add.
+/// Capsules (App.xaml's PrimaryButton, QuietButton, DashedButton). Filled ink = the main action; ink outline = the
+/// others; dashed = something to add. Always at least 34 tall, the hand cursor over them, and an accent border while
+/// they have the keyboard focus.
 struct CapsuleButtonStyle: ButtonStyle {
     enum Kind { case primary, quiet, dashed }
     var kind: Kind = .quiet
     var size: CGFloat = 12
     var compact = false
+    /// The space left and right of the text, when a page sets its own (Windows' Padding="12,6").
+    var padding: CGFloat?
+    /// Windows' MinHeight: 34, or 40 in the setup window.
+    var height: CGFloat = 34
     @Environment(\.ob) private var ob
     @Environment(\.isEnabled) private var enabled
+    @Environment(\.isFocused) private var focused
 
     func makeBody(configuration: Configuration) -> some View {
-        Face(configuration: configuration, kind: kind, size: size, compact: compact, ob: ob, enabled: enabled)
+        Face(configuration: configuration, kind: kind, size: size, padding: padding ?? (compact ? 10 : 16), height: height, ob: ob,
+             enabled: enabled, focused: focused)
     }
 
     private struct Face: View {
         var configuration: Configuration
         var kind: Kind
         var size: CGFloat
-        var compact: Bool
+        var padding: CGFloat
+        var height: CGFloat
         var ob: Palette
         var enabled: Bool
+        var focused: Bool
         @State private var hover = false
 
         var body: some View {
@@ -333,8 +354,9 @@ struct CapsuleButtonStyle: ButtonStyle {
                 .textCase(.uppercase)
                 .lineLimit(1)
                 .foregroundStyle(kind == .primary ? ob.onInk : kind == .dashed && !hover ? ob.muted : ob.ink)
-                .padding(.horizontal, compact ? 12 : 16)
-                .frame(minHeight: compact ? 26 : 34)
+                // The small ones are Windows' QuietButton with FontSize 10 and Padding 10,3: smaller text, same height.
+                .padding(.horizontal, padding)
+                .frame(minHeight: height)
                 .background {
                     switch kind {
                     case .primary: Capsule().fill(ob.ink)
@@ -344,14 +366,15 @@ struct CapsuleButtonStyle: ButtonStyle {
                 }
                 .overlay {
                     switch kind {
-                    case .primary: Capsule().strokeBorder(ob.ink, lineWidth: 1)
-                    case .quiet: Capsule().strokeBorder(ob.ink, lineWidth: 1)
-                    case .dashed: Capsule().strokeBorder(hover ? ob.ink : ob.muted, style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                    case .primary, .quiet: Capsule().strokeBorder(focused ? ob.accent : ob.ink, lineWidth: 1)
+                    // The dashed stroke stays muted on hover; only the text turns ink.
+                    case .dashed: Capsule().strokeBorder(ob.muted, style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
                     }
                 }
                 .contentShape(Capsule())
-                .opacity(!enabled ? 0.4 : configuration.isPressed ? 0.66 : kind == .primary && hover ? 0.82 : 1)
+                .opacity(!enabled ? 0.4 : configuration.isPressed ? (kind == .quiet ? 0.7 : 0.66) : kind == .primary && hover ? 0.82 : 1)
                 .onHover { hover = $0 }
+                .handCursor()
         }
     }
 }
@@ -361,6 +384,19 @@ extension ButtonStyle where Self == CapsuleButtonStyle {
     static var quiet: CapsuleButtonStyle { CapsuleButtonStyle(kind: .quiet) }
     static var dashed: CapsuleButtonStyle { CapsuleButtonStyle(kind: .dashed) }
     static var quietSmall: CapsuleButtonStyle { CapsuleButtonStyle(kind: .quiet, size: 10, compact: true) }
+    /// A QuietButton with Padding="12,6" (Hotkeys' RESET and CLEAR, and others).
+    static var quietNarrow: CapsuleButtonStyle { CapsuleButtonStyle(kind: .quiet, padding: 12) }
+}
+
+extension View {
+    /// The pointing hand over something clickable (Windows sets Cursor="Hand" on every styled control).
+    func handCursor(_ on: Bool = true) -> some View {
+        #if os(macOS)
+        pointerStyle(on ? .link : nil)
+        #else
+        self
+        #endif
+    }
 }
 
 /// A key on the keyboard, as a chip: CTRL + D.
@@ -375,7 +411,7 @@ struct KeyChips: View {
                 if i > 0 { Readout("+", size: size) }
                 Text(part.trimmingCharacters(in: .whitespaces).uppercased())
                     .font(Ob.mono(size))
-                    .padding(.horizontal, 8).padding(.vertical, 1)
+                    .padding(.horizontal, 9).padding(.vertical, 2) // App.xaml's Chip
                     .overlay(Capsule().strokeBorder(ob.ink, lineWidth: 1))
             }
         }
@@ -384,7 +420,8 @@ struct KeyChips: View {
 
 // MARK: - Switch
 
-/// A switch, label on the left, the whole row clickable: an ink outline when off, filled ink when on.
+/// A switch, label on the left, the whole row clickable (App.xaml's Switch): off, a muted outline with a hollow knob
+/// (the outline turns ink under the pointer); on, filled ink. An accent outline while it has the keyboard focus.
 struct ObSwitch: View {
     var title: String
     var detail: String?
@@ -392,6 +429,7 @@ struct ObSwitch: View {
     @Environment(\.ob) private var ob
     @Environment(\.isEnabled) private var enabled
     @State private var hover = false
+    @FocusState private var focused
 
     init(_ title: String, detail: String? = nil, isOn: Binding<Bool>) {
         self.title = title
@@ -402,25 +440,29 @@ struct ObSwitch: View {
     var body: some View {
         Button { withAnimation(.easeOut(duration: 0.15)) { isOn.toggle() } } label: {
             HStack(spacing: 16) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(title).font(Ob.sans(13.5))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(Ob.sans(Ob.body)).fixedSize(horizontal: false, vertical: true)
                     if let detail { Text(detail).font(Ob.sans(12)).foregroundStyle(ob.muted).fixedSize(horizontal: false, vertical: true) }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 ZStack(alignment: isOn ? .trailing : .leading) {
                     Capsule().fill(isOn ? ob.ink : .clear)
-                    Capsule().strokeBorder(isOn ? ob.ink : hover ? ob.accent : ob.muted, lineWidth: 1)
-                    Circle().fill(isOn ? ob.onInk : ob.muted).frame(width: 12, height: 12).padding(.horizontal, 4)
+                    Capsule().strokeBorder(focused ? ob.accent : isOn || hover ? ob.ink : ob.muted, lineWidth: 1)
+                    Group {
+                        if isOn { Circle().fill(ob.onInk) } else { Circle().strokeBorder(ob.muted, lineWidth: 1) }
+                    }
+                    .frame(width: 12, height: 12).padding(.horizontal, 4)
                 }
                 .frame(width: 42, height: 22)
             }
-            .padding(.vertical, 10)
             .frame(minHeight: 48)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .focused($focused)
         .opacity(enabled ? 1 : 0.45)
         .onHover { hover = $0 }
+        .handCursor()
         .accessibilityRepresentation { Toggle(title, isOn: $isOn) }
     }
 }
@@ -533,25 +575,23 @@ struct DesignSize<Content: View>: View {
     }
 }
 
-/// A status dot: ready = filled ink, busy = the accent (pulsing), off = a hollow ring. The shape carries the state.
+/// A status dot: ready = filled ink (Ob.Ok), busy = filled accent (Ob.Busy), off = a hollow ring. Still, as on Windows.
 enum DotState { case ok, busy, off }
 
 struct StatusDot: View {
     var state: DotState
     var size: CGFloat = 7
     @Environment(\.ob) private var ob
-    @State private var pulse = false
 
     var body: some View {
         Group {
             switch state {
             case .ok: Circle().fill(ob.ink)
-            case .busy: Circle().fill(ob.accent).opacity(pulse ? 0.25 : 1)
+            case .busy: Circle().fill(ob.accent)
             case .off: Circle().strokeBorder(ob.muted, lineWidth: 1)
             }
         }
         .frame(width: size, height: size)
-        .onAppear { if state == .busy { withAnimation(.easeInOut(duration: 0.6).repeatForever()) { pulse = true } } }
     }
 }
 

@@ -24,7 +24,7 @@ struct ObField: View {
             if secure { SecureField(placeholder, text: $text) } else { TextField(placeholder, text: $text) }
         }
         .textFieldStyle(.plain)
-        .font(mono ? Ob.mono(12.5) : Ob.sans(13.5))
+        .font(mono ? Ob.mono(12.5) : Ob.sans(Ob.body))
         .focused($focused)
         .padding(.horizontal, 8).padding(.vertical, 6)
         .frame(maxWidth: width ?? .infinity, alignment: .leading)
@@ -32,12 +32,13 @@ struct ObField: View {
     }
 }
 
-/// A dropdown drawn as a hairline box with a chevron.
+/// A dropdown drawn as a hairline box with a chevron (an accent border while it has the keyboard focus).
 struct ObMenu<Value: Hashable>: View {
     var options: [(Value, String)]
     @Binding var selection: Value
     var width: CGFloat?
     @Environment(\.ob) private var ob
+    @FocusState private var focused
 
     var body: some View {
         Menu {
@@ -48,16 +49,18 @@ struct ObMenu<Value: Hashable>: View {
             }
         } label: {
             HStack {
-                Text(options.first { $0.0 == selection }?.1 ?? "—").font(Ob.sans(13.5)).lineLimit(1)
+                Text(options.first { $0.0 == selection }?.1 ?? "—").font(Ob.sans(Ob.body)).lineLimit(1)
                 Spacer(minLength: 8)
                 Image(systemName: "chevron.down").font(.system(size: 10, weight: .medium)).foregroundStyle(ob.muted)
             }
             .foregroundStyle(ob.ink)
             .padding(.horizontal, 8).padding(.vertical, 6)
             .frame(maxWidth: width ?? .infinity)
-            .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
+            .overlay(Rectangle().strokeBorder(focused ? ob.accent : ob.divider, lineWidth: 1))
             .contentShape(Rectangle())
         }
+        .focused($focused)
+        .handCursor()
         .menuStyle(.button)
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
@@ -65,7 +68,8 @@ struct ObMenu<Value: Hashable>: View {
     }
 }
 
-/// A hairline-boxed group of switch rows with hairlines between them (the Windows "Card" around switches).
+/// A hairline-boxed group of switch rows with hairlines between them (the Windows "Card" around switches, each
+/// switch with Margin 18,4).
 struct SwitchCard<Content: View>: View {
     @ViewBuilder var content: Content
     @Environment(\.ob) private var ob
@@ -80,6 +84,7 @@ struct SwitchCard<Content: View>: View {
             }
         }
         .padding(.horizontal, 18)
+        .padding(.vertical, 4)
         .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
     }
 }
@@ -95,7 +100,7 @@ struct Badge: View {
         Text(text.uppercased())
             .font(Ob.mono(10))
             .foregroundStyle(kind == .active ? ob.onInk : kind == .cloud ? ob.accent : kind == .outline ? ob.muted : ob.ink)
-            .padding(.horizontal, 8).padding(.vertical, 1)
+            .padding(.horizontal, 9).padding(.vertical, 2) // App.xaml's Chip
             .background(Capsule().fill(kind == .active ? ob.ink : kind == .plain ? ob.subtle : .clear))
             .overlay(Capsule().strokeBorder(kind == .cloud ? ob.accent : kind == .plain ? ob.divider : ob.ink, lineWidth: 1))
     }
@@ -108,6 +113,7 @@ struct ChoiceCard<Content: View>: View {
     @ViewBuilder var content: Content
     @Environment(\.ob) private var ob
     @State private var hover = false
+    @FocusState private var focused
 
     var body: some View {
         Button(action: action) {
@@ -115,7 +121,7 @@ struct ChoiceCard<Content: View>: View {
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(hover ? ob.subtle : .clear)
-                .overlay(Rectangle().strokeBorder(chosen ? ob.ink : ob.divider, lineWidth: 1))
+                .overlay(Rectangle().strokeBorder(chosen ? ob.ink : focused ? ob.accent : ob.divider, lineWidth: 1))
                 .overlay(alignment: .topTrailing) {
                     Group {
                         if chosen { Circle().fill(ob.ink) } else { Circle().strokeBorder(ob.muted, lineWidth: 1) }
@@ -125,12 +131,15 @@ struct ChoiceCard<Content: View>: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .focused($focused)
         .onHover { hover = $0 }
+        .handCursor()
         .accessibilityAddTraits(chosen ? .isSelected : [])
     }
 }
 
-/// Nine spots on a miniature screen, for where the overlay or player appears.
+/// Nine spots on a miniature screen, for where the overlay or player appears (LayoutPage's UniformGrid of PositionCells,
+/// 4 in from the frame, each pill centred in its cell).
 struct PositionPicker: View {
     @Binding var position: OverlayPosition
     var radius: CGFloat = 2
@@ -142,24 +151,42 @@ struct PositionPicker: View {
             ForEach(0..<3, id: \.self) { row in
                 HStack(spacing: 0) {
                     ForEach(0..<3, id: \.self) { col in
-                        let p = all[row * 3 + col]
-                        Button { position = p } label: {
-                            Capsule().fill(p == position ? ob.ink : .clear)
-                                .overlay(Capsule().strokeBorder(p == position ? ob.ink : ob.muted, lineWidth: 1))
-                                .frame(width: 34, height: 10)
-                                .frame(maxWidth: .infinity, maxHeight: .infinity,
-                                       alignment: Alignment(horizontal: [.leading, .center, .trailing][col], vertical: [.top, .center, .bottom][row]))
-                                .padding(10)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(p.title)
+                        PositionCell(place: all[row * 3 + col], position: $position)
                     }
                 }
             }
         }
+        .padding(4)
         .frame(width: 220, height: 124)
         .overlay(RoundedRectangle(cornerRadius: radius).strokeBorder(ob.ink, lineWidth: 1))
+    }
+}
+
+/// One spot (App.xaml's PositionCell): a 34×10 pill, outlined muted, ink under the pointer, filled ink when chosen;
+/// 40 wide with an accent outline while it has the keyboard focus. The tooltip names the spot.
+private struct PositionCell: View {
+    var place: OverlayPosition
+    @Binding var position: OverlayPosition
+    @Environment(\.ob) private var ob
+    @State private var hover = false
+    @FocusState private var focused
+
+    var body: some View {
+        let chosen = place == position
+        Button { position = place } label: {
+            Capsule().fill(chosen ? ob.ink : .clear)
+                .overlay(Capsule().strokeBorder(focused ? ob.accent : chosen || hover ? ob.ink : ob.muted, lineWidth: 1))
+                .frame(width: focused ? 40 : 34, height: 10)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focused($focused)
+        .onHover { hover = $0 }
+        .handCursor()
+        .help(place.title)
+        .accessibilityLabel(place.title)
+        .accessibilityAddTraits(chosen ? .isSelected : [])
     }
 }
 
