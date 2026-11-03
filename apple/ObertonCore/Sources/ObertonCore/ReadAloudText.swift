@@ -139,8 +139,16 @@ public enum ReadAloudText {
     private static func addIfSpoken(_ text: NSString, _ start: Int, _ end: Int, _ spans: inout [NSRange]) {
         guard end > start else { return }
         let piece = text.substring(with: NSRange(location: start, length: end - start))
-        if piece.unicodeScalars.contains(where: { CharacterSet.alphanumerics.contains($0) }) {
+        if piece.unicodeScalars.contains(where: isLetterOrDigit) {
             spans.append(NSRange(location: start, length: end - start))
+        }
+    }
+
+    /// .NET's char.IsLetterOrDigit: letters (L*) and decimal digits (Nd); not marks, "²", "½" or "Ⅻ".
+    static func isLetterOrDigit(_ s: Unicode.Scalar) -> Bool {
+        switch s.properties.generalCategory {
+        case .uppercaseLetter, .lowercaseLetter, .titlecaseLetter, .modifierLetter, .otherLetter, .decimalNumber: true
+        default: false
         }
     }
 

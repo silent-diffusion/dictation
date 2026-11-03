@@ -13,7 +13,7 @@ public struct Profile: Codable, Identifiable, Hashable, Sendable {
     /// The speech recognition model for this profile: a Whisper model's id, `Profile.appleSpeech`, or nil for the one in
     /// Settings › Models. `AppSettings.dictating(with:)` resolves it.
     public var speechModel: String?
-    /// Read aloud voice for this profile (an AVSpeechSynthesisVoice identifier); nil = Read aloud's own.
+    /// Read aloud voice for this profile (a voice id, see `AppSettings.ttsVoice`); nil = Read aloud's own.
     public var voice: String?
     /// Off = Raw: the recognizer's words, no AI.
     public var autoProcess: Bool = true

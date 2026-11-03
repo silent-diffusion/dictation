@@ -148,8 +148,9 @@ public struct AppSettings: Codable, Sendable, Equatable {
     public var readerOpacity = 0.9
     /// The player shows the whole text (scrolling along) instead of the current sentence only.
     public var readerExpanded = false
-    /// Read aloud: an AVSpeechSynthesisVoice identifier (nil = the system's default voice) and base speed (0.5–2).
-    public var ttsVoice: String?
+    /// Read aloud's voice, which also picks the model: a Kokoro voice id ("af_heart", Windows' default), a Piper voice
+    /// ("piper:en_US-lessac-medium") or a system voice's AVSpeechSynthesisVoice identifier; nil = Heart. Base speed 0.25–4.
+    public var ttsVoice: String? = VoiceCatalog.defaultVoice
     public var ttsBaseSpeed = 1.75
     /// After a dictation is inserted, put the user's own clipboard back.
     public var restoreClipboard = true
