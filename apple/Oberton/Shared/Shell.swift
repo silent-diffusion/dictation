@@ -96,6 +96,10 @@ struct Place: Equatable {
     var historyID: UUID?
     /// Extended Notes: the session open (its folder's name), or nil for the landing page.
     var noteSessionID: String?
+
+    /// What Back remembers (MainWindow.Visit): the page, or "Settings/<section>"; not the profile, entry or session
+    /// open in it.
+    var visit: String { section == .settings ? "settings/" + settings.rawValue : section.rawValue }
 }
 
 @MainActor
@@ -107,7 +111,15 @@ final class Navigator: ObservableObject {
 
     init(place: Place = Place()) { self.place = place }
 
-    func go(_ section: Section) { go { $0.section = section } }
+    /// A page from the sidebar, opened fresh as Windows builds a new page: Settings on GENERAL, Extended Notes on its
+    /// landing page. The page already shown stays as it is (its sidebar entry is already selected).
+    func open(_ section: Section) {
+        guard section != place.section else { drawerOpen = false; return }
+        go { $0 = Place(section: section) }
+    }
+
+    /// ShowPage(tag) for a page: the same as its sidebar entry.
+    func go(_ section: Section) { open(section) }
     func goSettings(_ s: SettingsSection) { go { $0.section = .settings; $0.settings = s } }
     func goProfile(_ id: String?) { go { $0.section = .speechToText; $0.profileID = id } }
     func goHistory(_ id: UUID?) { go { $0.section = .history; $0.historyID = id } }
@@ -119,16 +131,24 @@ final class Navigator: ObservableObject {
         change(&next)
         drawerOpen = false
         guard next != place else { return }
-        back.append(place)
-        if back.count > 50 { back.removeFirst() }
+        // Only a new page or Settings section is a step back (a profile or History entry opened in a page isn't).
+        if next.visit != place.visit {
+            back.append(place)
+            if back.count > 50 { back.removeFirst() }
+        }
         place = next
     }
 
-    /// To the place shown before this one, or the dashboard when there is none (MainWindow.GoBack).
+    /// To the page shown before this one, or the dashboard when there is none (MainWindow.GoBack): places equal to this
+    /// one are skipped, and the page opens fresh.
     func goBack() {
         guard place.section != .dashboard else { return }
         drawerOpen = false
-        place = back.popLast() ?? Place()
+        var target = Place()
+        while let last = back.popLast() {
+            if last.visit != place.visit { target = last; break }
+        }
+        place = Place(section: target.section, settings: target.settings)
     }
 }
 
@@ -146,6 +166,8 @@ struct RootView: View {
     /// The text size (Settings › Appearance, ⌘+ / ⌘− / ⌘0), shown for a moment after it changes.
     @State private var zoomToast: String?
     @State private var zoomToastShown = false
+    /// Each change restarts the 1.2 s hold (Windows restarts its timer).
+    @State private var zoomToastCount = 0
     #if os(macOS)
     @State private var mouseBack: Any?
     #endif
@@ -180,11 +202,13 @@ struct RootView: View {
     private func showZoomToast(_ scale: Double) {
         let text = "TEXT SIZE \(Int((scale * 100).rounded()))%" + (abs(scale - 1) < 0.001 ? "" : "  //  \(TextSize.resetKey) RESETS")
         zoomToast = text
-        withAnimation(.easeOut(duration: 0.12)) { zoomToastShown = true }
+        zoomToastCount += 1
+        let count = zoomToastCount
+        withAnimation(.linear(duration: 0.12)) { zoomToastShown = true }
         Task {
             try? await Task.sleep(for: .seconds(1.2))
-            guard zoomToast == text else { return }
-            withAnimation(.easeIn(duration: 0.3)) { zoomToastShown = false }
+            guard zoomToastCount == count else { return }
+            withAnimation(.linear(duration: 0.3)) { zoomToastShown = false }
         }
     }
 
@@ -193,7 +217,7 @@ struct RootView: View {
             // The page: below the top bar while the sidebar is hidden, beside the sidebar while it is open.
             page
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .padding(.leading, !compact && sidebarOpen ? 232 : 0)
+                .padding(.leading, !compact && sidebarOpen ? Sidebar.width : 0)
                 .padding(.top, sidebarOpen && !compact ? 0 : topBarHeight)
 
             if !sidebarOpen || compact {
@@ -202,22 +226,27 @@ struct RootView: View {
                     .frame(height: topBarHeight)
                     .overlay(alignment: .bottom) { Rule() }
                     .background(ob.paper.ignoresSafeArea(edges: .top))
+                    .transition(.opacity)
             }
 
             if compact && nav.drawerOpen {
                 Color.black.opacity(0.25).ignoresSafeArea().onTapGesture { withAnimation(.easeOut(duration: 0.2)) { nav.drawerOpen = false } }
             }
 
+            // Slides off to the left as the page's margin shrinks to match (MainWindow.SlideSidebar); off screen it
+            // leaves the tab order.
             Sidebar()
-                .frame(width: compact ? 260 : 232)
-                .offset(x: sidebarOpen ? 0 : -(compact ? 260 : 232) - 1)
-                .opacity(sidebarOpen ? 1 : 0)
+                .frame(width: compact ? 260 : Sidebar.width)
+                .offset(x: sidebarOpen ? 0 : -(compact ? 260 : Sidebar.width) - 1)
+                .allowsHitTesting(sidebarOpen)
+                .accessibilityHidden(!sidebarOpen)
 
             menuAndBack
         }
         .background(ob.paper.ignoresSafeArea())
         .environmentObject(nav)
-        .animation(.easeOut(duration: 0.22), value: sidebarOpen)
+        // About a quarter second, cubic ease-out, as Windows moves it frame by frame.
+        .animation(.timingCurve(0.33, 1, 0.68, 1, duration: 0.26), value: sidebarOpen)
         // ⌘, and the menu bar's "Check for updates…" open a Settings section (also when they opened this window).
         .onChange(of: model.requestedSettings, initial: true) { _, s in
             if let s { nav.goSettings(s); model.requestedSettings = nil }
@@ -251,7 +280,8 @@ struct RootView: View {
 
     private var topBarHeight: CGFloat { 56 }
 
-    /// The menu button (☰, folding into ✕ while the sidebar is open) and Back, always at the top left.
+    /// The menu button (☰, folding into ✕ while the sidebar is open) and Back, always at the top left, 12 in. While the
+    /// sidebar is open Back sits at its right edge, after the logo; folded, it slides along to beside the menu button.
     private var menuAndBack: some View {
         HStack(spacing: 6) {
             MenuGlyphButton(open: sidebarOpen) {
@@ -259,26 +289,18 @@ struct RootView: View {
             }
             // Back is everywhere except the dashboard (where the app starts), as on Windows.
             if nav.place.section != .dashboard && !(sidebarOpen && compact) {
-                Button { nav.goBack() } label: {
-                    Image(systemName: "arrow.left").font(.system(size: 13)).frame(width: 36, height: 36).contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help("Back (\(TextSize.backKey))")
-                .accessibilityLabel("Back")
+                IconButton(help: "Back (\(TextSize.backKey))", label: "Back") {
+                    Image(systemName: "arrow.left").font(.system(size: 13))
+                } action: { nav.goBack() }
+                .offset(x: sidebarOpen && !compact ? Self.backOpenShift : 0)
             }
         }
-        .padding(.leading, leadingInset)
-        .padding(.top, 10)
+        .padding(.leading, 12)
+        .padding(.top, 12)
     }
 
-    /// On the Mac the window's close/minimize/zoom buttons sit at the top left; the menu button goes after them.
-    private var leadingInset: CGFloat {
-        #if os(macOS)
-        78
-        #else
-        12
-        #endif
-    }
+    /// Back's move while the sidebar is open: from beside the menu button to the sidebar's right edge (BackOpenShift).
+    static let backOpenShift: CGFloat = Sidebar.width - 14 - 36 - (12 + 36 + 6)
 
     @ViewBuilder private var page: some View {
         switch nav.place.section {
@@ -293,26 +315,50 @@ struct RootView: View {
     }
 }
 
-/// ☰ that folds into ✕: three ink bars, the outer two turning.
+/// ☰ that folds into ✕: three ink bars, the outer two meeting and turning ±45°, the middle one fading (240 ms).
 struct MenuGlyphButton: View {
     var open: Bool
     var action: () -> Void
     @Environment(\.ob) private var ob
 
     var body: some View {
-        Button(action: action) {
+        IconButton(help: (open ? "Hide the menu" : "Show the menu") + " (\(TextSize.menuKey))", label: open ? "Hide the menu" : "Show the menu") {
             ZStack {
                 Rectangle().frame(width: 16, height: 1.5).rotationEffect(.degrees(open ? 45 : 0)).offset(y: open ? 0 : -6)
                 Rectangle().frame(width: 16, height: 1.5).opacity(open ? 0 : 1)
                 Rectangle().frame(width: 16, height: 1.5).rotationEffect(.degrees(open ? -45 : 0)).offset(y: open ? 0 : 6)
             }
             .foregroundStyle(ob.ink)
-            .frame(width: 36, height: 36)
-            .contentShape(Rectangle())
+            .animation(.timingCurve(0.65, 0, 0.35, 1, duration: 0.24), value: open)
+        } action: { action() }
+    }
+}
+
+/// MainWindow's IconButton: a 36 pt quiet button with no outline, the hover wash in a capsule, an accent outline while
+/// it has the keyboard focus, and the hand cursor.
+struct IconButton<Glyph: View>: View {
+    var help: String
+    var label: String
+    @ViewBuilder var glyph: Glyph
+    var action: () -> Void
+    @Environment(\.ob) private var ob
+    @State private var hover = false
+    @FocusState private var focused
+
+    var body: some View {
+        Button(action: action) {
+            glyph
+                .frame(width: 36, height: 36)
+                .background(Capsule().fill(hover ? ob.subtle : .clear))
+                .overlay(Capsule().strokeBorder(focused ? ob.accent : .clear, lineWidth: 1))
+                .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .help((open ? "Hide the menu" : "Show the menu") + " (\(TextSize.menuKey))")
-        .accessibilityLabel(open ? "Hide the menu" : "Show the menu")
+        .focused($focused)
+        .onHover { hover = $0 }
+        .handCursor()
+        .help(help)
+        .accessibilityLabel(label)
     }
 }
 
@@ -323,54 +369,67 @@ struct Sidebar: View {
     @EnvironmentObject var nav: Navigator
     @Environment(\.ob) private var ob
 
+    static let width: CGFloat = 216
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // The logo to the right of the menu button, on its row (MainWindow's Header, margin 42,6,0,24).
             Logo(recording: model.phase == .recording)
-                .padding(.top, 56)
-                .padding(.leading, 6)
+                .padding(.top, 6)
+                .padding(.leading, 42)
                 .padding(.bottom, 24)
             VStack(spacing: 2) {
                 ForEach(Section.allCases, id: \.self) { s in
-                    NavCapsule(title: s.title, japanese: s.japanese, icon: s, selected: nav.place.section == s) {
-                        if s == .notes { nav.goNotes(nil) } else { nav.go(s) }
-                    }
+                    NavCapsule(title: s.title, japanese: s.japanese, icon: s, selected: nav.place.section == s) { nav.open(s) }
                 }
             }
             Spacer(minLength: 12)
             engineStatus
         }
-        .padding(EdgeInsets(top: 0, leading: 14, bottom: 14, trailing: 14))
+        .padding(EdgeInsets(top: 18, leading: 14, bottom: 14, trailing: 14))
         .frame(maxHeight: .infinity, alignment: .top)
         .background(ob.paper.ignoresSafeArea())
         .overlay(alignment: .trailing) { Rectangle().fill(ob.ink).frame(width: 1).ignoresSafeArea() }
     }
 
     private var engineStatus: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Readout("Engine // Status")
                 Spacer()
                 Decor("倍音", size: 10.5)
             }
-            .padding(.bottom, 2)
+            .padding(.bottom, 6)
             // Windows' Status.Speech / Status.Ai: the model and whether it is loaded, the dot filled when it is fine.
             statusRow(model.speechOK ? .ok : .busy, model.speechStatus)
-            statusRow(aiStatus.ok ? .ok : .busy, aiStatus.text)
+            statusRow(model.aiStatusLine.ok ? .ok : .busy, model.aiStatusLine.text)
             Readout(model.settings.cloud.keepOffline
-                        ? "On-device // offline\nEverything stays on this \(Device.noun)"
+                        ? "127.0.0.1 // offline\nEverything stays on this \(Device.noun)"
                         : "Cloud AI allowed\nProfiles with a cloud model send their text to it",
                     size: 10)
-                .lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 6)
+                .padding(.top, 8)
         }
         .padding(.horizontal, 2)
         .padding(.top, 12)
         .overlay(alignment: .top) { Hairline() }
     }
 
-    /// "AI: Ready · qwen2.5:3b", as TextProcessing's status line (the Mac can't ask Ollama for GPU use per request).
-    private var aiStatus: (text: String, ok: Bool) {
+    private func statusRow(_ state: DotState, _ text: String) -> some View {
+        HStack(spacing: 8) {
+            StatusDot(state: state)
+            // 11.5, cut with "…" at 160 (the full text as the tooltip).
+            Text(text).font(Ob.sans(11.5)).lineLimit(1).truncationMode(.tail).frame(maxWidth: 160, alignment: .leading).help(text)
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+extension AppModel {
+    /// "AI: Ready · qwen2.5:3b", as TextProcessing's status line (the Mac can't ask Ollama for GPU use per request):
+    /// the sidebar's footer and Settings › Model unloading's "Now:" lines.
+    var aiStatusLine: (text: String, ok: Bool) {
+        let model = self
         let profile = model.activeProfile
         let id = model.processor.model(for: profile)
         if profile.isRaw { return ("AI: off · \(profile.name) uses no AI", true) }
@@ -384,14 +443,6 @@ struct Sidebar: View {
         case .apple: return ("AI: Apple Intelligence isn't available", false)
         default: return ("AI: AI model '\(id.shortName)' not installed", false)
         }
-    }
-
-    private func statusRow(_ state: DotState, _ text: String) -> some View {
-        HStack(spacing: 8) {
-            StatusDot(state: state)
-            Text(text).font(Ob.sans(11.5)).lineLimit(1).truncationMode(.tail).help(text)
-        }
-        .padding(.vertical, 2)
     }
 }
 
@@ -454,7 +505,8 @@ struct Logo: View {
     }
 }
 
-/// A menu entry: a capsule; the chosen one is filled with ink.
+/// A menu entry (App.xaml's NavItem): a capsule, 12,7 inside a 1 pt border that turns accent with the keyboard focus;
+/// the chosen one is filled with ink. Settings' entries are 11.5 with 12,6 (SettingsNavItem).
 struct NavCapsule: View {
     var title: String
     var japanese: String?
@@ -464,6 +516,7 @@ struct NavCapsule: View {
     var action: () -> Void
     @Environment(\.ob) private var ob
     @State private var hover = false
+    @FocusState private var focused
 
     var body: some View {
         Button(action: action) {
@@ -477,12 +530,16 @@ struct NavCapsule: View {
                 if let japanese { Decor(japanese, size: 10.5, color: selected ? ob.onInk : ob.ink).opacity(0.6) }
             }
             .foregroundStyle(selected ? ob.onInk : ob.ink)
-            .padding(.horizontal, 12).padding(.vertical, 7)
+            .padding(.horizontal, 13).padding(.vertical, size < 12 ? 7 : 8)
             .background(Capsule().fill(selected ? ob.ink : hover ? ob.subtle : .clear))
+            .overlay(Capsule().strokeBorder(focused ? ob.accent : .clear, lineWidth: 1))
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .focused($focused)
         .onHover { hover = $0 }
+        .handCursor()
+        .accessibilityLabel(title)
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
