@@ -278,6 +278,15 @@ enum OverlaySnapshots {
                 }
             }
         }
+        // The meter keeps moving with no audio at all: a burst, then silence, settles to flat and keeps scrolling.
+        let meterCheck = LevelMeter()
+        var t = Date()
+        for i in 0..<30 {
+            if i < 6 { meterCheck.hear(0.5) }
+            meterCheck.tick(now: t)
+            t += 0.05
+        }
+        print("meter after a burst and 1.2 s of nothing: " + meterCheck.columns.map { String(format: "%.2f", $0) }.joined(separator: " "))
         // A box's COPY takes the selected part; AI EDIT's leaves out the struck-through words.
         let selection = OverlayTextSelection()
         let textView = NSTextView()

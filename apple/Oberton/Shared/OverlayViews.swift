@@ -93,7 +93,7 @@ struct OverlayPill: View {
             }
         } else if model.settings.showOverlay, phase != .idle {
             let live = [.recording, .transcribing, .processing].contains(phase) ? model.liveText : ""
-            PillContent(phase: phase, profile: model.activeProfile.name, meter: model.meter, startedAt: model.startedAt,
+            PillContent(phase: phase, profile: model.activeProfile.name, meterFeed: model.meter, startedAt: model.startedAt,
                         live: live, opacity: opacity, aiModel: Self.chip(model.processor.model(for: model.activeProfile)),
                         audioSeconds: model.stoppedAt.map { $0.timeIntervalSince(model.startedAt ?? $0) },
                         loadingSpeech: model.speechLoading, onCancel: { model.cancel() })
@@ -392,8 +392,9 @@ private struct PillBodyText: View {
 struct PillContent: View {
     var phase: AppModel.Phase
     var profile: String
-    /// The level meter's columns (`AppModel.meter`).
+    /// The level meter's columns, fixed (snapshots), or the live meter, which moves by itself.
     var meter: [Double] = []
+    var meterFeed: LevelMeter?
     var startedAt: Date?
     var live = ""
     var opacity: Double
@@ -436,7 +437,7 @@ struct PillContent: View {
                 }
                 .fixedSize()
             } middle: {
-                DotMeter(levels: meter)
+                if let meterFeed { LiveDotMeter(meter: meterFeed) } else { DotMeter(levels: meter) }
             }
         case .transcribing:
             PillRow(indicator: .spinner, decor: "処理中", chip: profile, trailing: .cancel(onCancel)) {
@@ -471,10 +472,16 @@ struct PillContent: View {
     }
 }
 
+/// The running meter: redraws on the meter's own tick.
+private struct LiveDotMeter: View {
+    @ObservedObject var meter: LevelMeter
+    var body: some View { DotMeter(levels: meter.columns) }
+}
+
 /// The level meter: 22 columns of 5 dots, lit from the bottom as far as each moment's level reaches (√level, so quiet
 /// speech still moves it; at least one dot, so silence reads as a row of dots).
 private struct DotMeter: View {
-    /// 22 columns, oldest first, already √-scaled (`AppModel.meter`, which moves on every level event).
+    /// 22 columns, oldest first, already √-scaled (`LevelMeter`, which moves on a steady tick).
     var levels: [Double]
 
     var body: some View {

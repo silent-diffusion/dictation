@@ -91,6 +91,7 @@ final class AppModel: ObservableObject {
             // that state, and from one held by the state before it (`overlayPinned`).
             if phase != oldValue, (overlayPinned && phase.isBusy) || overlayNotice?.pinned == true { overlayNotice = nil }
             if phase != oldValue { lastActivity = .now }
+            if phase == .recording { meter.start() } else { meter.stop() }
         }
     }
     /// When a dictation last changed state (Windows' `LastActivity`): the model unloading timer counts from here.
@@ -99,9 +100,9 @@ final class AppModel: ObservableObject {
     let unloader = ModelUnloader()
     @Published private(set) var liveText = ""
     @Published private(set) var level: Float = 0
-    /// The overlay's level meter: the last 22 levels, oldest first, already √-scaled. Every level event moves it one
-    /// column, also in silence (OverlayWindow.SetLevel).
-    @Published private(set) var meter = [Double](repeating: 0, count: 22)
+    /// The overlay's level meter, running while recording (its own object, so its 20 redraws a second don't redraw
+    /// everything that watches the model).
+    let meter = LevelMeter()
     @Published private(set) var startedAt: Date?
     /// The dictation waiting in the preview (profiles with "preview before inserting").
     @Published private(set) var pending: HistoryEntry?
@@ -247,9 +248,7 @@ final class AppModel: ObservableObject {
         transcriber.onLevel = { [weak self] level in
             guard let self else { return }
             self.level = level
-            guard phase == .recording else { return }
-            meter.removeFirst()
-            meter.append(Double(min(max(level, 0), 1)).squareRoot()) // perceptual: quiet speech still moves the dots
+            if phase == .recording { meter.hear(level) }
         }
         transcriber.onSilence = { [weak self] in
             guard self?.phase == .recording else { return }
@@ -328,7 +327,6 @@ final class AppModel: ObservableObject {
     func start() {
         platform?.captureTarget()
         liveText = ""
-        meter = [Double](repeating: 0, count: meter.count)
         pending = nil
         receipt = nil
         historyAudio.begin()
@@ -781,93 +779,30 @@ final class AppModel: ObservableObject {
         objectWillChange.send() // the dashboard's speech dial
     }
 
-    /// Load a profile's AI model without generating anything (Apple Intelligence's prewarm, or an empty Ollama request),
-    /// saying how it goes in `aiStatus` as Windows' WarmUpAsync does: "Starting AI runtime…", "AI model 'x' not
-    /// installed", "Loading x…", "Ready · x · GPU". Cloud models have nothing to load. A profile without AI warms
-    /// nothing at dictation time (`forDictation`), but its status still names the default model, as on Windows.
+    /// Load a profile's AI model without generating anything, saying how it goes in `aiStatus` as Windows' WarmUpAsync
+    /// does (`AIStatus.warmUp`): "Starting AI runtime…" (Oberton's own Ollama is started if nothing answers, in the
+    /// direct build), "AI model 'x' not installed", "Loading x…", "Ready · x · GPU". Cloud models have nothing to load.
+    /// A profile without AI warms nothing at dictation time (`forDictation`), but its status still names the default
+    /// model, as on Windows.
     private func warmUpAI(_ profile: Profile, forDictation: Bool = false) {
         guard !Self.snapshotMode, !(forDictation && profile.isRaw) else { return }
         let id = processor.model(for: profile)
-        let name = id.shortName
-        func status(_ text: String, _ ok: Bool) {
-            aiStatus = "AI: " + text
-            aiStatusOK = ok
-        }
-        switch id.provider {
-        case .apple:
-            if let reason = AppleIntelligenceBackend.unavailableReason {
-                status(reason, false)
-            } else {
-                AppleIntelligenceBackend.warmUp()
-                status("Ready · \(name)", true)
-            }
-        case .anthropic, .openai:
-            // Nothing to load; and nothing is sent until a dictation needs it.
-            let offline = settings.cloud.keepOffline
-            status(offline ? "\(name) is a cloud model; \"Keep everything offline\" blocks it" : "Ready · \(name) (cloud)", !offline)
-        case .ollama:
-            if id.isOllamaCloud { // runs on ollama.com: nothing to load here
-                let offline = settings.cloud.keepOffline
-                status(offline ? "\(name) runs on ollama.com; \"Keep everything offline\" blocks it" : "Ready · \(name) (cloud)", !offline)
-                return
-            }
-            guard let url = try? OllamaBackend.validated(settings.ollamaEndpoint) else {
-                status("AI runtime unavailable", false)
-                return
-            }
-            let settings = settings
-            aiWarmTask?.cancel()
-            aiWarmTask = Task {
-                status("Starting AI runtime…", false)
-                let installed = await OllamaBackend.installedModels(endpoint: url)
-                if Task.isCancelled { return }
-                if installed.isEmpty, await OllamaBackend.loadedModels(endpoint: url).isEmpty, !(await Self.ollamaRunning(url)) {
-                    status("AI runtime unavailable", false)
-                    return
-                }
-                ollamaModels = installed
-                guard installed.contains(where: { $0.caseInsensitiveCompare(id.name) == .orderedSame || $0.caseInsensitiveCompare(id.name + ":latest") == .orderedSame }) else {
-                    status("AI model '\(name)' not installed", false)
-                    return
-                }
-                status("Loading \(name)…", false)
-                aiLoading = id.name
-                let large = await OllamaBackend.size(endpoint: url, model: id.name).large
-                let ok = await OllamaBackend.warmUp(endpoint: url, model: id.name, keepAlive: settings.ollamaKeepAlive(large: large))
-                if aiLoading == id.name { aiLoading = nil }
-                if Task.isCancelled { return }
-                if ok {
-                    status(await Self.describeLoaded(id.name, large: large, endpoint: url), true)
-                    await refreshLoadedAI()
-                } else {
-                    status("AI runtime error", false)
+        let settings = settings
+        aiWarmTask?.cancel()
+        aiWarmTask = Task { [weak self] in
+            await AIStatus.warmUp(id, settings: settings) { line, ok in
+                await MainActor.run {
+                    guard let self, !Task.isCancelled else { return }
+                    self.aiStatus = "AI: " + line
+                    self.aiStatusOK = ok
+                    // "Loading x…" until the next line: the dashboard's "loading, then editing".
+                    self.aiLoading = line.hasPrefix("Loading ") ? id.name : nil
                 }
             }
+            guard let self, !Task.isCancelled, id.provider == .ollama, !id.isOllamaCloud else { return }
+            await self.refreshOllama()
+            await self.refreshLoadedAI()
         }
-    }
-
-    /// Whether Ollama answers at all (its root says "Ollama is running").
-    private static func ollamaRunning(_ url: URL) async -> Bool {
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 3
-        return (try? await URLSession.shared.data(for: request)) != nil
-    }
-
-    /// How much of a loaded model sits in GPU memory (TextProcessing.DescribeLoadedAsync). On Apple silicon the memory is
-    /// shared, so Ollama reports it all as GPU memory.
-    private static func describeLoaded(_ model: String, large: Bool, endpoint: URL) async -> String {
-        guard let (data, _) = try? await URLSession.shared.data(from: endpoint.appending(path: "api/ps")),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let models = json["models"] as? [[String: Any]],
-              let m = models.first(where: { ($0["name"] as? String)?.caseInsensitiveCompare(model) == .orderedSame
-                                              || ($0["name"] as? String)?.caseInsensitiveCompare(model + ":latest") == .orderedSame }),
-              let size = (m["size"] as? NSNumber)?.doubleValue, let vram = (m["size_vram"] as? NSNumber)?.doubleValue
-        else { return "Ready · \(model)" }
-        let pct = size <= 0 ? 0 : Int((100 * vram / size).rounded())
-        if large {
-            return pct > 0 ? "Ready · \(model) · \(pct)% on the GPU, the rest in memory" : "Ready · \(model) · in memory, on the processor (no GPU memory free)"
-        }
-        return pct >= 90 ? "Ready · \(model) · GPU" : "Ready · \(model) · \(pct)% GPU (slower: free up GPU memory or pick a smaller model)"
     }
 
     /// The dashboard is showing (Windows' 3 s refresh of `LoadedModelsAsync`): keep `loadedAIModels` current while at
@@ -1331,8 +1266,10 @@ final class AppModel: ObservableObject {
 
     func cancelWhisperDownload() { whisperDownloadTask?.cancel() }
 
+    /// The installed Ollama models, after making sure the runtime answers (Windows' EnsureRunningAsync starts its own).
     func refreshOllama() async {
         guard let url = try? OllamaBackend.validated(settings.ollamaEndpoint) else { ollamaModels = []; return }
+        try? await OllamaRuntime.ensureRunning(settings: settings)
         ollamaModels = await OllamaBackend.installedModels(endpoint: url)
     }
 }
@@ -1351,5 +1288,55 @@ extension AppModel.Phase {
         case .done(let s): s
         case .failed(let s): s
         }
+    }
+}
+
+/// The overlay's level meter: 22 columns of √level, oldest first, as OverlayWindow draws them. It moves on a steady
+/// 20 Hz tick while recording rather than on audio events, so it never freezes: each tick takes the loudest level heard
+/// since the last one; when nothing new came for a moment (or the microphone sends nothing), the level falls away
+/// towards a flat, calm baseline and keeps scrolling.
+@MainActor
+final class LevelMeter: ObservableObject {
+    static let count = 22
+    @Published private(set) var columns = [Double](repeating: 0, count: LevelMeter.count)
+    private var pending: Double?
+    private var held = 0.0
+    private var heardAt = Date.distantPast
+    private var timer: Timer?
+
+    /// A level from the microphone (0…1, Windows' scale).
+    func hear(_ level: Float) {
+        let v = Double(min(max(level, 0), 1)).squareRoot() // perceptual: quiet speech still moves the dots
+        pending = max(pending ?? 0, v)
+    }
+
+    func start() {
+        guard timer == nil else { return }
+        columns = [Double](repeating: 0, count: Self.count)
+        pending = nil
+        held = 0
+        let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.tick() }
+        }
+        RunLoop.main.add(timer, forMode: .common) // also while a menu is open
+        self.timer = timer
+    }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+        pending = nil
+    }
+
+    func tick(now: Date = .now) {
+        if let pending {
+            held = pending
+            heardAt = now
+            self.pending = nil
+        } else if now.timeIntervalSince(heardAt) > 0.15 {
+            held = held * 0.6 < 0.02 ? 0 : held * 0.6 // nothing heard: settle towards flat
+        }
+        columns.removeFirst()
+        columns.append(held)
     }
 }
