@@ -328,7 +328,8 @@ enum Snapshots {
             ("history", Place(section: .history)), ("analytics", Place(section: .analytics)),
             ("settings-general", Place(section: .settings, settings: .general)),
             ("settings-appearance", Place(section: .settings, settings: .appearance)),("settings-history", Place(section: .settings, settings: .history)),
-            ("settings-models", Place(section: .settings, settings: .models)), ("settings-layout", Place(section: .settings, settings: .layout)),
+            ("settings-models", Place(section: .settings, settings: .models)), ("settings-cloud", Place(section: .settings, settings: .cloud)),
+            ("settings-layout", Place(section: .settings, settings: .layout)),
             ("settings-about", Place(section: .settings, settings: .about)), ("settings-hotkeys", Place(section: .settings, settings: .hotkeys)),
             ("settings-speech", Place(section: .settings, settings: .speech)), ("settings-microphone", Place(section: .settings, settings: .microphone)),
             ("settings-unloading", Place(section: .settings, settings: .unloading)),
@@ -373,6 +374,11 @@ enum Snapshots {
             model.settings.collapsedSettingsGroups = kept
         }
         save(MenuBarMarkPreview(), to: dir, name: "menubar-mark")
+        // The text size at 125% (Appearance › TEXT SIZE, ⌘+).
+        let scale = model.settings.uiScale
+        model.settings.uiScale = 1.25
+        save(RootView(start: Place()).environmentObject(model).obertonTheme(model.settings).frame(width: 1200, height: 780), to: dir, name: "dashboard-zoom125")
+        model.settings.uiScale = scale
         // Hotkeys with a combination another app holds, and the dictation box recording.
         HotkeyStatus.shared.error = "Ctrl+Alt+D is already used by another app. Choose a different shortcut under Settings › Hotkeys."
         HotkeyStatus.shared.recording = "Start / stop dictation"
