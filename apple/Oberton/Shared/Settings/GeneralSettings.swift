@@ -3,8 +3,9 @@ import SwiftUI
 
 // MARK: - A // Dictation
 
-/// Windows GeneralPage.xaml. Left out: "Type as you speak" and "Fit dictation into the surrounding text" (the sandbox
-/// can't read the text around another app's cursor).
+/// Windows GeneralPage.xaml. "Fit dictation into the surrounding text" needs to read the text around another app's
+/// cursor, which only the direct build may (the App Store sandbox can't), so the App Store build leaves it out. The
+/// iPhone can't type into other apps: no "Type as you speak" either.
 struct GeneralSection: View {
     @EnvironmentObject var model: AppModel
     @State private var maxSeconds = ""
@@ -18,6 +19,22 @@ struct GeneralSection: View {
                 ObSwitch("Keep running in the menu bar when the window is closed", isOn: $model.settings.minimizeToTray)
             }
             .padding(.top, 8)
+
+            SwitchCard {
+                ObSwitch("Type as you speak",
+                         detail: "Finished sentences appear in the app about every 5 seconds while you talk. When you press the hotkey again, the whole dictation is cleaned up in one final pass that replaces them. Off for profiles that preview before inserting.",
+                         isOn: $model.settings.typeWhileSpeaking)
+            }
+            .padding(.top, 16)
+
+            if Distribution.isDirect {
+                SwitchCard {
+                    ObSwitch("Fit dictation into the surrounding text",
+                             detail: "Reads a sentence or two around the cursor so text dropped mid-sentence isn't capitalized or given a period, and adds missing spaces. Works in apps that expose their text to macOS accessibility (Word, browsers, most text boxes). The text is never stored or sent anywhere.",
+                             isOn: $model.settings.matchSurroundingText)
+                }
+                .padding(.top, 16)
+            }
 
             FieldLabel("Text insertion method").padding(.top, 4)
             ObMenu(options: [(InsertionMode.auto, "Auto"), (.typing, "Typing"), (.clipboard, "Clipboard")],

@@ -8,6 +8,14 @@ import SwiftUI
 protocol PlatformServices: AnyObject {
     /// Remember where the user was when they pressed the hotkey, so the text goes back there.
     func captureTarget()
+    /// `captureTarget`, and with `readContext` the text around the cursor too ("Fit dictation into the surrounding
+    /// text"; only where Accessibility may read it, the Mac's direct build).
+    func captureTarget(readContext: Bool)
+    /// The text around the cursor, read when the dictation started; nil when unknown.
+    func insertionContext() async -> InsertionContext?
+    /// "Type as you speak": the place this dictation types into while the user speaks; nil where that isn't possible
+    /// (the iPhone) or when there was nowhere to type.
+    func liveTarget() -> LiveTarget?
     /// Put the text where the user was. Returns a short receipt ("Inserted into Mail", "Copied").
     func insert(_ text: String) async throws -> String
     /// The name of the app the text is going into, if known.
@@ -18,7 +26,7 @@ protocol PlatformServices: AnyObject {
     /// Ask once for the permissions dictation needs (microphone; on the Mac, Accessibility to paste).
     func requestPermissions() async
     /// Nothing to type into had the cursor when the dictation started: the text waits for a click (Windows: Placing).
-    var nowhereToPaste: Bool { get }
+    var nowhereToPaste: Bool { get async }
     /// Wait for the user to pick somewhere to type, up to `timeout`; true when there is a target now.
     func waitForPlace(timeout: Duration) async -> Bool
     /// Put the text on the clipboard (no restore).
@@ -26,7 +34,20 @@ protocol PlatformServices: AnyObject {
 }
 
 extension PlatformServices {
+    func captureTarget(readContext: Bool) { captureTarget() }
+    func insertionContext() async -> InsertionContext? { nil }
+    func liveTarget() -> LiveTarget? { nil }
     var nowhereToPaste: Bool { false }
+    /// The text left on the clipboard as a last resort, when it couldn't go in: an ordinary copy, so clipboard managers
+    /// keep it too.
+    func leaveOnClipboard(_ text: String) {
+        #if os(macOS)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        #else
+        UIPasteboard.general.string = text
+        #endif
+    }
     func waitForPlace(timeout: Duration) async -> Bool { false }
     func copy(_ text: String) {
         #if os(macOS)
@@ -108,6 +129,13 @@ final class AppModel: ObservableObject {
     @Published private(set) var pending: HistoryEntry?
     /// The text waiting for a place to go while `phase == .placing`.
     @Published private(set) var placingText: String?
+    /// The text around the cursor for the current dictation (read when it started), once known: shown either side of
+    /// the AI edit, so the edit can be judged in place (Windows' `DictationController.Context`).
+    @Published private(set) var insertionContext: InsertionContext?
+    /// Text was typed while speaking, so the cleanup now is the final pass over it (the overlay's FINAL PASS).
+    @Published private(set) var finalPass = false
+    /// "Type as you speak" for the dictation running now, when it is on (Windows' `_live`).
+    private var live: LiveInsertion?
     @Published var ollamaModels: [String] = []
     @Published private(set) var usage: UsageLog
     /// The Analytics word tally (words.json): counts only, never sentences.
@@ -259,6 +287,15 @@ final class AppModel: ObservableObject {
             #endif
         }
         transcriber.onAudio = { [historyAudio] in historyAudio.append($0) }
+        // Type as you speak: finished pieces are typed in order; the running guess too, for a profile without AI.
+        transcriber.onPiece = { [weak self] piece in
+            guard let self, self.phase == .recording || self.phase == .transcribing else { return }
+            self.live?.add(piece)
+        }
+        transcriber.onGuess = { [weak self] guess in
+            guard let self, self.phase == .recording else { return }
+            self.live?.setPartial(guess)
+        }
         // Kept by age: what has grown too old goes even when nothing new comes in.
         historyPrune = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.pruneHistory() }
@@ -325,7 +362,9 @@ final class AppModel: ObservableObject {
 
     /// Starting a dictation leaves Read aloud reading, as on Windows (DictationController.StartAsync never touches it).
     func start() {
-        platform?.captureTarget()
+        platform?.captureTarget(readContext: settings.matchSurroundingText)
+        insertionContext = nil
+        finalPass = false
         liveText = ""
         pending = nil
         receipt = nil
@@ -339,6 +378,19 @@ final class AppModel: ObservableObject {
         aiModelUsed = aiModelName(profile)
         let aiID = processor.model(for: profile), endpoint = settings.ollamaEndpoint
         aiWarm = profile.isRaw ? nil : Task { await Self.aiLoaded(aiID, endpoint: endpoint) }
+        // Type as you speak needs the text to go straight in, so it is off for profiles that preview before inserting,
+        // and when there is nowhere to type (the text then waits for a click at the end).
+        live?.stop()
+        live = nil
+        if settings.typeWhileSpeaking, !profile.showPreview, let target = platform?.liveTarget() {
+            let platform = platform, processor = processor
+            live = LiveInsertion(target: target, profile: profile, context: Task { await platform?.insertionContext() },
+                                 holdsClipboard: settings.restoreClipboard) { piece in
+                // An AI failure gives back the words as spoken (TextProcessor), so they are typed raw.
+                await processor.process(piece, profile: profile).text
+            }
+        }
+        let isLive = live != nil
 
         // Start listening right away. If the speech model isn't loaded (first use, or let go after a while), it loads
         // meanwhile and catches up on what was said.
@@ -351,9 +403,9 @@ final class AppModel: ObservableObject {
         let whisper = speech.whisperModel, language = speech.whisperLanguage
         let engine = Task { [transcriber] in
             if let whisper {
-                try await transcriber.startWhisper(model: whisper, language: language, prompt: hint)
+                try await transcriber.startWhisper(model: whisper, language: language, prompt: hint, live: isLive)
             } else {
-                try await transcriber.startRecognizer(locale: locale, vocabulary: vocabulary)
+                try await transcriber.startRecognizer(locale: locale, vocabulary: vocabulary, live: isLive)
             }
         }
         engineTask = engine
@@ -397,8 +449,14 @@ final class AppModel: ObservableObject {
             let peak = transcriber.peak
             let raw = NotesFormat.collapseRepeats(OutputSanitizer.collapseDots(await transcriber.stop()))
             if Task.isCancelled { return }
-            // No phantom text: silence, a click or a stock phrase the recognizer made up inserts nothing.
-            if SpeechGuard.shouldDiscard(raw, recorded: seconds, peakLevel: peak) {
+            insertionContext = await platform?.insertionContext()
+            await live?.drain() // let pieces already on their way finish typing
+            if Task.isCancelled { return }
+            // No phantom text: silence, a click or a stock phrase the recognizer made up inserts nothing (unless text
+            // was already typed while speaking).
+            if live?.hasTyped != true, SpeechGuard.shouldDiscard(raw, recorded: seconds, peakLevel: peak) {
+                live?.stop()
+                live = nil
                 phase = .idle
                 notice("I didn't catch anything. Try again.")
                 return
@@ -419,6 +477,11 @@ final class AppModel: ObservableObject {
         speechLoading = false
         pending = nil
         transcriber.cancel() // now, before the next dictation can start
+        if let typed = live {
+            // Take back what was typed while speaking (only if it can be confirmed in place).
+            live = nil
+            if phase != .inserting { Task { await typed.removeTyped() } } else { typed.stop() }
+        }
         level = 0
         phase = .idle
     }
@@ -428,6 +491,7 @@ final class AppModel: ObservableObject {
         aiNotice = nil
         if !profile.isRaw {
             liveText = raw // the overlay shows what is being tidied
+            finalPass = live?.hasTyped == true // with live typing, this is the final pass over the whole recording
             phase = .processing
             result = await processor.process(raw, profile: profile)
             if Task.isCancelled { return }
@@ -445,7 +509,7 @@ final class AppModel: ObservableObject {
                                  appName: platform?.targetAppName, seconds: seconds, turnaroundSeconds: 0, warning: result.warning,
                                  safetyNet: result.safetyNet)
         entry.date = startedAt ?? entry.date
-        if profile.showPreview {
+        if profile.showPreview, live?.hasTyped != true { // the profile may have been switched mid-dictation
             previewTurnaround = Date().timeIntervalSince(stoppedAt ?? Date()) // time spent reading the preview isn't processing time
             pending = entry
             phase = .preview
@@ -490,14 +554,33 @@ final class AppModel: ObservableObject {
 
     private func insert(_ entry: HistoryEntry, readBack voice: String?, readBackRequested: Bool) async {
         // Nothing had the cursor when the dictation started: ask where it should go instead of pasting into nowhere.
-        if platform?.nowhereToPaste == true {
+        if live?.hasTyped != true, await platform?.nowhereToPaste == true {
             waitForPlace(entry, readBack: voice, readBackRequested: readBackRequested)
             return
         }
         var entry = entry
         phase = .inserting
+        let typed = live
+        live = nil
+        // The user's clipboard, back once the last live paste landed (nothing to do if it was never taken, or left).
+        defer { if let typed { Task { await typed.releaseClipboard() } } }
         do {
-            let receipt = try await platform?.insert(entry.inserted) ?? "Done"
+            let receipt: String
+            if let typed, typed.hasTyped {
+                // Replace what was typed while speaking with the final pass over the whole recording.
+                let (final, note) = try await typed.finish(entry.inserted, tail: transcriber.finalTail)
+                entry.inserted = final.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let note { entry.warning = note }
+                receipt = "Inserted into \(platform?.targetAppName ?? "the app")"
+            } else {
+                // Fit the text where it goes (capitals, a period, spaces); a rewrite was laid out on purpose, so only
+                // its spacing is fixed.
+                let profile = activeProfile
+                let rewrite = profile.rewriteWhole && profile.autoProcess && entry.inserted != entry.transcription
+                let text = ContextFit.fit(entry.inserted, context: await platform?.insertionContext(), spacingOnly: rewrite)
+                entry.inserted = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                receipt = try await platform?.insert(text) ?? "Done"
+            }
             // The turnaround runs from the stop press until the text is in place.
             entry.turnaroundSeconds = previewTurnaround ?? Date().timeIntervalSince(stoppedAt ?? Date())
             await recordTurnaround(entry)
@@ -513,13 +596,21 @@ final class AppModel: ObservableObject {
         } catch {
             // The text is on the clipboard now (the platform put it there): a HEADS UP, not a failure; History keeps
             // it as not inserted, and there is no receipt.
+            var message = (error as? UserFacingError)?.message ?? error.localizedDescription
+            if let typed {
+                typed.forgetClipboard()
+                if typed.hasTyped, !(error is CancellationError) {
+                    // The final pass couldn't run: last resort so the dictation isn't lost, it goes on the clipboard.
+                    platform?.leaveOnClipboard(entry.inserted)
+                    message += " The text was copied to your clipboard."
+                }
+            }
             entry.turnaroundSeconds = previewTurnaround ?? Date().timeIntervalSince(stoppedAt ?? Date())
             entry.wasInserted = false
             record(entry)
             aiNotice = nil
             level = 0
             phase = .idle
-            let message = (error as? UserFacingError)?.message ?? error.localizedDescription
             Log.warn("Insert failed: " + message)
             notice(message, kind: .warning)
             return
@@ -534,6 +625,8 @@ final class AppModel: ObservableObject {
         // Waiting for the user isn't processing time.
         if previewTurnaround == nil { previewTurnaround = Date().timeIntervalSince(stoppedAt ?? Date()) }
         placed = true
+        live?.stop()
+        live = nil
         var entry = entry
         entry.turnaroundSeconds = previewTurnaround ?? 0
         placingEntry = entry
@@ -576,6 +669,8 @@ final class AppModel: ObservableObject {
     /// As on Windows: back to idle, and the error as the overlay's SOMETHING WENT WRONG notice. A problem the user can
     /// act on says so; anything else points to the log (DictationController.Fail).
     private func fail(_ error: Error) {
+        live?.stop() // whatever was typed live stays
+        live = nil
         level = 0
         phase = .idle
         aiNotice = nil

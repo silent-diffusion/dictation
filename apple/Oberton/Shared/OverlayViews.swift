@@ -76,7 +76,7 @@ struct OverlayPill: View {
         } else if let notice = model.overlayNotice {
             NoticePill(text: notice.text, kind: notice.kind, opacity: opacity)
         } else if phase == .preview, let pending = model.pending {
-            PreviewPill(entry: pending, profile: model.activeProfile.name, hotkey: hotkey, opacity: opacity,
+            PreviewPill(entry: pending, profile: model.activeProfile.name, hotkey: hotkey, opacity: opacity, context: model.insertionContext,
                         onInsert: { model.confirmPreview() }, onOriginal: { model.confirmPreview(useOriginal: true) },
                         onDiscard: { model.cancel() })
         } else if phase == .placing {
@@ -88,7 +88,7 @@ struct OverlayPill: View {
             // A profile can read what went in aloud: the player then takes the receipt's place, unless it has a warning
             // (AppModel decided, and left `receipt` nil).
             if model.settings.showOverlay, let entry = model.receipt {
-                ReceiptPill(entry: entry, opacity: opacity, open: open, onOpen: { open = true },
+                ReceiptPill(entry: entry, opacity: opacity, open: open, context: model.insertionContext, onOpen: { open = true },
                             onHover: { model.holdReceipt($0, release: open ? 4 : 2) }, onClose: { model.dismissReceipt() })
             }
         } else if model.settings.showOverlay, phase != .idle {
@@ -96,7 +96,7 @@ struct OverlayPill: View {
             PillContent(phase: phase, profile: model.activeProfile.name, meterFeed: model.meter, startedAt: model.startedAt,
                         live: live, opacity: opacity, aiModel: Self.chip(model.processor.model(for: model.activeProfile)),
                         audioSeconds: model.stoppedAt.map { $0.timeIntervalSince(model.startedAt ?? $0) },
-                        loadingSpeech: model.speechLoading, onCancel: { model.cancel() })
+                        loadingSpeech: model.speechLoading, finalPass: model.finalPass, onCancel: { model.cancel() })
         }
     }
 
@@ -554,6 +554,8 @@ struct PreviewPill: View {
     var profile: String
     var hotkey: String
     var opacity: Double
+    /// The text around the cursor, shown either side of the AI edit (none for a profile's Try it).
+    var context: InsertionContext?
     var onInsert: () -> Void = {}
     var onOriginal: () -> Void = {}
     var onDiscard: () -> Void = {}
@@ -568,7 +570,7 @@ struct PreviewPill: View {
             // The diff is between what was heard and what goes in; a profile without AI has none. One with AI shows it
             // even when the AI failed or changed nothing (an unchanged diff), as on Windows (`usesAi`).
             CompareBoxes(raw: entry.transcription, edit: entry.model == nil ? nil : entry.inserted, inserted: entry.inserted,
-                         noEdit: "No AI edit: this profile doesn't use AI.", stacked: stacked, focus: true, width: inner - 10)
+                         noEdit: "No AI edit: this profile doesn't use AI.", context: context, stacked: stacked, focus: true, width: inner - 10)
                 .padding(EdgeInsets(top: 6, leading: 0, bottom: 8, trailing: 10))
             HStack(spacing: 8) {
                 Button(hotkey.isEmpty ? "INSERT" : "INSERT   \(hotkey.uppercased())", action: onInsert)
@@ -699,6 +701,8 @@ struct ReceiptPill: View {
     var entry: HistoryEntry
     var opacity: Double
     var open = false
+    /// The text around the cursor when the dictation started, either side of the AI edit.
+    var context: InsertionContext?
     var onOpen: () -> Void = {}
     var onHover: (Bool) -> Void = { _ in }
     var onClose: () -> Void = {}
@@ -724,7 +728,7 @@ struct ReceiptPill: View {
             if open {
                 CompareBoxes(raw: entry.transcription, edit: hasEdit ? entry.aiEdit : nil, inserted: entry.inserted,
                              noEdit: safetyNet ? "The safety net rejected the AI's edit, so your words went in as spoken." : "No AI edit for this dictation.",
-                             stacked: true, width: max(40, min(width, room.width - 28)) - 10)
+                             context: context, stacked: true, width: max(40, min(width, room.width - 28)) - 10)
                     .padding(EdgeInsets(top: 6, leading: 0, bottom: 8, trailing: 10))
             } else if noted {
                 PillBodyText(text: entry.warning ?? "The AI's edit changed too much (or came back empty), so your words went in unchanged. "
@@ -766,6 +770,8 @@ struct CompareBoxes: View {
     var edit: String?
     var inserted: String
     var noEdit: String
+    /// The text around the cursor, in its own colour either side of the AI edit, so the edit reads in place.
+    var context: InsertionContext?
     var stacked: Bool
     var focus = false
     /// The width the boxes fill.
@@ -817,7 +823,8 @@ struct CompareBoxes: View {
         // A selected part copies as shown, struck words included (Windows' Selection.Text); the whole box leaves them out.
         return box("02 // AI EDIT", name: "Copy AI Edit", copy: { selections[1].selected() ?? trimmed ?? "" }) {
             if let trimmed {
-                OverlayText(text: .diff(raw, trimmed, accent: Color(hex: ob.accentChoice.hex.dark)), maxHeight: maxHeight, selection: selections[1])
+                OverlayText(text: .diff(raw, trimmed, accent: Color(hex: ob.accentChoice.hex.dark), context: context), maxHeight: maxHeight,
+                            selection: selections[1])
             } else {
                 Text(noEdit).font(Ob.sans(14)).foregroundStyle(mutedText).fixedSize(horizontal: false, vertical: true)
             }
@@ -887,7 +894,7 @@ private struct CopyLink: View {
 
 /// A box's text as runs: plain, or the AI edit's diff (removed words struck through, added ones in the accent).
 struct OverlayRichText {
-    enum Style { case plain, removed, added }
+    enum Style { case plain, removed, added, context }
     var runs: [(String, Style)]
     var color: Color
     var accent: Color = lightText
@@ -901,16 +908,41 @@ struct OverlayRichText {
         OverlayRichText(runs: [(text, .plain)], color: color, size: size)
     }
 
-    static func diff(_ original: String, _ edited: String, accent: Color) -> OverlayRichText {
+    static func diff(_ original: String, _ edited: String, accent: Color, context: InsertionContext? = nil) -> OverlayRichText {
         var runs: [(String, Style)] = []
+        // The text around the cursor, in its own colour either side of the edit, so it reads in place.
+        let before = around(context?.before, fromEnd: true), after = around(context?.after, fromEnd: false)
+        if let last = before.last { runs.append((before + (last.isWhitespace ? "" : " "), .context)) }
         for (i, token) in WordDiff.compute(original, edited).enumerated() {
             if i > 0 { runs.append((" ", .plain)) }
             runs.append((token.word, token.kind == .same ? .plain : token.kind == .removed ? .removed : .added))
         }
+        if let first = after.first { runs.append(((first.isWhitespace || first.isPunctuation ? "" : " ") + after, .context)) }
         return OverlayRichText(runs: runs, color: lightText, accent: accent, isDiff: true)
     }
 
+    /// At most ~160 characters of the surrounding text, cut at a word, with "…" where it was cut (Windows `Around`).
+    static func around(_ text: String?, fromEnd: Bool) -> String {
+        let text = (text ?? "").replacingOccurrences(of: "\r\n", with: " ").replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "" }
+        let max = 160
+        if text.count <= max {
+            return fromEnd ? String(text.drop(while: \.isWhitespace)) : String(text.reversed().drop(while: \.isWhitespace).reversed())
+        }
+        if fromEnd {
+            let cut = String(text.suffix(max))
+            if let space = cut.firstIndex(of: " ") { return "…" + cut[cut.index(after: space)...] }
+            return "…" + cut
+        }
+        let head = String(text.prefix(max))
+        if let space = head.lastIndex(of: " "), space > head.startIndex { return head[..<space] + "…" }
+        return head + "…"
+    }
+
     private static let removedColor = Color(hex: 0xE8E7E3, alpha: 0x70 / 255)
+    /// The surrounding text: a cool grey-blue, apart from the edit (Windows `ContextInk`, #A69FB4D0), in italics.
+    static let contextColor = Color(hex: 0x9FB4D0, alpha: 0xA6 / 255)
 
     var attributed: AttributedString {
         var out = AttributedString()
@@ -922,6 +954,9 @@ struct OverlayRichText {
                 run.foregroundColor = Self.removedColor
                 run.strikethroughStyle = .single
             case .added: run.foregroundColor = accent
+            case .context:
+                run.foregroundColor = Self.contextColor
+                run.inlinePresentationIntent = .emphasized
             }
             out += run
         }
@@ -943,6 +978,9 @@ struct OverlayRichText {
                 attrs[.foregroundColor] = NSColor(Self.removedColor)
                 attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
             case .added: attrs[.foregroundColor] = NSColor(accent)
+            case .context:
+                attrs[.foregroundColor] = NSColor(Self.contextColor)
+                attrs[.font] = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask)
             }
             out.append(NSAttributedString(string: text, attributes: attrs))
         }

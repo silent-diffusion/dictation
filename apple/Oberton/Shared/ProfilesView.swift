@@ -386,6 +386,16 @@ struct ProfilePage: View {
             ObSwitch("Read aloud after inserting", detail: "Once the text is in place, Read aloud reads it to you with the voice chosen under Models. \(stopHint)",
                      isOn: $profile.readAloudAfterInsert)
                 .padding(.horizontal, 14).padding(.vertical, 4)
+            #if os(macOS)
+            // Without AI: how the words go into the app while you speak (Settings › General › Type as you speak).
+            if !profile.autoProcess {
+                Hairline()
+                ObSwitch("Type the words in, instead of pasting them",
+                         detail: "While you speak, your words go into the app as they are heard. Off (recommended): each new bit is pasted. On: it is typed key by key, which some apps (browsers, chat apps, editors with autocomplete) can garble.",
+                         isOn: $profile.liveTyping)
+                    .padding(.horizontal, 14).padding(.vertical, 4)
+            }
+            #endif
         }
         .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
     }
