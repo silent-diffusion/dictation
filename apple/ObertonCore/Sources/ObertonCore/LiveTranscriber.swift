@@ -19,6 +19,12 @@ public final class LiveTranscriber: @unchecked Sendable {
     /// Called on the main queue, once per recording, when the microphone has given 2 s of pure zeros and nothing else:
     /// usually microphone access blocked in Privacy & Security.
     public var onSilence: (() -> Void)?
+    /// Live mode ("type as you speak"): a finished piece of the speech, whole sentences about every 5 s (Windows'
+    /// `Committed`), on the main queue, in order.
+    public var onPiece: ((String) -> Void)?
+    /// Live mode: the recognizer's running guess at the speech since the last piece (Windows' `PartialTranscript`),
+    /// on the main queue. Empty right after a piece.
+    public var onGuess: ((String) -> Void)?
 
     private let engine = AVAudioEngine()
     private var analyzer: SpeechAnalyzer?
@@ -41,6 +47,13 @@ public final class LiveTranscriber: @unchecked Sendable {
     /// The words of the transcript the last `stop()` returned, timed from its recording's start (History keeps them, so
     /// playback can light the word being said). Empty when the engine gave none.
     @MainActor public private(set) var lastWords: [SpokenWord] = []
+    /// Live mode: pieces are handed out (`onPiece`) while recording. `heldText` is what Apple's recognizer settled since
+    /// the last piece, ending at `heldEnd` seconds into the recording; the last piece ended at `pieceEnd`.
+    private var live = false
+    private var stopping = false
+    private var heldText = ""
+    private var heldEnd = 0.0, pieceEnd = 0.0
+    private var tail = ""
     /// Audio recorded before the recognizer was ready, fed to it once it is.
     private var waiting: [AVAudioPCMBuffer] = []
     private var streaming = false
@@ -51,6 +64,10 @@ public final class LiveTranscriber: @unchecked Sendable {
     private var sawSignal = false
 
     public init() {}
+
+    /// Live mode: the speech after the last piece, once `stop()` has returned (Windows' `FinalTail`): what live typing
+    /// still has to add when its final pass can't replace what it typed.
+    public var finalTail: String { lock.withLock { tail } }
 
     /// The loudest input level of this recording, on Windows' meter scale (`SpeechGuard.speechLevel`).
     public var peak: Float { lock.withLock { peakLevel } }
@@ -133,6 +150,7 @@ public final class LiveTranscriber: @unchecked Sendable {
         lock.withLock {
             generation += 1
             pieces = []; volatile = ""; heardWords = []; waiting = []; streaming = false
+            live = false; stopping = false; heldText = ""; heldEnd = 0; pieceEnd = 0; tail = ""
             peakLevel = 0; silentFrames = 0; sawSignal = false
             self.evenOut = evenOut
         }
@@ -157,7 +175,8 @@ public final class LiveTranscriber: @unchecked Sendable {
     }
 
     /// Get the recognizer ready (downloading and loading its model if needed), then hand it everything recorded so far.
-    public func startRecognizer(locale: Locale, vocabulary: [String]) async throws {
+    /// `live`: hand out finished pieces and the running guess while recording (`onPiece`, `onGuess`).
+    public func startRecognizer(locale: Locale, vocabulary: [String], live: Bool = false) async throws {
         let mine = lock.withLock { generation }
         let locale = try await Self.prepare(locale: locale)
         Self.markInUse()
@@ -179,18 +198,26 @@ public final class LiveTranscriber: @unchecked Sendable {
             for try await result in transcriber.results {
                 guard let self else { return }
                 let text = String(result.text.characters)
-                let full: String = self.lock.withLock {
+                let (full, piece, guess): (String, String?, String?) = self.lock.withLock {
                     if result.isFinal { self.pieces.append(text); self.volatile = ""; self.heardWords += WordTimes.words(result.text) }
                     else { self.volatile = text }
-                    return FragmentStitcher.join(self.pieces + [self.volatile])
+                    let full = FragmentStitcher.join(self.pieces + [self.volatile])
+                    guard self.live else { return (full, nil, nil) }
+                    let (piece, guess) = self.livePiece(text, final: result.isFinal, end: result.range.end.seconds)
+                    return (full, piece, guess)
                 }
-                let cb = self.onText
-                DispatchQueue.main.async { cb?(full) }
+                let (cb, onPiece, onGuess) = (self.onText, self.onPiece, self.onGuess)
+                DispatchQueue.main.async {
+                    cb?(full)
+                    if let piece { onPiece?(piece) }
+                    if let guess { onGuess?(guess) }
+                }
             }
         }
         do { try await analyzer.start(inputSequence: stream) } catch { results.cancel(); throw error }
         let current = lock.withLock {
             guard generation == mine else { return false }
+            self.live = live
             self.analyzer = analyzer
             self.analyzerFormat = format
             self.input = continuation
@@ -205,17 +232,28 @@ public final class LiveTranscriber: @unchecked Sendable {
 
     /// Get the Whisper model ready (loading it if needed), then hand it everything recorded so far. While the user
     /// speaks, the running transcript of the last 28 s comes back about once a second (asr_server.py's partials).
-    /// `prompt`: the vocabulary hint as typed.
-    public func startWhisper(model: String, language: String?, prompt: String) async throws {
+    /// `prompt`: the vocabulary hint as typed. `live`: asr_server.py's live mode instead, finished sentences handed out
+    /// about every 5 s (`onPiece`) and the running guess at the rest in between (`onGuess`).
+    public func startWhisper(model: String, language: String?, prompt: String, live: Bool = false) async throws {
         let (mine, even) = lock.withLock { (generation, evenOut) }
         try await WhisperEngine.shared.load(model)
         guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false) else { return }
-        let dictation = WhisperDictation(model: model, language: language, prompt: prompt, even: even) { [weak self] text in
+        let dictation = WhisperDictation(model: model, language: language, prompt: prompt, even: even, live: live) { [weak self] text in
             let cb = self?.onText
             DispatchQueue.main.async { cb?(text) }
         }
+        // A piece decoded just after the stop still counts (it isn't in the tail); the caller ignores late guesses.
+        dictation.onPiece = { [weak self] piece in
+            let cb = self?.onPiece
+            DispatchQueue.main.async { cb?(piece) }
+        }
+        dictation.onGuess = { [weak self] guess in
+            let cb = self?.onGuess
+            DispatchQueue.main.async { cb?(guess) }
+        }
         let current = lock.withLock {
             guard generation == mine else { return false }
+            self.live = live
             whisper = dictation
             analyzerFormat = format
             for buffer in waiting { feed(buffer) }
@@ -224,6 +262,29 @@ public final class LiveTranscriber: @unchecked Sendable {
             return true
         }
         if current { dictation.startPartials() }
+    }
+
+    /// Live mode with Apple's recognizer (called with the lock held): what it settled builds up until it ends a sentence
+    /// at least 5 s after the last piece, or runs 12 s without one (asr_server.py's commit rule); that is the next piece.
+    /// Returns the piece, if one is due, and the running guess at the speech since the last piece. Once the user has
+    /// stopped, nothing more is handed out: the rest is the final tail.
+    private func livePiece(_ text: String, final: Bool, end: Double) -> (String?, String?) {
+        guard !stopping else { return (nil, nil) }
+        if final {
+            heldText = FragmentStitcher.join([heldText, text].filter { !$0.isEmpty })
+            heldEnd = end.isFinite ? end : heldEnd
+            let pending = heldEnd - pieceEnd
+            let sentence = heldText.trimmingCharacters(in: CharacterSet(charactersIn: "\"')").union(.whitespaces))
+            let ends = sentence.hasSuffix(".") || sentence.hasSuffix("!") || sentence.hasSuffix("?")
+            if !heldText.isEmpty, (ends && pending >= WhisperLive.chunkSeconds) || pending >= WhisperLive.forceSeconds {
+                let piece = heldText
+                heldText = ""
+                pieceEnd = heldEnd
+                return (piece, "")
+            }
+        }
+        let guess = [heldText, final ? "" : text].filter { !$0.isEmpty }
+        return (nil, guess.isEmpty ? "" : FragmentStitcher.join(guess))
     }
 
     /// The level on Windows' meter scale (`sqrt(rms) · 1.8`), used for the speech guard's peak.
@@ -326,7 +387,10 @@ public final class LiveTranscriber: @unchecked Sendable {
     }
 
     /// Stop listening now (the recognizer may still be getting ready; `stop()` then collects the transcript).
-    @MainActor public func stopRecording() { stopAudio() }
+    @MainActor public func stopRecording() {
+        stopAudio()
+        lock.withLock { stopping = true }
+    }
 
     /// Stop listening and wait for the recognizer to settle the last words. Returns the whole transcript, its pieces
     /// stitched (`FragmentStitcher`). Call once the recognizer has started (or failed to). A recording started while
@@ -337,16 +401,19 @@ public final class LiveTranscriber: @unchecked Sendable {
             input?.finish()
             return (generation, self.analyzer, resultsTask, self.whisper)
         }
+        lock.withLock { stopping = true }
         if let whisper {
-            let text = await whisper.finish()
+            let (text, tail) = await whisper.finish()
             lastWords = whisper.words
-            lock.withLock { if generation == mine { clear() } }
+            lock.withLock { if generation == mine { self.tail = tail; clear() } }
             return text
         }
         try? await analyzer?.finalizeAndFinishThroughEndOfInput()
         _ = try? await results?.value
         let (parts, words) = lock.withLock {
             defer { if generation == mine { clear() } }
+            // What was settled since the last piece, and the last guess: the speech live typing hasn't had yet.
+            if live { tail = FragmentStitcher.join([heldText, volatile].filter { !$0.isEmpty }) }
             return (pieces + [volatile], heardWords)
         }
         lastWords = words
@@ -417,13 +484,18 @@ public final class LiveTranscriber: @unchecked Sendable {
 }
 
 /// One dictation's audio for Whisper: kept whole for the final pass at the end, with the running transcript of the last
-/// 28 s refreshed about once a second meanwhile.
+/// 28 s refreshed about once a second meanwhile. In live mode ("type as you speak", asr_server.py's live loop) the
+/// finished sentences are handed out as pieces about every 5 s instead, and only the speech after the last one is
+/// decoded at the end.
 final class WhisperDictation: @unchecked Sendable {
     static let partialEvery = 1.0
     static let partialWindow = 28 * 16_000
 
-    private let model: String, language: String?, prompt: String, even: Bool
+    private let model: String, language: String?, prompt: String, even: Bool, live: Bool
     private let onText: (String) -> Void
+    /// Live mode: a finished piece, and the running guess at the speech after it.
+    var onPiece: ((String) -> Void)?
+    var onGuess: ((String) -> Void)?
     private let lock = NSLock()
     private var samples: [Float] = []
     private var latest = ""
@@ -431,9 +503,12 @@ final class WhisperDictation: @unchecked Sendable {
     /// The final pass's words, timed from the recording's start (none when it failed).
     var words: [SpokenWord] { lock.withLock { finalWords } }
     private var partials: Task<Void, Never>?
+    /// Live mode: samples already handed out as pieces, and those pieces.
+    private var committed = 0
+    private var committedPieces: [String] = []
 
-    init(model: String, language: String?, prompt: String, even: Bool, onText: @escaping (String) -> Void) {
-        self.model = model; self.language = language; self.prompt = prompt; self.even = even; self.onText = onText
+    init(model: String, language: String?, prompt: String, even: Bool, live: Bool = false, onText: @escaping (String) -> Void) {
+        self.model = model; self.language = language; self.prompt = prompt; self.even = even; self.live = live; self.onText = onText
     }
 
     /// 16 kHz mono float audio (the audio thread).
@@ -444,6 +519,7 @@ final class WhisperDictation: @unchecked Sendable {
     }
 
     func startPartials() {
+        if live { partials = Task { [weak self] in await self?.liveLoop() }; return }
         partials = Task { [weak self] in
             var last = 0
             // A slow model (a large one, or one still being prepared) refreshes less often, and stops refreshing when
@@ -474,22 +550,88 @@ final class WhisperDictation: @unchecked Sendable {
     /// A running transcript slower than this ends the running transcripts for this dictation.
     static let slowPartial = 4.0
 
+    /// Live mode: about every second (less often for a slow model), decode the speech not handed out yet; once 5 s of
+    /// it have built up, hand out its finished sentences (`WhisperLive.chooseCommit`) as a piece. In between, the rest is
+    /// the running guess.
+    private func liveLoop() async {
+        var last = 0
+        var every = Self.partialEvery
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            let (count, start, committedText) = lock.withLock { (samples.count, committed, committedPieces.joined(separator: " ")) }
+            let pending = count - start
+            guard count - last >= Int(16_000 * every), pending >= 16_000 * 6 / 10 else { continue }
+            last = count
+            let due = pending >= Int(16_000 * WhisperLive.chunkSeconds)
+            let audio = lock.withLock { Array(samples[start..<count]) }
+            let began = Date()
+            guard let found = try? await WhisperEngine.shared.segments(audio, model: model, language: language,
+                                                                        prompt: WhisperText.prompt(vocabulary: prompt, committed: committedText), even: even),
+                  !Task.isCancelled else { continue }
+            every = min(6, max(Self.partialEvery, Date().timeIntervalSince(began) * 2))
+            let duration = Double(audio.count) / 16_000
+            var rest = found, release = 0, piece = ""
+            if due, let pick = WhisperLive.chooseCommit(found, duration: duration) {
+                piece = WhisperText.newText(pick.text, after: committedText)
+                release = min(audio.count, Int(pick.end * 16_000))
+                rest = found.filter { $0.end > pick.end }
+            } else if due, !found.contains(where: { !$0.text.isEmpty }), duration >= WhisperLive.forceSeconds {
+                // Nothing heard for a while (silence, or only made-up phrases): let go of that audio too, keeping the
+                // last moments in case speech is just starting.
+                release = audio.count - Int((WhisperLive.commitMargin + 1) * 16_000)
+                rest = []
+            }
+            let guess = rest.map(\.text).filter { !$0.isEmpty }.joined(separator: " ")
+            let shown: String = lock.withLock {
+                if release > 0 { committed += release }
+                if !piece.isEmpty { committedPieces.append(piece) }
+                return FragmentStitcher.join(committedPieces + [guess])
+            }
+            if !piece.isEmpty { onPiece?(piece) }
+            onGuess?(FragmentStitcher.tidy(guess))
+            if !shown.isEmpty { lock.withLock { latest = shown }; onText(shown) }
+        }
+    }
+
     /// The whole recording's transcript (a full pass; the running transcript if that fails), tidied as Windows tidies
     /// a dictation decoded at once (`FragmentStitcher.join` of the one piece). A running transcript still being worked
     /// out is stopped first, so the final pass doesn't wait for it.
-    func finish() async -> String {
+    /// Live mode: the pieces already handed out plus the speech after them, decoded once (Whisper's made-up phrases and
+    /// loops left out, as asr_server.py's live stop); the second value is that speech after the last piece (the tail).
+    func finish() async -> (text: String, tail: String) {
         partials?.cancel()
         await partials?.value
-        let (all, latest) = lock.withLock { (samples, self.latest) }
+        let (all, latest, start, pieces) = lock.withLock { (samples, self.latest, committed, committedPieces) }
+        if live, !pieces.isEmpty {
+            let rest = Array(all[min(start, all.count)...])
+            var tail = ""
+            if rest.count >= 16_000 * 3 / 10 {
+                let committedText = pieces.joined(separator: " ")
+                let heard = try? await WhisperEngine.shared.transcribeTimed(rest, model: model, language: language,
+                                                                            prompt: WhisperText.prompt(vocabulary: prompt, committed: committedText),
+                                                                            final: true, dropPhantoms: true, even: even)
+                tail = WhisperText.newText(heard?.text ?? "", after: committedText)
+                // Only the tail was decoded at the end (the pieces had no word times): its words, timed from the
+                // recording's start.
+                let offset = Double(start) / 16_000
+                lock.withLock { finalWords = (heard?.words ?? []).map { SpokenWord(text: $0.text, start: $0.start + offset, end: $0.end + offset) } }
+            }
+            let text = FragmentStitcher.join(pieces + [tail])
+            onText(text)
+            return (text, tail)
+        }
         do {
-            let heard = try await WhisperEngine.shared.transcribeTimed(all, model: model, language: language, prompt: prompt, final: true, even: even)
-            let text = FragmentStitcher.join([heard.text])
+            let heard = try await WhisperEngine.shared.transcribeTimed(all, model: model, language: language, prompt: prompt, final: true,
+                                                                       dropPhantoms: live, even: even)
+            var text = FragmentStitcher.join([heard.text])
+            if live { text = WhisperText.collapseRepeats(text) }
             lock.withLock { finalWords = heard.words }
             onText(text)
-            return text
+            return (text, live ? text : "")
         } catch {
             NSLog("Whisper: the final pass failed (%@); keeping the running transcript", error.localizedDescription)
-            return latest
+            return (latest, live ? latest : "")
         }
     }
 
