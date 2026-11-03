@@ -70,29 +70,33 @@ final class OverlayController {
             .store(in: &bag)
     }
 
-    /// The screen it is on, or the one it was dragged to, or the main one.
+    /// The screen it is on, or the one it was dragged to, or the primary one (the menu bar's), as Windows places it on
+    /// the primary monitor's work area.
     private var screen: CGRect? {
         if panel.isVisible, let s = panel.screen { return s.visibleFrame }
         if let anchor, let s = NSScreen.screens.first(where: { $0.frame.insetBy(dx: -1, dy: -1).contains(anchor) }) { return s.visibleFrame }
-        return NSScreen.main?.visibleFrame
+        return (NSScreen.screens.first ?? NSScreen.main)?.visibleFrame
     }
 
     /// Shown while dictating (with "Show overlay" on); the preview, NO PLACE TO PASTE, notices, the
     /// profile switch and the position flash show either way, as on Windows.
     private func update() {
         let phase = model.phase
+        let done = { if case .done = phase { true } else { false } }()
         let visible = phase == .preview || phase == .placing || model.overlayNotice != nil || model.profileNotice || flash.on
             || { if case .failed = phase { true } else { false } }()
-            || (model.settings.showOverlay && phase != .idle)
+            || (model.settings.showOverlay && phase != .idle && (!done || model.receipt != nil)) // no receipt: read aloud took its place
         guard visible else { panel.orderOut(nil); return }
         if !panel.isVisible { layout(fresh: true) }
         panel.orderFrontRegardless()
     }
 
-    /// ● DICTATION APPEARS HERE for 1.5 s at the new position, unless a dictation is under way.
+    /// ● DICTATION APPEARS HERE for 1.5 s at the new position, unless a dictation is showing. It drops a receipt, which
+    /// doesn't come back after (OverlayWindow.ShowPositionPreview).
     private func previewPosition() {
         anchor = nil
-        guard !model.phase.isBusy else { return }
+        guard !model.overlayPinned else { return }
+        model.dismissReceipt()
         flash.on = true
         if panel.isVisible { layout(fresh: true) }
         flashTask?.cancel()
@@ -195,9 +199,15 @@ enum OverlaySnapshots {
         raw.inserted = raw.transcription
         let hotkey = model.settings.hotkey
         let model8b = "qwen3:8b"
+        // A burst of speech then quiet, as AppModel.meter holds it (√ level, oldest first).
+        let meter = (0..<22).map { i in i < 14 ? sqrt(0.15 + 0.5 * abs(sin(Double(i) * 0.9))) : 0 }
+        var failedAI = clean
+        failedAI.aiEdit = nil
+        failedAI.inserted = failedAI.transcription
         let shots: [(String, CGSize, AnyView)] = [
             ("pill-starting", room, AnyView(PillContent(phase: .starting, profile: "Light Cleanup", opacity: opacity))),
-            ("pill-recording", room, AnyView(PillContent(phase: .recording, profile: "Light Cleanup", level: 0.4, startedAt: .now - 7, opacity: opacity))),
+            ("pill-recording", room, AnyView(PillContent(phase: .recording, profile: "Light Cleanup", meter: meter, startedAt: .now - 7, opacity: opacity))),
+            ("pill-recording-silent", room, AnyView(PillContent(phase: .recording, profile: "Light Cleanup", meter: [Double](repeating: 0, count: 22), startedAt: .now - 7, opacity: opacity))),
             ("pill-recording-loading", room, AnyView(PillContent(phase: .recording, profile: "Light Cleanup", startedAt: .now - 3, opacity: opacity, loadingSpeech: true))),
             ("pill-transcribing", room, AnyView(PillContent(phase: .transcribing, profile: "Light Cleanup", opacity: opacity, audioSeconds: 7.4))),
             ("pill-transcribing-loading", room, AnyView(PillContent(phase: .transcribing, profile: "Light Cleanup", opacity: opacity, audioSeconds: 3, loadingSpeech: true))),
@@ -213,6 +223,11 @@ enum OverlaySnapshots {
             ("pill-live-narrow", narrow, AnyView(PillContent(phase: .recording, profile: "Light Cleanup", startedAt: .now, live: long, opacity: opacity))),
             ("preview", room, AnyView(PreviewPill(entry: clean, profile: "Light Cleanup", hotkey: hotkey, opacity: opacity))),
             ("preview-no-ai", room, AnyView(PreviewPill(entry: raw, profile: "Raw", hotkey: hotkey, opacity: opacity))),
+            ("preview-ai-failed", room, AnyView(PreviewPill(entry: { var e = failedAI; e.model = "ollama:qwen3:8b"; return e }(), profile: "Light Cleanup", hotkey: hotkey, opacity: opacity))),
+            ("pill-processing-long-profile", room, AnyView(PillContent(phase: .processing, profile: "Formal email to the leadership team, with British spelling and no contractions", live: entry.transcription, opacity: opacity, aiModel: "anthropic:claude-haiku-4-5-20251001"))),
+            ("notice-ai-failed", room, AnyView(NoticePill(text: AppModel.aiFailureNotice("The AI model took too long to respond. Your original words were inserted."), kind: .warning, opacity: opacity))),
+            ("notice-insert-failed", room, AnyView(NoticePill(text: "Couldn't switch back to the app you were typing in. Click into it and try again. The text was copied to your clipboard.", kind: .warning, opacity: opacity))),
+            ("notice-generic-error", room, AnyView(NoticePill(text: "Something went wrong during dictation. See \(AppModel.logPath).", kind: .error, opacity: opacity))),
             ("preview-long", room, AnyView(PreviewPill(entry: HistoryEntry(transcription: long, aiEdit: long.capitalized, inserted: long.capitalized,
                                                                          profileName: "Light Cleanup", model: nil, appName: "Notes", seconds: 90,
                                                                          turnaroundSeconds: 1, warning: nil),
@@ -301,7 +316,7 @@ struct OverlayView: View {
     var body: some View {
         let alignment = model.settings.overlayPosition.alignment
         VStack(alignment: alignment.horizontal, spacing: 10) {
-            if flash.on, !model.phase.isBusy {
+            if flash.on, !model.overlayPinned {
                 PositionPill(opacity: model.settings.overlayOpacity)
             } else {
                 OverlayPill(reader: model.reader, open: $showReceipt)

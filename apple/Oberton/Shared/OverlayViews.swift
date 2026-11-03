@@ -70,7 +70,7 @@ struct OverlayPill: View {
     var body: some View {
         let opacity = model.settings.overlayOpacity
         let phase = model.phase
-        if model.profileNotice, !phase.isBusy {
+        if model.profileNotice, !model.overlayPinned {
             let i = model.profiles.firstIndex { $0.id == model.activeProfile.id } ?? 0
             ProfilePill(name: model.activeProfile.name, index: i, count: model.profiles.count, opacity: opacity)
         } else if let notice = model.overlayNotice {
@@ -84,18 +84,29 @@ struct OverlayPill: View {
                         onCopy: { model.copyPlacingToClipboard() }, onDiscard: { model.cancel() })
         } else if case .failed(let message) = phase {
             NoticePill(text: message, kind: .error, opacity: opacity)
-        } else if model.settings.showOverlay, case .done = phase, let entry = model.receipt {
-            // A profile can read what went in aloud: the player then takes the receipt's place, unless it has a warning.
-            if !reader.isSpeaking || entry.warning != nil {
+        } else if case .done = phase {
+            // A profile can read what went in aloud: the player then takes the receipt's place, unless it has a warning
+            // (AppModel decided, and left `receipt` nil).
+            if model.settings.showOverlay, let entry = model.receipt {
                 ReceiptPill(entry: entry, opacity: opacity, open: open, onOpen: { open = true },
                             onHover: { model.holdReceipt($0, release: open ? 4 : 2) }, onClose: { model.dismissReceipt() })
             }
         } else if model.settings.showOverlay, phase != .idle {
             let live = [.recording, .transcribing, .processing].contains(phase) ? model.liveText : ""
-            PillContent(phase: phase, profile: model.activeProfile.name, level: model.level, startedAt: model.startedAt,
-                        live: live, opacity: opacity, aiModel: model.processor.model(for: model.activeProfile).displayName,
+            PillContent(phase: phase, profile: model.activeProfile.name, meter: model.meter, startedAt: model.startedAt,
+                        live: live, opacity: opacity, aiModel: Self.chip(model.processor.model(for: model.activeProfile)),
                         audioSeconds: model.stoppedAt.map { $0.timeIntervalSince(model.startedAt ?? $0) },
                         loadingSpeech: model.speechLoading, onCancel: { model.cancel() })
+        }
+    }
+
+    /// The model as the processing chip names it: as stored, the way Windows shows `profile.Model` ("qwen3:8b",
+    /// "anthropic:claude-haiku-4-5-20251001"); Apple Intelligence by its name.
+    static func chip(_ id: ModelID) -> String {
+        switch id.provider {
+        case .ollama: id.name
+        case .apple: id.displayName
+        case .anthropic, .openai: id.description
         }
     }
 }
@@ -121,7 +132,7 @@ struct PillCard: ViewModifier {
             .frame(width: max(40, min(width, room.width - 28)), alignment: .leading)
             .foregroundStyle(lightText)
             .padding(EdgeInsets(top: 9, leading: 19, bottom: 9, trailing: 9))
-            .background(shape.fill(darkInk.opacity(min(1, max(0.3, opacity)))).shadow(color: .black.opacity(0.35), radius: 12, y: 4))
+            .background(shape.fill(darkInk.opacity(min(1, max(0.3, opacity)))).shadow(color: .black.opacity(0.35), radius: 12, x: 2.8, y: 2.8))
             .overlay(shape.strokeBorder(Color(hex: 0xE8E7E3, alpha: 0x24 / 255), lineWidth: 1))
             .contentShape(shape)
     }
@@ -166,9 +177,11 @@ struct PillRow<Title: View, Middle: View>: View {
             if let indicator {
                 IndicatorView(kind: indicator).frame(width: 16, height: 16).padding(.trailing, 12)
             }
+            // One line, as Windows' TitleText: a long title is cut at the end rather than wrapped.
             title
                 .font(Ob.mono(13, .semibold))
-                .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(1)
+                .truncationMode(.tail)
                 .layoutPriority(1)
             // The star column: it takes the room left, so what follows sits at the right end.
             HStack(spacing: 0) {
@@ -263,7 +276,7 @@ private struct RingSpinner: View {
         TimelineView(.animation) { context in
             let turn = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1)
             ZStack {
-                Circle().stroke(lightText.opacity(0.2), lineWidth: 1.5).frame(width: 13, height: 13)
+                Circle().strokeBorder(lightText.opacity(0.2), lineWidth: 1.5).frame(width: 14, height: 14) // stroke inside, as WPF
                 Circle().trim(from: 0, to: 0.25)
                     .stroke(accent, style: StrokeStyle(lineWidth: 2, lineCap: .round))
                     .frame(width: 14, height: 14)
@@ -338,11 +351,13 @@ private struct PillButtonBody: View {
             .lineLimit(1)
             .padding(.horizontal, style.padding)
             .frame(minWidth: style.height, minHeight: style.height, maxHeight: style.height)
-            .background(shape.fill(accent ? lightText : hovering ? lightText.opacity(0x1A / 255) : .clear))
+            // Windows' PillButton template sets the faint hover fill for every style, the filled Insert one included.
+            .background(shape.fill(hovering ? lightText.opacity(0x1A / 255) : accent ? lightText : .clear))
             .overlay(shape.strokeBorder(border, lineWidth: 1))
             .opacity(configuration.isPressed ? 0.7 : 1)
             .contentShape(shape)
             .onHover { hovering = $0 }
+            .overlayHandCursor()
     }
 
     private var border: Color {
@@ -377,7 +392,8 @@ private struct PillBodyText: View {
 struct PillContent: View {
     var phase: AppModel.Phase
     var profile: String
-    var level: Float = 0
+    /// The level meter's columns (`AppModel.meter`).
+    var meter: [Double] = []
     var startedAt: Date?
     var live = ""
     var opacity: Double
@@ -420,14 +436,14 @@ struct PillContent: View {
                 }
                 .fixedSize()
             } middle: {
-                DotMeter(level: level)
+                DotMeter(levels: meter)
             }
         case .transcribing:
             PillRow(indicator: .spinner, decor: "処理中", chip: profile, trailing: .cancel(onCancel)) {
                 Text(loadingSpeech ? "LOADING SPEECH MODEL" : "TRANSCRIBING")
             } middle: {
                 if let audioSeconds {
-                    Text("\(max(1, Int(audioSeconds.rounded()))) S OF AUDIO").font(Ob.mono(11.5)).foregroundStyle(mutedText)
+                    Text("\(max(1, Int(audioSeconds.rounded(.toNearestOrEven)))) S OF AUDIO") // Math.Round: half to even.font(Ob.mono(11.5)).foregroundStyle(mutedText)
                         .lineLimit(1).truncationMode(.tail)
                 }
             }
@@ -458,10 +474,11 @@ struct PillContent: View {
 /// The level meter: 22 columns of 5 dots, lit from the bottom as far as each moment's level reaches (√level, so quiet
 /// speech still moves it; at least one dot, so silence reads as a row of dots).
 private struct DotMeter: View {
-    var level: Float
-    @State private var levels = [Double](repeating: 0, count: 22)
+    /// 22 columns, oldest first, already √-scaled (`AppModel.meter`, which moves on every level event).
+    var levels: [Double]
 
     var body: some View {
+        let levels = levels.count == 22 ? levels : Array((levels + [Double](repeating: 0, count: 22)).prefix(22))
         HStack(spacing: 3) {
             ForEach(0..<levels.count, id: \.self) { i in
                 let lit = max(1, Int((levels[i] * 5).rounded()))
@@ -474,10 +491,6 @@ private struct DotMeter: View {
         }
         .frame(height: 28)
         .fixedSize()
-        .onChange(of: level) { _, new in
-            levels.removeFirst()
-            levels.append(Double(min(max(new, 0), 1)).squareRoot())
-        }
         .accessibilityHidden(true)
     }
 }
@@ -545,8 +558,9 @@ struct PreviewPill: View {
         let inner = max(40, min(width, room.width - 28))
         VStack(alignment: .leading, spacing: 0) {
             PillRow(indicator: .check, chip: profile) { Text("READY TO INSERT") }
-            // The diff is between what was heard and what goes in; a profile without AI has none.
-            CompareBoxes(raw: entry.transcription, edit: entry.aiEdit == nil ? nil : entry.inserted, inserted: entry.inserted,
+            // The diff is between what was heard and what goes in; a profile without AI has none. One with AI shows it
+            // even when the AI failed or changed nothing (an unchanged diff), as on Windows (`usesAi`).
+            CompareBoxes(raw: entry.transcription, edit: entry.model == nil ? nil : entry.inserted, inserted: entry.inserted,
                          noEdit: "No AI edit: this profile doesn't use AI.", stacked: stacked, focus: true, width: inner - 10)
                 .padding(EdgeInsets(top: 6, leading: 0, bottom: 8, trailing: 10))
             HStack(spacing: 8) {
@@ -652,7 +666,7 @@ struct ProfilePill: View {
 
     var body: some View {
         PillRow {
-            Text("PROFILE   ").fontWeight(.regular).foregroundStyle(mutedText) + Text(name)
+            (Text("PROFILE   ").fontWeight(.regular).foregroundStyle(mutedText) + Text(name)).lineLimit(1)
         } middle: {
             if count > 1 {
                 HStack(spacing: 5) {
@@ -716,11 +730,17 @@ struct ReceiptPill: View {
             hovering = on
             onHover(on)
         }
+        .overlayHandCursor(!open)
         .onTapGesture { if !open { onOpen() } }
     }
 
     private var title: String {
+        #if os(iOS)
+        // The iPhone can't type into another app: the text went to the clipboard, ready to paste.
+        !safetyNet ? "COPIED" : edited ? "PARTLY EDITED" : "ORIGINAL WORDS COPIED"
+        #else
         !safetyNet ? "INSERTED" : edited ? "PARTLY EDITED" : "ORIGINAL WORDS INSERTED"
+        #endif
     }
 
     /// The AI's edit is shown as a diff unless there was none: no AI, or the AI's words were not used at all.
@@ -778,7 +798,7 @@ struct CompareBoxes: View {
     }
 
     private func rawBox(width: CGFloat) -> some View {
-        box("01 // TRANSCRIPTION", copy: { selections[0].selected() ?? raw }) {
+        box("01 // TRANSCRIPTION", name: "Copy Transcription", copy: { selections[0].selected() ?? raw }) {
             OverlayText(text: .plain(raw, color: lightText.opacity(0.85)), maxHeight: maxHeight, selection: selections[0])
         }
         .frame(width: width, alignment: .topLeading)
@@ -787,7 +807,8 @@ struct CompareBoxes: View {
 
     private func editBox(width: CGFloat) -> some View {
         let trimmed = edit?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return box("02 // AI EDIT", copy: { selections[1].selected(dropStruck: true) ?? trimmed ?? "" }) {
+        // A selected part copies as shown, struck words included (Windows' Selection.Text); the whole box leaves them out.
+        return box("02 // AI EDIT", name: "Copy AI Edit", copy: { selections[1].selected() ?? trimmed ?? "" }) {
             if let trimmed {
                 OverlayText(text: .diff(raw, trimmed, accent: Color(hex: ob.accentChoice.hex.dark)), maxHeight: maxHeight, selection: selections[1])
             } else {
@@ -801,7 +822,7 @@ struct CompareBoxes: View {
     private func insertedBox(width: CGFloat) -> some View {
         let text = inserted.trimmingCharacters(in: .whitespacesAndNewlines)
         let shape = RoundedRectangle(cornerRadius: 6, style: .circular)
-        return box("03 // INSERTED", label: focus ? lightText : dimText, copy: { selections[2].selected() ?? text }) {
+        return box("03 // INSERTED", name: "Copy Inserted", label: focus ? lightText : dimText, copy: { selections[2].selected() ?? text }) {
             OverlayText(text: .plain(text, color: lightText, size: focus ? 15.5 : 14), maxHeight: maxHeight, selection: selections[2])
         }
         .padding(focus ? EdgeInsets(top: 10, leading: 14, bottom: 12, trailing: 14) : EdgeInsets())
@@ -812,18 +833,18 @@ struct CompareBoxes: View {
         .scaleEffect(focus ? (popped ? 1.02 : 0.96) : 1)
         .onAppear {
             guard focus else { return }
-            withAnimation(.easeOut(duration: 0.22)) { popped = true }
+            withAnimation(.timingCurve(0.33, 1, 0.68, 1, duration: 0.22)) { popped = true } // CubicEase EaseOut
         }
     }
 
     /// A box: its name and COPY, then its text.
-    private func box<C: View>(_ title: String, label: Color = dimText, copy: @escaping () -> String,
+    private func box<C: View>(_ title: String, name: String, label: Color = dimText, copy: @escaping () -> String,
                               @ViewBuilder content: () -> C) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(title).font(Ob.mono(10.5)).foregroundStyle(label)
                 Spacer(minLength: 8)
-                CopyLink(text: copy)
+                CopyLink(text: copy).accessibilityLabel(name)
             }
             content()
         }
@@ -834,6 +855,7 @@ struct CompareBoxes: View {
 private struct CopyLink: View {
     var text: () -> String
     @State private var copied = false
+    @State private var hovering = false
 
     var body: some View {
         Button {
@@ -845,10 +867,13 @@ private struct CopyLink: View {
         } label: {
             Text(copied ? "COPIED ✓" : "COPY").font(Ob.mono(10.5)).foregroundStyle(lightText.opacity(0.8))
                 .padding(.horizontal, 8).padding(.vertical, 1)
+                .background(Capsule().fill(hovering ? Color.white.opacity(0x1A / 255) : .clear))
                 .overlay(Capsule().strokeBorder(darkLine, lineWidth: 1))
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .overlayHandCursor()
         .help("Copy this box (or just the part you selected)")
     }
 }
@@ -860,8 +885,10 @@ struct OverlayRichText {
     var color: Color
     var accent: Color = lightText
     var size: CGFloat = 14
-    /// Windows' line heights: 21 pt for the boxes at 14, 22 at 15.5.
-    var lineHeight: CGFloat { size > 14 ? 22 : 21 }
+    /// Windows' line heights: AI EDIT's diff sets 21; TRANSCRIPTION and INSERTED are TextBoxes at the font's own
+    /// height, about 1.33 × the size (18.6 at 14, 20.6 at 15.5).
+    var lineHeight: CGFloat { isDiff ? 21 : (size * 1.33).rounded(.toNearestOrEven) }
+    var isDiff = false
 
     static func plain(_ text: String, color: Color, size: CGFloat = 14) -> OverlayRichText {
         OverlayRichText(runs: [(text, .plain)], color: color, size: size)
@@ -873,7 +900,7 @@ struct OverlayRichText {
             if i > 0 { runs.append((" ", .plain)) }
             runs.append((token.word, token.kind == .same ? .plain : token.kind == .removed ? .removed : .added))
         }
-        return OverlayRichText(runs: runs, color: lightText, accent: accent)
+        return OverlayRichText(runs: runs, color: lightText, accent: accent, isDiff: true)
     }
 
     private static let removedColor = Color(hex: 0xE8E7E3, alpha: 0x70 / 255)
@@ -1021,6 +1048,34 @@ struct OverlayText: View {
                 ScrollView { content }.scrollIndicators(.automatic)
             }
         }
+    }
+}
+#endif
+
+extension View {
+    /// The pointing hand over something clickable in the overlay, as Windows' Cursor="Hand". Pushed on hover, since the
+    /// panel is never key and cursor rects don't apply there.
+    func overlayHandCursor(_ on: Bool = true) -> some View {
+        #if os(macOS)
+        modifier(OverlayHandCursor(on: on))
+        #else
+        self
+        #endif
+    }
+}
+
+#if os(macOS)
+private struct OverlayHandCursor: ViewModifier {
+    var on: Bool
+    @State private var pushed = false
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { inside in
+                if inside, on, !pushed { NSCursor.pointingHand.push(); pushed = true }
+                else if !inside, pushed { NSCursor.pop(); pushed = false }
+            }
+            .onDisappear { if pushed { NSCursor.pop(); pushed = false } }
     }
 }
 #endif
