@@ -420,8 +420,7 @@ struct ProfilePage: View {
                 }
                 GridRow {
                     Readout("Read aloud").frame(width: 140, alignment: .leading)
-                    ObMenu(options: voiceChoices, selection: Binding(get: { profile.voice ?? "" }, set: { profile.voice = $0.isEmpty ? nil : $0 }))
-                        .frame(maxWidth: 260).accessibilityLabel("Read aloud voice")
+                    ProfileVoicePicker(voice: $profile.voice)
                 }
             }
             Text("Switching to a profile with a different speech model loads it; recording starts right away meanwhile. The Read aloud voice also reads this profile's dictations back, and is used by the Read aloud hotkey while this profile is active.")
@@ -459,17 +458,6 @@ struct ProfilePage: View {
         }
         if let own = profile.model, !own.isEmpty, !choices.contains(where: { $0.0.caseInsensitiveCompare(own) == .orderedSame }) {
             choices.append((own, (ModelID(own)?.shortName ?? own) + " (not available)"))
-        }
-        return choices
-    }
-
-    /// One voice list on the Mac (one engine): Read aloud's own voice first, named.
-    private var voiceChoices: [(String, String)] {
-        let voices = ReadAloudPlayer.voices
-        let current = model.settings.ttsVoice.flatMap { id in voices.first { $0.identifier == id }?.name } ?? "System voice"
-        var choices = [("", "Same as Read aloud (\(current))")] + voices.map { ($0.identifier, $0.name) }
-        if let own = profile.voice, !own.isEmpty, !voices.contains(where: { $0.identifier == own }) {
-            choices.append((own, "Voice not installed"))
         }
         return choices
     }

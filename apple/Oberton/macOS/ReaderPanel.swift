@@ -113,8 +113,10 @@ final class ReaderController {
             x = [screen.minX + Self.margin, screen.midX - size.width / 2, screen.maxX - size.width - Self.margin][col]
             y = [screen.maxY - size.height - Self.margin, screen.midY - size.height / 2, screen.minY + Self.margin][row]
         }
-        x = max(screen.minX, min(x, screen.maxX - size.width))
-        y = min(screen.maxY - size.height, max(y, screen.minY))
+        // Kept inside its screen; once dragged, anywhere on the desktop (all screens), as Windows' WindowDrag.
+        let bounds = anchor == nil ? screen : NSScreen.screens.reduce(screen) { $0.union($1.frame) }
+        x = max(bounds.minX, min(x, bounds.maxX - size.width))
+        y = min(bounds.maxY - size.height, max(y, bounds.minY))
         return CGRect(origin: CGPoint(x: x.rounded(), y: y.rounded()), size: size)
     }
 
@@ -145,6 +147,10 @@ enum ReaderSnapshots {
         2. Press the shortcut. The player opens at its own place on the screen, and follows the words as they are read. You can click any word to read from there, or skip back and forth by fifteen seconds at a time.
         """
         let long = "This is a very long sentence that goes on and on, with clause after clause, so that the compact view has to show a window around the word being read rather than the whole thing, and it keeps going for a while longer still, past where any player could show it on two lines."
+        func askOnly(_ voice: String) {
+            if VoiceCatalog.isInstalled(voice) { player.showMessage("(\(voice) is downloaded in this data folder)") }
+            else { player.read(md, voice: voice, speed: 1) }
+        }
         let shots: [(String, () -> Void, Bool)] = [
             ("reader-playing", { player.showForSnapshot(md, word: "text", status: .playing) }, false),
             ("reader-paused", { player.showForSnapshot(md, word: "shortcut", status: .paused, speed: 1.25) }, false),
@@ -153,7 +159,12 @@ enum ReaderSnapshots {
             ("reader-long-sentence", { player.showForSnapshot(long, word: "whole", status: .playing, speed: 1.65) }, false),
             ("reader-expanded", { player.showForSnapshot(md, word: "Press", status: .playing) }, true),
             ("reader-clipboard", { player.askToReadClipboard(md, voice: nil, speed: 1) }, false),
-            ("reader-nothing", { player.read("--- * * *", voice: nil, speed: 1) }, false),
+            ("reader-nothing", { player.read("--- * * *", voice: VoiceCatalog.systemVoices().first?.id, speed: 1) }, false),
+            // Only when the voice isn't here (otherwise this would really read aloud).
+            ("reader-download-kokoro", { askOnly("af_heart") }, false),
+            ("reader-download-piper", { askOnly("piper:en_US-ryan-high") }, false),
+            ("reader-downloading", { player.showDownloadForSnapshot(VoiceProgress(step: 2, totalSteps: 3, title: "Downloading the voice model", fraction: 0.42, detail: "About 325 MB")) }, false),
+            ("reader-clipboard-expanded", { player.askToReadClipboard(md, voice: nil, speed: 1) }, true),
             ("reader-select-notice", { player.showMessage("Select some text, then press \(model.settings.speakHotkey) to hear it read aloud.") }, false),
         ]
         for (name, setUp, expanded) in shots {
@@ -172,6 +183,26 @@ enum ReaderSnapshots {
                 host.cacheDisplay(in: host.bounds, to: rep)
                 try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: dir).appending(path: "\(name).png"))
                 print("\(name).png \(Int(host.bounds.width))×\(Int(host.bounds.height))")
+            }
+        }
+        // Settings › Models › READ ALOUD VOICE and a profile's voice pickers, which the page snapshots cut off.
+        for (name, dark) in [("models-voices-light", false), ("models-voices-dark", true)] {
+            var settings = model.settings
+            settings.theme = dark ? .dark : .light
+            let content = VStack(alignment: .leading, spacing: 16) {
+                ReadAloudVoiceRows()
+                ProfileVoicePicker(voice: .constant("piper:en_US-amy-medium"))
+            }
+            .padding(24).frame(width: 760).environmentObject(model).obertonTheme(settings)
+            let host = NSHostingView(rootView: content)
+            host.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            let window = NSWindow(contentRect: CGRect(origin: .zero, size: host.fittingSize), styleMask: .borderless, backing: .buffered, defer: false)
+            window.contentView = host
+            host.layoutSubtreeIfNeeded()
+            if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+                host.cacheDisplay(in: host.bounds, to: rep)
+                try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: dir).appending(path: "\(name).png"))
+                print("\(name).png")
             }
         }
         exit(0)

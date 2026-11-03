@@ -55,7 +55,8 @@ struct ObMenu<Value: Hashable>: View {
             }
             .foregroundStyle(ob.ink)
             .padding(.horizontal, 8).padding(.vertical, 6)
-            .frame(maxWidth: width ?? .infinity)
+            // A given width is the combo's own (WPF ComboBox Width), not just a cap.
+            .frame(minWidth: width, maxWidth: width ?? .infinity)
             .overlay(Rectangle().strokeBorder(focused ? ob.accent : ob.divider, lineWidth: 1))
             .contentShape(Rectangle())
         }
@@ -143,6 +144,9 @@ struct ChoiceCard<Content: View>: View {
 struct PositionPicker: View {
     @Binding var position: OverlayPosition
     var radius: CGFloat = 2
+    /// The frame's line and ground: ink and none by default; the Read aloud page's is a rounded Border on Window.
+    var stroke: Color? = nil
+    var fill: Color? = nil
     @Environment(\.ob) private var ob
 
     var body: some View {
@@ -158,7 +162,8 @@ struct PositionPicker: View {
         }
         .padding(4)
         .frame(width: 220, height: 124)
-        .overlay(RoundedRectangle(cornerRadius: radius).strokeBorder(ob.ink, lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: radius).fill(fill ?? .clear))
+        .overlay(RoundedRectangle(cornerRadius: radius).strokeBorder(stroke ?? ob.ink, lineWidth: 1))
     }
 }
 

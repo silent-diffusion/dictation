@@ -66,7 +66,7 @@ struct ModelsSection: View {
                 cloudRow(openai, name: openai.name, detail: "OpenAI-compatible · From \(model.settings.cloud.openAIBaseURL)")
             }
             heading("Read aloud voice", top: 22)
-            voiceRow
+            ReadAloudVoiceRows(busy: download != nil || model.whisperDownload != nil)
             #if os(macOS)
             advanced.padding(.top, 24)
             #endif
@@ -228,19 +228,6 @@ struct ModelsSection: View {
         if model.settings.cloud.keepOffline { badges.append(("Blocked · offline", .outline)) }
         let action: (String, () -> Void)? = !hasKey ? ("Add key", { nav.goSettings(.cloud) }) : isDefault(id) ? nil : ("Use this", { use(id) })
         return ModelRow(name: name, badges: badges, detail: detail, action: action, primary: hasKey, enabled: !busy)
-    }
-
-    // MARK: Read aloud
-
-    /// The Mac's voices are the system's (Windows' "Windows voices" row; its Kokoro and Piper rows come with those).
-    private var voiceRow: some View {
-        let voices = ReadAloudPlayer.voices
-        let names = voices.map(\.name)
-        return ModelRow(name: "System voices",
-                        badges: [("Active", .active), voices.isEmpty ? ("None", .outline) : ("Installed", .plain)],
-                        detail: voices.isEmpty
-                            ? "No system voices found. Add some under System Settings › Accessibility › Spoken Content."
-                            : "\(voices.count) installed with \(Self.system) (\(names.prefix(12).joined(separator: ", "))\(names.count > 12 ? ", …" : "")); instant, no download")
     }
 
     private static var system: String {

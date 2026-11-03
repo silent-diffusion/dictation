@@ -25,7 +25,7 @@ struct ReaderCard: View {
 
     var body: some View {
         if player.isShowing {
-            let expanded = model.settings.readerExpanded && player.question == nil
+            let expanded = model.settings.readerExpanded
             WidthCap(width: min((expanded ? Self.expandedWidth : Self.compactWidth) + 28, room.width)) {
                 Group {
                     if let q = player.question { question(q) } else { playerView(expanded: expanded) }
@@ -34,7 +34,8 @@ struct ReaderCard: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(RoundedRectangle(cornerRadius: 16).fill(darkInk.opacity(min(max(opacity, 0.3), 1))))
                 .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Self.ink.opacity(0.14), lineWidth: 1))
-                .shadow(color: .black.opacity(0.35), radius: 12, y: 4)
+                // WPF's DropShadowEffect: 24 blur, 4 deep at 315°, so it falls right and down.
+                .shadow(color: .black.opacity(0.35), radius: 12, x: 2.83, y: 2.83)
             }
             .onHover { hover = $0 }
             // After the end the card stays a moment (to read again or skip back), and longer while the pointer is on it.
@@ -77,7 +78,7 @@ struct ReaderCard: View {
                             .overlay(Capsule().strokeBorder(Self.ink.opacity(0.22), lineWidth: 1))
                             .contentShape(Capsule())
                     }
-                    .buttonStyle(ReaderPress())
+                    .buttonStyle(SpeedPress())
                     .help("Choose a speed").accessibilityLabel("Choose a speed")
                     .popover(isPresented: $speeds, arrowEdge: .top) { speedGrid }
                     RoundButton(size: 30, help: "Faster") { setSpeed(player.speed + ReadAloudPlayer.speedStep) } label: {
@@ -104,10 +105,14 @@ struct ReaderCard: View {
             .fixedSize(horizontal: false, vertical: true)
             Ruler(progress: player.progress, accent: accent).frame(height: 6).padding(EdgeInsets(top: 12, leading: 2, bottom: 10, trailing: 2))
             if expanded {
-                ReaderFullText(doc: player.doc, word: currentWord, accent: accent) { player.jump(to: $0) }
+                ReaderFullText(doc: player.doc, sentences: player.sentences, sentence: player.index, word: currentWord, accent: accent) {
+                    player.jump(to: $0)
+                }
                     .padding(.leading, 2)
             } else {
-                Text(sentenceLine).font(Ob.sans(16)).lineSpacing(5).lineLimit(2).truncationMode(.tail)
+                // Every line 24 high, a one-line sentence too (LineHeight 24, MaxHeight 48).
+                Text(sentenceLine).font(Ob.sans(16)).lineSpacing(Ob.lineSpacing(16, lineHeight: 24)).lineLimit(2).truncationMode(.tail)
+                    .padding(.vertical, (24 - 16 * 1.2) / 2)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 2)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -211,8 +216,9 @@ struct ReaderCard: View {
         if n > window {
             from = min(max(wordStart - window / 3, 0), n - window)
             if from > 0 {
+                // As Windows: no space after it means from the start (IndexOf gives −1, plus one).
                 let space = sentence.range(of: " ", range: NSRange(location: from, length: n - from)).location
-                from = space == NSNotFound ? from : space + 1
+                from = space == NSNotFound ? 0 : space + 1
             }
             to = min(n, from + window)
         }
@@ -251,11 +257,28 @@ struct ReaderCard: View {
                 RoundButton(size: 30, help: "Close") { player.stop() } label: { cross }.accessibilityLabel("Close")
             }
             if !q.body.isEmpty {
-                Text(q.body).font(Ob.sans(13.5)).foregroundStyle(Self.ink.opacity(0.7)).lineSpacing(3)
+                Text(q.body).font(Ob.sans(13.5)).foregroundStyle(Self.ink.opacity(0.7))
+                    .lineSpacing(Ob.lineSpacing(13.5, lineHeight: 20)).padding(.vertical, (20 - 13.5 * 1.2) / 2)
                     .lineLimit(4).truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(EdgeInsets(top: 8, leading: 2, bottom: 0, trailing: 12))
             }
+            if let progress = q.progress {
+                // Downloading the voice: a 4 pt bar instead of the buttons; ✕ cancels.
+                GeometryReader { g in
+                    ZStack(alignment: .leading) {
+                        Rectangle().fill(Self.ink.opacity(0x26 / 255.0))
+                        Rectangle().fill(Self.ink).frame(width: g.size.width * min(1, max(0, progress ?? 0)))
+                    }
+                }
+                .frame(height: 4).padding(EdgeInsets(top: 12, leading: 2, bottom: 0, trailing: 12))
+            } else {
+                questionButtons(q)
+            }
+        }
+    }
+
+    private func questionButtons(_ q: ReaderQuestion) -> some View {
             HStack(spacing: 8) {
                 Button { q.action() } label: {
                     pill(q.primary.uppercased(), fill: Self.ink, text: darkInk, weight: .semibold)
@@ -265,7 +288,6 @@ struct ReaderCard: View {
                     .buttonStyle(ReaderPress())
             }
             .padding(.top, 14)
-        }
     }
 
     private func pill(_ title: String, fill: Color, text: Color, weight: Font.Weight) -> some View {
@@ -296,13 +318,36 @@ private struct RoundButton<Label: View>: View {
     }
 }
 
-/// Hover 0.8, pressed 0.6, as on Windows.
+/// Hover 0.8, pressed 0.6, the hand cursor, as on Windows; a disabled button doesn't react.
 private struct ReaderPress: ButtonStyle {
-    @State private var hover = false
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .opacity(configuration.isPressed ? 0.6 : hover ? 0.8 : 1)
-            .onHover { hover = $0 }
+    func makeBody(configuration: Configuration) -> some View { Look(configuration: configuration) }
+
+    private struct Look: View {
+        let configuration: Configuration
+        @State private var hover = false
+        @Environment(\.isEnabled) private var enabled
+        var body: some View {
+            configuration.label
+                .opacity(configuration.isPressed ? 0.6 : hover && enabled ? 0.8 : 1)
+                .onHover { hover = $0 }
+                .handCursor(enabled)
+        }
+    }
+}
+
+/// The speed button: a 10 % white wash under the pointer, and the hand cursor.
+private struct SpeedPress: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View { Look(configuration: configuration) }
+
+    private struct Look: View {
+        let configuration: Configuration
+        @State private var hover = false
+        var body: some View {
+            configuration.label
+                .background(Capsule().fill(Color.white.opacity(hover ? 0.1 : 0)))
+                .onHover { hover = $0 }
+                .handCursor()
+        }
     }
 }
 
@@ -340,6 +385,9 @@ typealias PlatformFont = UIFont
 /// scrolls; a click on a word reads from there. TextKit, for the click's character and the word's place.
 struct ReaderFullText {
     var doc: MarkdownDoc
+    /// The reading's sentences and the one being read: those before it are white, text between sentences stays dim.
+    var sentences: [NSRange] = []
+    var sentence = 0
     var word: NSRange
     var accent: Color
     var onClick: (Int) -> Void
@@ -350,7 +398,10 @@ struct ReaderFullText {
 
     final class Coordinator: NSObject {
         var shown: MarkdownDoc?
+        /// Windows doesn't forget a scroll when the next reading starts, so this isn't reset for a new text.
         var userScrolledAt = Date.distantPast
+        /// The follow is scrolling (that isn't the user's).
+        var following = false
         var onClick: (Int) -> Void = { _ in }
         var display = ReaderDisplay(doc: MarkdownDoc.parse(""))
     }
@@ -359,14 +410,29 @@ struct ReaderFullText {
 
     var text: String { doc.plain }
 
-    /// Colour what was read white, the word in the accent, the rest dimmed; bullets and quote bars stay dimmed.
+    /// Colour the sentences read so far white, the current one white up to the word, the word in the accent, and
+    /// the rest dimmed; bullets, quote bars and text between sentences (rules, wordless lines) stay dimmed, as on
+    /// Windows, where only sentence spans change colour.
     func paint(_ storage: NSTextStorage, _ display: ReaderDisplay) {
         let n = storage.length
         let start = min(display.toDisplay(word.location), n), end = min(max(start, display.toDisplay(NSMaxRange(word))), n)
+        func shown(_ r: NSRange) -> NSRange {
+            let a = min(display.toDisplay(r.location), n)
+            return NSRange(location: a, length: max(0, min(display.toDisplay(NSMaxRange(r)), n) - a))
+        }
         storage.beginEditing()
-        storage.addAttribute(.foregroundColor, value: PlatformColor(ReaderCard.ink), range: NSRange(location: 0, length: start))
+        storage.addAttribute(.foregroundColor, value: PlatformColor(Self.dim), range: NSRange(location: 0, length: n))
+        for (i, r) in sentences.enumerated() where i < sentence {
+            storage.addAttribute(.foregroundColor, value: PlatformColor(ReaderCard.ink), range: shown(r))
+        }
+        if sentences.indices.contains(sentence) {
+            let s = shown(sentences[sentence])
+            let spoken = NSRange(location: s.location, length: max(0, min(start, NSMaxRange(s)) - s.location))
+            storage.addAttribute(.foregroundColor, value: PlatformColor(ReaderCard.ink), range: spoken)
+        } else if sentences.isEmpty {
+            storage.addAttribute(.foregroundColor, value: PlatformColor(ReaderCard.ink), range: NSRange(location: 0, length: start))
+        }
         storage.addAttribute(.foregroundColor, value: PlatformColor(accent), range: NSRange(location: start, length: end - start))
-        storage.addAttribute(.foregroundColor, value: PlatformColor(Self.dim), range: NSRange(location: end, length: n - end))
         for r in display.prefixes { storage.addAttribute(.foregroundColor, value: PlatformColor(Self.dim), range: r) }
         storage.endEditing()
     }
@@ -411,7 +477,6 @@ struct ReaderDisplay {
         var starts: [(Int, Int, Int)] = []
         let plain = doc.plain as NSString
         var delta = 0
-        let mono = Ob.monoFont(13.5)
         for (i, line) in doc.lines.enumerated() {
             let prefix: String = switch line.kind {
             case .bullet: String(repeating: " ", count: 4 * line.level) + "  •  "
@@ -423,8 +488,8 @@ struct ReaderDisplay {
             let p = NSMutableParagraphStyle()
             p.minimumLineHeight = max(23, (size * 1.35).rounded())
             p.maximumLineHeight = p.minimumLineHeight
-            // Room above a heading (Windows adds an empty line).
-            if line.kind == .heading, i > 0, doc.lines[i - 1].length > 0 { p.paragraphSpacingBefore = 12 }
+            // Room above a heading: Windows adds an empty line (23 high).
+            if line.kind == .heading, i > 0, doc.lines[i - 1].length > 0 { p.paragraphSpacingBefore = 23 }
             let base: [NSAttributedString.Key: Any] = [.font: PlatformFont.systemFont(ofSize: 15), .paragraphStyle: p]
             let lineShown = out.length
             if !prefix.isEmpty {
@@ -441,12 +506,16 @@ struct ReaderDisplay {
                 var j = at + 1
                 while j < end, doc.styleAt(j) == style { j += 1 }
                 var a = base
-                var font: PlatformFont = line.kind == .code ? mono : .systemFont(ofSize: size, weight: line.kind == .heading ? .semibold : .regular)
-                if style.contains(.bold) { font = .systemFont(ofSize: size, weight: .bold) }
-                if style.contains(.code) { font = mono; a[.backgroundColor] = PlatformColor(white: 1, alpha: 0x1F / 255.0) }
+                // Inline code keeps the line's size (15, or the heading's) in mono; bold on a code line stays mono.
+                let isMono = line.kind == .code || style.contains(.code)
+                let monoSize = line.kind == .code ? 13.5 : size
+                let weight: PlatformFont.Weight = style.contains(.bold) ? .bold : line.kind == .heading ? .semibold : .regular
+                var font: PlatformFont = isMono ? Ob.monoFont(monoSize, weight) : .systemFont(ofSize: size, weight: weight)
+                if style.contains(.code) { a[.backgroundColor] = PlatformColor(white: 1, alpha: 0x1F / 255.0) }
                 if line.kind == .quote || style.contains(.italic) { font = Self.italic(font) }
-                if style.contains(.link) { a[.underlineStyle] = NSUnderlineStyle.single.rawValue }
+                // WPF's strike replaces a link's underline rather than adding to it.
                 if style.contains(.strike) { a[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
+                else if style.contains(.link) { a[.underlineStyle] = NSUnderlineStyle.single.rawValue }
                 a[.font] = font
                 out.append(NSAttributedString(string: plain.substring(with: NSRange(location: at, length: j - at)), attributes: a))
                 at = j
@@ -463,6 +532,9 @@ struct ReaderDisplay {
         guard let line = starts.last(where: { $0.plain <= plain }) else { return plain }
         return plain + line.delta
     }
+
+    /// A position of the shown text is a bullet, number indent or quote bar.
+    func isPrefix(_ shown: Int) -> Bool { prefixes.contains { NSLocationInRange(shown, $0) } }
 
     /// A position of the shown text (a click) in the plain text; a click on a bullet is the start of its line.
     func toPlain(_ shown: Int) -> Int {
@@ -495,11 +567,13 @@ extension ReaderFullText: NSViewRepresentable {
         let coordinator = context.coordinator
         textView.onClick = { coordinator.userScrolledAt = .distantPast; coordinator.onClick($0) }
         let scroll = FollowScrollView()
-        scroll.onUserScroll = { coordinator.userScrolledAt = Date() }
+        // Any scroll that isn't the follow's (wheel, bar, arrows, page clicks) pauses the follow.
+        scroll.onUserScroll = { if !coordinator.following { coordinator.userScrolledAt = Date() } }
         scroll.drawsBackground = false
         scroll.hasVerticalScroller = true
+        // A scroll bar whenever the text overflows, as WPF's Auto.
         scroll.autohidesScrollers = true
-        scroll.scrollerStyle = .overlay
+        scroll.scrollerStyle = .legacy
         scroll.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 4, right: 12)
         scroll.automaticallyAdjustsContentInsets = false
         scroll.documentView = textView
@@ -514,19 +588,23 @@ extension ReaderFullText: NSViewRepresentable {
             coordinator.shown = doc
             coordinator.display = ReaderDisplay(doc: doc)
             storage.setAttributedString(coordinator.display.attributed)
-            coordinator.userScrolledAt = .distantPast
+            coordinator.following = true
             scroll.contentView.scroll(to: .zero)
+            coordinator.following = false
         }
         let display = coordinator.display
-        coordinator.onClick = { onClick(display.toPlain($0)) }
+        // Only a click on a sentence's words reads from there; bullets and numbers don't count.
+        coordinator.onClick = { at in if !display.isPrefix(at) { onClick(display.toPlain(at)) } }
         paint(storage, display)
         DispatchQueue.main.async {
             guard Date().timeIntervalSince(coordinator.userScrolledAt) >= Self.followPause,
                   let rect = wordRect(layout, container, display) else { return }
             let visible = scroll.contentView.bounds
             guard let y = followOffset(rect: rect, visible: visible, content: textView.frame.height) else { return }
+            coordinator.following = true
             scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
             scroll.reflectScrolledClipView(scroll.contentView)
+            coordinator.following = false
         }
     }
 
@@ -546,9 +624,10 @@ extension ReaderFullText: NSViewRepresentable {
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             NotificationCenter.default.removeObserver(self)
-            NotificationCenter.default.addObserver(self, selector: #selector(liveScroll), name: NSScrollView.willStartLiveScrollNotification, object: self)
+            contentView.postsBoundsChangedNotifications = true
+            NotificationCenter.default.addObserver(self, selector: #selector(scrolled), name: NSView.boundsDidChangeNotification, object: contentView)
         }
-        @objc private func liveScroll() { onUserScroll() }
+        @objc private func scrolled() { onUserScroll() }
     }
 
     /// A click reads from the word under the pointer.
@@ -557,6 +636,17 @@ extension ReaderFullText: NSViewRepresentable {
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
         override func resetCursorRects() { addCursorRect(visibleRect, cursor: .pointingHand) }
         override func mouseDown(with event: NSEvent) {
+            // The player can be dragged by its text too (Windows' WindowDrag): a press that moves drags the panel; one
+            // that doesn't is a click on a word.
+            guard let window else { return }
+            let start = event.locationInWindow
+            while let next = window.nextEvent(matching: [.leftMouseUp, .leftMouseDragged]) {
+                if next.type == .leftMouseUp { break }
+                if hypot(next.locationInWindow.x - start.x, next.locationInWindow.y - start.y) > 3 {
+                    window.performDrag(with: event)
+                    return
+                }
+            }
             guard let layout = layoutManager, let container = textContainer else { return }
             var point = convert(event.locationInWindow, from: nil)
             point.x -= textContainerOrigin.x
@@ -590,11 +680,10 @@ extension ReaderFullText: UIViewRepresentable {
             coordinator.shown = doc
             coordinator.display = ReaderDisplay(doc: doc)
             textView.attributedText = coordinator.display.attributed
-            coordinator.userScrolledAt = .distantPast
             textView.setContentOffset(.zero, animated: false)
         }
         let display = coordinator.display
-        coordinator.onClick = { onClick(display.toPlain($0)) }
+        coordinator.onClick = { at in if !display.isPrefix(at) { onClick(display.toPlain(at)) } }
         paint(textView.textStorage, display)
         DispatchQueue.main.async {
             guard Date().timeIntervalSince(coordinator.userScrolledAt) >= Self.followPause,
@@ -636,9 +725,15 @@ extension ReaderFullText.Coordinator: UITextViewDelegate {
 /// overlay", or a place of its own on the 3×3 picker (dimmed and fixed while it follows the overlay).
 struct ReaderPositionPicker: View {
     @EnvironmentObject var model: AppModel
+    /// The Read aloud page draws the miniature screen as a rounded Border on Window (radius 8); Layout as ink.
+    var stroke: Color? = nil
+    var fill: Color? = nil
+    var radius: CGFloat = 2
 
     var body: some View {
-        PositionPicker(position: Binding(get: { place }, set: { model.settings.readerPosition = .at($0) }))
+        PositionPicker(position: Binding(get: { place }, set: { model.settings.readerPosition = .at($0) }), radius: radius,
+                       stroke: stroke, fill: fill)
+            .accessibilityElement(children: .contain).accessibilityLabel("Player position")
             .disabled(samePlace)
             .opacity(samePlace ? 0.45 : 1)
     }

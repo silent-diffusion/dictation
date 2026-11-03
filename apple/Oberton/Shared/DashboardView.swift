@@ -398,14 +398,17 @@ struct SignalPathCell: View {
         ]
     }
 
-    /// The profile's voice (App.VoiceFor): its short name ("Samantha"), or "Not installed" when that voice isn't on this
-    /// Mac. System voices start at once, so they are always "ready", as Windows' own voices are.
-    // Lane C: Kokoro/Piper voices add Windows' "loaded" (the voice server running), "idle" and "downloads on first use".
+    /// The profile's voice (App.VoiceFor): its short name ("Heart"), or "Not installed" when it isn't downloaded (or
+    /// that system voice is gone). System voices are always "ready", as Windows' own are; Kokoro and Piper are
+    /// "loaded" while the voice engine holds them, "idle" when downloaded, else "downloads on first use".
     private var voice: PathNode {
-        let id = model.activeProfile.voice ?? model.settings.ttsVoice ?? ""
-        let name = id.isEmpty ? "System voice" : AVSpeechSynthesisVoice(identifier: id)?.name
-        return PathNode(label: "READ ALOUD", title: name.map { String($0.components(separatedBy: " (")[0]) } ?? "Not installed",
-                        status: "ready", state: .ok) { nav.go(.readAloud) }
+        let id = model.activeProfile.voice ?? model.settings.ttsVoice
+        let system = VoiceCatalog.isSystemVoice(id)
+        let installed = VoiceCatalog.isInstalled(id)
+        let loaded = SpeechVoices.shared.isLoaded
+        return PathNode(label: "READ ALOUD", title: installed ? VoiceCatalog.shortName(id) : "Not installed",
+                        status: system ? "ready" : loaded ? "loaded" : installed ? "idle" : "downloads on first use",
+                        state: system || loaded ? .ok : .off) { nav.go(.readAloud) }
     }
 
     /// "Unload in 12:34" counts down from the last dictation while anything is in memory, the speech model or an AI
