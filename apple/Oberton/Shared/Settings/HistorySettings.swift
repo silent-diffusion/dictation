@@ -21,32 +21,41 @@ struct HistorySettingsSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Caption("Recent dictations are kept on this \(Device.noun) with everything about them: the recording, the transcription, the AI's output and what was inserted where. They are stored in Oberton's data folder, which app updates never touch.", size: 12.5)
-            SwitchCard {
+            Caption("Recent dictations are kept on this \(Device.noun) with everything about them: the recording, the transcription, the AI's output and what was inserted where. They are stored in Oberton's data folder, which app updates never touch.")
+            // The card's StackPanel Margin 18,0: the first switch flush, the second with 4 above and below.
+            VStack(spacing: 0) {
                 ObSwitch("Keep a history of dictations", isOn: $model.settings.keepHistory)
+                Hairline()
                 ObSwitch("Keep the recordings", detail: "So you can play a dictation back. About 2 MB per minute of speech.",
                          isOn: $model.settings.saveHistoryAudio)
+                    .padding(.vertical, 4)
             }
+            .padding(.horizontal, 18)
+            .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
             .padding(.top, 8)
-            FieldLabel("How long to keep")
+            label("How long to keep", top: 22)
+            // One grid (Margin 18,12): the two rows with a hairline straight between them.
             VStack(spacing: 0) {
                 row("Text", detail: "The dictation itself: what was heard, the AI's edit, and where it went.") {
                     KeepMenu(audio: false, selection: Binding(get: { Keep(count: model.settings.historyLimit, days: model.settings.historyDays) },
                                                               set: chooseText))
+                        .accessibilityLabel("How long to keep the text of dictations")
                 }
                 Hairline()
                 row("Recordings", detail: "The audio, for playing a dictation back. Never kept longer than its text.") {
                     KeepMenu(audio: true, selection: Binding(get: { Keep(count: model.settings.audioLimit, days: model.settings.audioDays) },
                                                              set: { model.settings.audioLimit = $0.count; model.settings.audioDays = $0.days; changed() }))
                         .disabled(!model.settings.saveHistoryAudio)
+                        .accessibilityLabel("How long to keep the recordings of dictations")
                 }
             }
+            .padding(EdgeInsets(top: 12, leading: 18, bottom: 12, trailing: 18))
             .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
-            Caption("Keep a number of the newest, or everything from a recent stretch of time. Older ones are deleted as new ones come in, every hour, and right away when you choose less. A recording deleted this way leaves its dictation's text in History.", size: 12.5)
+            Caption("Keep a number of the newest, or everything from a recent stretch of time. Older ones are deleted as new ones come in, every hour, and right away when you choose less. A recording deleted this way leaves its dictation's text in History.", bottom: 0)
                 .padding(.top, 6)
-            FieldLabel("Stored in")
-            Text(model.historyFolder.path(percentEncoded: false)).font(Ob.mono(12)).textSelection(.enabled)
-            Caption("\(model.history.count) dictations, \(String(format: "%.1f", Double(size) / 1_048_576).replacingOccurrences(of: ".0", with: "")) MB.", size: 12.5)
+            label("Stored in", top: 18)
+            Text(model.historyFolder.path(percentEncoded: false)).font(Ob.mono(12)).fixedSize(horizontal: false, vertical: true)
+            Caption("\(model.history.count) dictations, \(Self.megabytes(size)) MB.", bottom: 0)
                 .padding(.top, 4)
             HStack(spacing: 8) {
                 #if os(macOS)
@@ -56,55 +65,70 @@ struct HistorySettingsSection: View {
                 }
                 .buttonStyle(.quiet)
                 #endif
-                Button("Delete all history…") { confirmClear = true }.buttonStyle(.quiet).disabled(model.history.isEmpty)
+                Button("Delete all history…") { confirmClear = true }.buttonStyle(.quiet)
             }
             .padding(.top, 8)
-            FieldLabel("Analytics word tally")
+            label("Analytics word tally", top: 24)
             SwitchCard {
                 ObSwitch("Count the words I dictate, for Analytics",
                          detail: "After each dictation: the words and phrases that went in, the words the AI corrected and the fillers it took out, the hour, and how much the profile changed. Counts only, never sentences, kept in words.json next to History.",
                          isOn: $model.settings.keepWordTally)
             }
             Button("Reset word tally…") { confirmResetTally = true }.buttonStyle(.quiet).padding(.top, 8)
-                .disabled(model.words.days.isEmpty)
-            FieldLabel("Dashboard counts")
-            // Windows also counts the web site in a browser; the Mac can't read it in the sandbox, so that part is left out.
-            Caption("The dashboard keeps its own daily tallies in usage.json next to History: per day, how many dictations and words, seconds spoken, the turnaround, AI edits kept, texts read aloud, and dictations per app (the app's name only). Never any text, audio or window titles. They stay when you delete History or turn it off.", size: 12.5)
+            label("Dashboard counts", top: 24)
+            // Lane J: Windows says "(the app's name only; in a browser, also the site's name, such as Gmail)" here; put
+            // the site clause back in the direct build once the dashboard counts sites.
+            Caption("The dashboard keeps its own daily tallies in usage.json next to History: per day, how many dictations and words, seconds spoken, the turnaround, AI edits kept, texts read aloud, and dictations per app (the app's name only). Never any text, audio or window titles. They stay when you delete History or turn it off.")
             Button("Reset dashboard counts…") { confirmReset = true }.buttonStyle(.quiet).padding(.top, 8)
         }
         .onAppear { size = model.historySizeBytes }
         .onChange(of: model.history) { size = model.historySizeBytes }
         .onChange(of: model.settings.saveHistoryAudio) { changed() }
-        .confirmationDialog(shorter.map { "This deletes \($0.gone) older dictation\($0.gone == 1 ? "" : "s") from History right away, with \($0.gone == 1 ? "its recording" : "their recordings"). Go ahead?" } ?? "",
-                            isPresented: Binding(get: { shorter != nil }, set: { if !$0 { shorter = nil } }), titleVisibility: .visible) {
-            Button("Delete them", role: .destructive) {
+        // Windows' MessageBoxes: titled Oberton, Yes and No.
+        .alert("Oberton", isPresented: Binding(get: { shorter != nil }, set: { if !$0 { shorter = nil } })) {
+            Button("Yes") {
                 if let keep = shorter?.keep { setText(keep) }
                 shorter = nil
             }
+            Button("No", role: .cancel) { shorter = nil }
+        } message: {
+            Text(shorter.map { "This deletes \($0.gone) older dictation\($0.gone == 1 ? "" : "s") from History right away, with \($0.gone == 1 ? "its recording" : "their recordings"). Go ahead?" } ?? "")
         }
-        .confirmationDialog("Delete every dictation in History, with its recording? This can't be undone.", isPresented: $confirmClear, titleVisibility: .visible) {
-            Button("Delete all history", role: .destructive) { model.clearHistory() }
-        }
-        .confirmationDialog("Reset the dashboard's daily counts (words per day, streaks, apps)? History itself is not touched.",
-                            isPresented: $confirmReset, titleVisibility: .visible) {
-            Button("Reset counts", role: .destructive) { model.resetUsage() }
-        }
-        .confirmationDialog("Reset the Analytics word tally (words, phrases, corrections, fillers, hours, profiles)? History and the dashboard counts are not touched.",
-                            isPresented: $confirmResetTally, titleVisibility: .visible) {
-            Button("Reset word tally", role: .destructive) { model.resetWordTally() }
-        }
+        .alert("Oberton", isPresented: $confirmClear) {
+            Button("Yes") { model.clearHistory(); size = model.historySizeBytes }
+            Button("No", role: .cancel) {}
+        } message: { Text("Delete every dictation in History, with its recording? This can't be undone.") }
+        .alert("Oberton", isPresented: $confirmResetTally) {
+            Button("Yes") { model.resetWordTally() }
+            Button("No", role: .cancel) {}
+        } message: { Text("Reset the Analytics word tally (words, phrases, corrections, fillers, hours, profiles)? History and the dashboard counts are not touched.") }
+        .alert("Oberton", isPresented: $confirmReset) {
+            Button("Yes") { model.resetUsage() }
+            Button("No", role: .cancel) {}
+        } message: { Text("Reset the dashboard's daily counts (words per day, streaks, apps)? History itself is not touched.") }
+    }
+
+    /// "{mb:0.#}": one decimal at most, none when it is .0.
+    static func megabytes(_ bytes: Int64) -> String {
+        let mb = (Double(bytes) / 1_048_576 * 10).rounded() / 10
+        return mb == mb.rounded() ? String(Int(mb)) : String(format: "%.1f", mb)
+    }
+
+    /// A FieldLabel with the top margin the Windows page gives it.
+    private func label(_ text: String, top: CGFloat) -> some View {
+        Text(text.uppercased()).font(Ob.mono(12, .bold)).foregroundStyle(ob.ink).padding(.top, top).padding(.bottom, 6)
     }
 
     private func row<C: View>(_ title: String, detail: String, @ViewBuilder control: () -> C) -> some View {
-        HStack {
+        HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(Ob.sans(13.5))
-                Caption(detail, size: 12)
+                Text(title).font(Ob.sans(Ob.body)).foregroundStyle(ob.ink)
+                Text(detail).font(Ob.sans(12)).foregroundStyle(ob.muted).fixedSize(horizontal: false, vertical: true)
             }
-            Spacer(minLength: 16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.trailing, 16)
             control()
         }
-        .padding(EdgeInsets(top: 12, leading: 18, bottom: 12, trailing: 18))
     }
 
     /// Text kept for less time than now deletes dictations right away: say how many first (ConfirmShorter).
@@ -133,6 +157,7 @@ private struct KeepMenu: View {
     @Binding var selection: HistorySettingsSection.Keep
     @Environment(\.ob) private var ob
     @Environment(\.isEnabled) private var enabled
+    @FocusState private var focused
 
     private typealias Keep = HistorySettingsSection.Keep
 
@@ -147,21 +172,24 @@ private struct KeepMenu: View {
     var body: some View {
         Menu {
             item(Keep())
-            SwiftUI.Section("The newest") { ForEach(counts, id: \.self) { item(Keep(count: $0)) } }
-            SwiftUI.Section("From the last") { ForEach(ages, id: \.self) { item(Keep(days: $0)) } }
+            // Windows' headings are greyed items in capitals.
+            SwiftUI.Section("THE NEWEST") { ForEach(counts, id: \.self) { item(Keep(count: $0)) } }
+            SwiftUI.Section("FROM THE LAST") { ForEach(ages, id: \.self) { item(Keep(days: $0)) } }
         } label: {
             HStack {
-                Text(label(selection)).font(Ob.sans(13.5)).lineLimit(1)
+                Text(label(selection)).font(Ob.sans(Ob.body)).lineLimit(1)
                 Spacer(minLength: 8)
                 Image(systemName: "chevron.down").font(.system(size: 10, weight: .medium)).foregroundStyle(ob.muted)
             }
             .foregroundStyle(ob.ink)
             .padding(.horizontal, 8).padding(.vertical, 6)
             .frame(width: 240)
-            .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
+            .overlay(Rectangle().strokeBorder(focused ? ob.accent : ob.divider, lineWidth: 1))
             .contentShape(Rectangle())
             .opacity(enabled ? 1 : 0.4)
         }
+        .focused($focused)
+        .handCursor(enabled)
         .menuStyle(.button)
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
