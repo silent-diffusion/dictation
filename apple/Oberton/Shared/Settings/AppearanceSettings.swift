@@ -6,6 +6,7 @@ import SwiftUI
 struct AppearanceSection: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.ob) private var ob
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -17,7 +18,8 @@ struct AppearanceSection: View {
                         VStack(alignment: .leading, spacing: 6) {
                             ThemePreview(theme: t).frame(height: 84)
                             Text(t.rawValue.uppercased()).font(Ob.mono(12, .bold))
-                            Readout(t == .system ? "Follows the \(Device.noun)" : " ")
+                            // The SYSTEM card says what the system is now, while it is the one chosen.
+                            Readout(t == .system && model.settings.theme == .system ? (scheme == .dark ? "Dark right now" : "Light right now") : " ")
                         }
                     }
                 }
@@ -36,14 +38,42 @@ struct AppearanceSection: View {
                     }
                 }
             }
-            Caption("Oberton is ink on paper. The accent marks what is live or matters most: today's count, the word being read, words the AI added. Red is not offered: it means the microphone is recording.", size: 12.5)
+            Caption("Oberton is ink on paper. The accent marks what is live or matters most right now: today's word count, the unload countdown, the word being read, words the AI added, and errors. Each accent has a version for light and for dark paper. Red is not offered: it means the microphone is recording.", size: 12.5)
                 .padding(.top, 8)
+            FieldLabel("Text size")
+            textSize
+            #if os(macOS)
+            Caption("Everything in this window grows or shrinks together, from 70% to 200%. Anywhere in the app: ⌘ and + makes it larger, ⌘ and − smaller, ⌘ and 0 puts it back to 100%.", size: 12.5)
+                .padding(.top, 6)
+            #else
+            Caption("Everything in this window grows or shrinks together, from 70% to 200%. With a keyboard: ⌘ and + makes it larger, ⌘ and − smaller, ⌘ and 0 puts it back to 100%.", size: 12.5)
+                .padding(.top, 6)
+            #endif
             FieldLabel("Japanese words")
             SwitchCard {
                 ObSwitch("Show the Japanese words beside labels",
-                         detail: "Small decorative words such as 設定 (settings). They are decoration only, and hidden from screen readers.",
+                         detail: "Small decorative words such as 設定 (settings) next to page titles, the menu and the dictation pill. They are decoration only; turning them off changes nothing else.",
                          isOn: $model.settings.showJapanese)
             }
+        }
+    }
+
+    /// A− 125% A+ RESET (AppearancePage's TEXT SIZE row); the window shows the new size for a moment.
+    private var textSize: some View {
+        let scale = TextSize.clamped(model.settings.uiScale)
+        return HStack(spacing: 0) {
+            Button("A−") { model.settings.uiScale = TextSize.step(from: scale, -1) }
+                .buttonStyle(.quiet).frame(minWidth: 52)
+                .disabled(scale <= TextSize.min + 0.001)
+                .help("Smaller (⌘−)").accessibilityLabel("Make the text smaller")
+            Text("\(Int((scale * 100).rounded()))%").font(Ob.mono(14, .bold)).frame(minWidth: 64).padding(.horizontal, 8)
+            Button("A+") { model.settings.uiScale = TextSize.step(from: scale, +1) }
+                .buttonStyle(.quiet).frame(minWidth: 52)
+                .disabled(scale >= TextSize.max - 0.001)
+                .help("Larger (⌘+)").accessibilityLabel("Make the text larger")
+            Button("Reset") { model.settings.uiScale = 1 }
+                .buttonStyle(.quiet).padding(.leading, 12)
+                .help("Back to 100% (\(TextSize.resetKey))")
         }
     }
 

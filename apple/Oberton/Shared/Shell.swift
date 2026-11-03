@@ -495,6 +495,15 @@ enum Device {
         "iPhone"
         #endif
     }
+
+    /// The system, where Windows' copy says "Windows".
+    static var system: String {
+        #if os(macOS)
+        "macOS"
+        #else
+        "iOS"
+        #endif
+    }
 }
 
 extension ModelID {

@@ -9,16 +9,10 @@ struct ModelsSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Readout("Speech recognition").padding(.top, 4)
+            Caption("Download the models you want and choose which one is active. Local models run on this \(Device.noun); downloading is the only time they use the internet.")
+            Readout("Speech recognition").padding(.top, 12)
             ModelRow(name: "Apple Speech", badges: [("Active", .active), ("Installed", .plain)],
                      detail: "Apple's on-device speech recognizer. Downloads its language once, through the system.")
-            Readout("Extended notes · AI").padding(.top, 16)
-            NotesModelMenu(width: 528)
-            Caption("Extended Notes formats and sums up long sessions in the background, so it can use a bigger model than dictation needs. " +
-                    "Best on this \(Device.noun) is the largest installed Ollama model that fits in the memory the GPU may use" +
-                    (NotesRecorder.gpuBytes.map { " (\(NotesModels.gb($0)) here)" } ?? "") +
-                    "; with no Ollama model, the active model. A cloud model would send the whole transcript to that service.", size: 12.5)
-                .padding(.top, 2)
             HStack {
                 Readout("AI cleanup · on this \(Device.noun)")
                 Spacer()
@@ -40,19 +34,30 @@ struct ModelsSection: View {
                 Caption("Ollama models appear here when Ollama is running on this Mac (ollama.com, then e.g. ollama pull qwen2.5:3b).", size: 12.5)
             }
             #endif
+            Caption("The active model is the default for profiles that don't pick their own.", size: 12.5).padding(.top, 2)
+            Readout("Extended notes · AI").padding(.top, 16)
+            NotesModelMenu(width: 528)
+            Caption("Extended Notes formats and sums up long sessions in the background, so it can use a bigger model than dictation needs. " +
+                    "Best on this \(Device.noun) is the largest installed Ollama model that fits in the memory the GPU may use" +
+                    (NotesRecorder.gpuBytes.map { " (\(NotesModels.gb($0)) here)" } ?? "") +
+                    "; with no Ollama model, the active model. A cloud model would send the whole transcript to that service.", size: 12.5)
+                .padding(.top, 2)
             Readout("AI cleanup · cloud").padding(.top, 16)
-            Caption("Used only by profiles that pick them, and only while “Keep everything offline” is off (Settings › Cloud AI).", size: 12.5)
+            Caption(model.settings.cloud.keepOffline
+                        ? "“Keep everything offline” is on, so cloud models are blocked. Change that and add keys under Settings › Cloud AI."
+                        : "Text you dictate with a profile set to one of these is sent to that service. Keys are set under Settings › Cloud AI.",
+                    size: 12.5)
             ForEach(CloudCatalog.anthropic) { m in
-                ModelRow(name: m.title, badges: cloudBadges(m.id), detail: m.blurb,
+                ModelRow(name: m.title, badges: cloudBadges(m.id), detail: "Anthropic · " + m.blurb,
                          action: isDefault(m.id) ? nil : ("Use this", { model.settings.defaultModel = m.id }))
             }
             let openai = ModelID(provider: .openai, name: model.settings.cloud.openAIModel)
-            ModelRow(name: openai.name, badges: cloudBadges(openai), detail: "OpenAI or a compatible service.",
+            ModelRow(name: openai.name, badges: cloudBadges(openai), detail: "OpenAI · OpenAI or a compatible service.",
                      action: isDefault(openai) ? nil : ("Use this", { model.settings.defaultModel = openai }))
             #if os(macOS)
             FieldLabel("Ollama address")
             ObField("http://127.0.0.1:11434", text: $model.settings.ollamaEndpoint, mono: true, width: 300)
-            Caption("Must be on this Mac.", size: 12.5).padding(.top, 6)
+            Caption("Must be a local address (127.0.0.1 / localhost); other addresses are rejected.", size: 12.5).padding(.top, 6)
             #endif
         }
     }
@@ -64,8 +69,8 @@ struct ModelsSection: View {
     }
 
     private func cloudBadges(_ id: ModelID) -> [(String, Badge.Kind)] {
-        var b: [(String, Badge.Kind)] = isDefault(id) ? [("Active", .active)] : []
-        b.append(("Cloud", .cloud))
+        var b: [(String, Badge.Kind)] = [("Cloud", .cloud)]
+        if isDefault(id) { b.append(("Active", .active)) }
         b.append(KeyStore.get(id.provider) != nil ? ("Key set", .plain) : ("No key", .outline))
         if model.settings.cloud.keepOffline { b.append(("Blocked · offline", .outline)) }
         return b
