@@ -221,6 +221,22 @@ public struct AppSettings: Codable, Sendable, Equatable {
 }
 
 extension AppSettings {
+    /// The speech model a dictation with this profile uses (Windows' `SpeechModels.For`): the profile's own, or the one
+    /// in Settings when it picks none. "" = Apple Speech, as in `speechModel`.
+    public func speechModel(for profile: Profile?) -> String {
+        guard let own = profile?.speechModel?.trimmingCharacters(in: .whitespacesAndNewlines), !own.isEmpty else { return speechModel }
+        return own == Profile.appleSpeech ? "" : own
+    }
+
+    /// These settings as a dictation with this profile uses them: the speech model is the profile's own, so
+    /// `whisperModel`, `whisperLanguage` and the rest follow it. For dictation, Run again, Extended Notes and the
+    /// dashboard (Windows passes the active profile to `SpeechModels.For` in each of those places).
+    public func dictating(with profile: Profile?) -> AppSettings {
+        var s = self
+        s.speechModel = speechModel(for: profile)
+        return s
+    }
+
     /// The Whisper model dictation and Extended Notes use, or nil for Apple Speech.
     public var whisperModel: String? { speechModel.isEmpty ? nil : speechModel }
     /// The language for Apple Speech: the setting, or the system's when it is empty (auto-detect is Whisper's).

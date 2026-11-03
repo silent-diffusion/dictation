@@ -10,7 +10,8 @@ public struct Profile: Codable, Identifiable, Hashable, Sendable {
     /// The AI model, as a `ModelID` string ("apple:on-device", "ollama:qwen2.5:3b", "anthropic:…", "openai:…");
     /// nil = the default model in Settings.
     public var model: String?
-    /// The speech recognition model for this profile; nil = the one in Settings › Models.
+    /// The speech recognition model for this profile: a Whisper model's id, `Profile.appleSpeech`, or nil for the one in
+    /// Settings › Models. `AppSettings.dictating(with:)` resolves it.
     public var speechModel: String?
     /// Read aloud voice for this profile (an AVSpeechSynthesisVoice identifier); nil = Read aloud's own.
     public var voice: String?
@@ -58,6 +59,9 @@ public struct Profile: Codable, Identifiable, Hashable, Sendable {
     }
 
     public var isRaw: Bool { !autoProcess }
+
+    /// `speechModel` for Apple's speech recognizer (in settings that is "", which here means "the one in Settings").
+    public static let appleSpeech = "apple-speech"
 }
 
 public enum BuiltInProfiles {
