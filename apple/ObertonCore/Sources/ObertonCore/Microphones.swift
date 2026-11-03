@@ -27,7 +27,7 @@ public enum Microphones {
     }
 
     /// Make this engine record from the named microphone (nil: the system default). Before the engine starts.
-    static func use(_ name: String?, on engine: AVAudioEngine) {
+    public static func use(_ name: String?, on engine: AVAudioEngine) {
         #if os(macOS)
         // The engine is reused, so the default is set again too when no microphone (or a missing one) is chosen.
         guard let unit = engine.inputNode.audioUnit,

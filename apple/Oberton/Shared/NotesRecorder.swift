@@ -4,6 +4,9 @@ import Foundation
 import Metal
 import ObertonCore
 import Speech
+#if os(iOS)
+import UIKit
+#endif
 
 /// Runs an Extended Notes session (NotesRecorder.cs): listens (the microphone, the Mac's own audio, or both), writes the
 /// recording, sends it to Apple's speech recognizer on an analyzer of its own (or to the Whisper model in Settings), appends each finished piece to the
@@ -35,6 +38,9 @@ final class NotesRecorder: ObservableObject {
     @Published private(set) var isSummarizing = false
     /// The AI model this session formats and sums up with, once worked out.
     @Published private(set) var model: ModelID?
+    /// The AI model a session would use now, for the pipeline while none records (`keepIdleModel`).
+    @Published private(set) var idleModel: ModelID?
+    private var idleResolved = Date.distantPast
     /// The step being redone (nil when none is), for which session, and how far it got.
     @Published private(set) var redoing: NotesRedoStep?
     @Published private(set) var redoSession: NoteSession?
@@ -43,6 +49,9 @@ final class NotesRecorder: ObservableObject {
     @Published private(set) var revision = 0
 
     var isRecording: Bool { current != nil }
+    /// Seconds recorded in the session now, as the audio comes in (the page's timer reads it; `session.seconds` follows
+    /// on the 2 s tick).
+    var seconds: Double { feed.seconds }
     /// Recording, or redoing a step: the speech recognizer and the AI model are in use, so nothing may unload them.
     var needsModels: Bool { current != nil || redoing != nil }
     /// Not recording right now: paused by the user, or while a dictation runs.
@@ -70,6 +79,27 @@ final class NotesRecorder: ObservableObject {
     init(store: NotesStore, settings: @escaping () -> AppSettings) {
         self.store = store
         settingsSource = settings
+        #if os(iOS)
+        // iOS ends a backgrounded app without notice: what is typed and recorded so far is written as it goes there.
+        NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.saveNow() }
+        }
+        NotificationCenter.default.addObserver(forName: UIApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.shutdown() }
+        }
+        #endif
+    }
+
+    /// While a page showing the pipeline is open: the model a session would use, worked out again every half minute
+    /// (a model may have been installed or removed meanwhile). Not while a session records or a step is redone.
+    func keepIdleModel() async {
+        while !Task.isCancelled {
+            if !isRecording, redoing == nil, Date().timeIntervalSince(idleResolved) >= 30 {
+                idleResolved = Date()
+                idleModel = await Self.resolve(settings())
+            }
+            try? await Task.sleep(for: .seconds(2))
+        }
     }
 
     // MARK: Start
@@ -85,6 +115,7 @@ final class NotesRecorder: ObservableObject {
         let source = requested
         #endif
         let s = try store.create(source: source)
+        Log.info("Extended notes: started \(s.id) (\(source.rawValue))")
         userPaused = false; isFormatting = false; isSummarizing = false
         formatRequests = 0; summaryRequests = 0
         model = nil
@@ -106,7 +137,7 @@ final class NotesRecorder: ObservableObject {
             store.save(s)
         }
         current = s
-        feed.setPaused(false)
+        feed.setPaused(isPaused) // a dictation running now pauses the session from its first moment
         tick = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in Task { @MainActor in self?.onTick() } }
         await connectSpeech()
     }
@@ -131,6 +162,8 @@ final class NotesRecorder: ObservableObject {
         }
         #endif
         guard source == .mic || source == .both else { return }
+        // The microphone chosen in Settings › Microphone, as dictation uses (the system default when none is).
+        Microphones.use(settings().microphoneName, on: engine)
         let input = engine.inputNode
         let micFormat = input.outputFormat(forBus: 0)
         guard micFormat.sampleRate > 0, let target = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(WavWriter.sampleRate), channels: 1, interleaved: false),
@@ -172,7 +205,7 @@ final class NotesRecorder: ObservableObject {
         defer { connecting = false }
         do {
             let st = settings()
-            if let whisper = st.whisperModel {
+            if let whisper = Self.whisperModel(st) {
                 try await connectWhisper(whisper, st)
                 return
             }
@@ -189,12 +222,13 @@ final class NotesRecorder: ObservableObject {
                 throw UserFacingError("The speech recognizer has no audio format to take.")
             }
             let (stream, input) = AsyncStream<AnalyzerInput>.makeStream()
+            let waiting = feed.backlogSeconds
             try await analyzer.prepareToAnalyze(in: format)
             try await analyzer.start(inputSequence: stream)
             LiveTranscriber.markInUse()
             guard current != nil else { input.finish(); await analyzer.cancelAndFinishNow(); return }
             // What was said meanwhile goes first; the live audio follows on. Times count from the session's start.
-            let startSeconds = feed.connect(input: input, format: format)
+            let startSeconds = feed.connect(input: input, format: format, evenOut: st.evenOutVolume)
             speechTask = Task { [weak self] in
                 do {
                     for try await result in transcriber.results where result.isFinal {
@@ -208,8 +242,9 @@ final class NotesRecorder: ObservableObject {
             feed.analyzer = analyzer
             connectDelay = 5
             transcribing = true
+            Log.info("Extended notes: listening" + (waiting > 0 ? " (\(Int(waiting)) s of audio waiting sent first)" : ""))
         } catch {
-            NSLog("Extended notes: couldn't start the speech recognizer (%@); next try in %.0f s", error.localizedDescription, connectDelay)
+            Log.warn("Extended notes: couldn't start the speech recognizer (\(error.localizedDescription)); next try in \(Int(connectDelay)) s")
             nextConnect = Date().addingTimeInterval(connectDelay)
             connectDelay = min(60, connectDelay * 2)
         }
@@ -222,11 +257,17 @@ final class NotesRecorder: ObservableObject {
         let stream = WhisperLiveStream(model: id, language: st.whisperLanguage, vocabulary: st.vocabularyHint, even: st.evenOutVolume) { [weak self] text, at in
             Task { @MainActor in self?.onPiece(text, at: (self?.whisperStart ?? 0) + at) }
         }
+        let waiting = feed.backlogSeconds
         whisperStart = feed.connect(whisper: stream)
         stream.start()
         connectDelay = 5
         transcribing = true
+        Log.info("Extended notes: listening" + (waiting > 0 ? " (\(Int(waiting)) s of audio waiting sent first)" : ""))
     }
+
+    /// The Whisper model Extended Notes transcribes with, or nil for Apple's recognizer. The global speech model for now;
+    /// Windows takes the active profile's (`SpeechModels.For`), which comes with the per-profile speech model.
+    static func whisperModel(_ st: AppSettings) -> String? { st.whisperModel }
 
     private func onSpeechEnded() {
         transcribing = false
@@ -283,8 +324,9 @@ final class NotesRecorder: ObservableObject {
             do {
                 let reply = try await ask(NotesFormat.instructions(input), NotesFormat.wrap(input), NotesFormat.maxTokens(input))
                 if let accepted = NotesFormat.accept(sent: input, reply: reply) { ai = accepted; failed = false }
+                else { Log.info("Extended notes: the AI's formatting added to, dropped or changed the text; keeping it as heard") }
             } catch {
-                NSLog("Extended notes: formatting failed, keeping the text as heard: %@", error.localizedDescription)
+                Log.warn("Extended notes: formatting failed, keeping the text as heard: " + error.localizedDescription)
             }
         }
         s.endFormat(heard: take.heard, sent: take.sent, ai: ai, seconds: take.seconds, failed: failed, source: self)
@@ -319,7 +361,11 @@ final class NotesRecorder: ObservableObject {
                 sections += 1
                 summaryRequests += 1
                 let reply = try await ask(NotesSummary.digestPrompt(NotesSummary.digestWords(section.text)), section.text, NotesSummary.digestTokens)
-                guard NotesSummary.isUsable(input: section.text, output: reply) else { s.endSection(nil, start: section.start, end: section.end); break }
+                guard NotesSummary.isUsable(input: section.text, output: reply) else {
+                    s.endSection(nil, start: section.start, end: section.end)
+                    Log.info("Extended notes: a section's summary was unusable; trying again next time")
+                    break
+                }
                 s.endSection(reply, start: section.start, end: section.end)
                 lastSection = Date(); added += 1
                 dirty = true
@@ -332,7 +378,7 @@ final class NotesRecorder: ObservableObject {
                 summaryRequests += 1
                 let input = NotesSummary.mergeInput(group)
                 let reply = try await ask(NotesSummary.mergePrompt(NotesSummary.mergeWords(group)), input, NotesSummary.mergeTokens)
-                guard NotesSummary.isUsable(input: input, output: reply) else { break }
+                guard NotesSummary.isUsable(input: input, output: reply) else { Log.info("Extended notes: merging summaries gave nothing usable; keeping them apart"); break }
                 s.merge(group, text: reply)
                 dirty = true
             }
@@ -345,11 +391,13 @@ final class NotesRecorder: ObservableObject {
             summaryRequests += 1
             if let summary = NotesSummary.shape(try await ask(NotesSummary.finalPrompt, text, NotesSummary.finalTokens)),
                Double(NoteSession.words(summary)) <= Double(NoteSession.words(text)) * 1.5 + 60 {
-                s.endSummary(summary, basedOn: basedOn, source: self)
+                if !s.endSummary(summary, basedOn: basedOn, source: self) { Log.info("Extended notes: the summary was edited meanwhile; keeping the edit") }
+            } else {
+                Log.info("Extended notes: the summary was unusable; keeping the last one")
             }
             dirty = true
         } catch {
-            NSLog("Extended notes: summarizing failed: %@", error.localizedDescription)
+            Log.warn("Extended notes: summarizing failed: " + error.localizedDescription)
         }
     }
 
@@ -365,6 +413,7 @@ final class NotesRecorder: ObservableObject {
         let st = settings()
         if let model, st.notesModel == modelFor, Date().timeIntervalSince(modelResolved) < 600 { return model }
         let resolved = await Self.resolve(st)
+        if resolved != model { Log.info("Extended notes: AI model \(resolved.description)") }
         model = resolved
         modelFor = st.notesModel
         modelResolved = Date()
@@ -386,19 +435,23 @@ final class NotesRecorder: ObservableObject {
         guard isRecording, !userPaused else { return }
         userPaused = true
         feed.setPaused(isPaused)
+        Log.info("Extended notes: paused")
     }
 
     func resume() {
         guard isRecording, userPaused else { return }
         userPaused = false
         feed.setPaused(isPaused)
+        Log.info("Extended notes: resumed")
     }
 
     /// The listener marked this moment (the hotkey, or the Mark button): a "⚑ m:ss" line goes into the transcript,
     /// paused or not, and the session is saved. Nothing once Stop was pressed.
     func addMarker() {
         guard let s = current, !isFinishing else { return }
-        s.addMarker(feed.seconds, source: self)
+        let at = feed.seconds
+        s.addMarker(at, source: self)
+        Log.info("Extended notes: marker at " + NoteSession.markerLabel(at))
         save(s)
         revision += 1
     }
@@ -417,13 +470,31 @@ final class NotesRecorder: ObservableObject {
         feed.setPaused(true)
         stopAudio()
         tick?.invalidate()
+        let left = feed.backlogSeconds
+        if left > 0 { Log.warn("Extended notes: \(Int(left)) s of audio never reached the speech engine (not connected); the recording has it") }
+        // The last piece: at most a minute (as Windows' StopAsync), so a recognizer that never finishes can't keep the
+        // session on FINISHING… for good.
         if let analyzer = feed.analyzer {
             feed.finishInput()
-            try? await analyzer.finalizeAndFinishThroughEndOfInput()
-            await speechTask?.value
+            let task = speechTask
+            let done: Void? = await Self.within(Self.lastPieceWait) {
+                try? await analyzer.finalizeAndFinishThroughEndOfInput()
+                await task?.value
+            }
+            if done == nil {
+                Log.warn("Extended notes: the speech recognizer didn't finish the last piece within a minute; stopping without it")
+                task?.cancel()
+                Task { await analyzer.cancelAndFinishNow() }
+            }
         } else if let stream = feed.whisper {
             feed.finishInput()
-            if let last = await stream.finish() { onPiece(last.text, at: whisperStart + last.at) }
+            switch await Self.within(Self.lastPieceWait, { await stream.finish() }) {
+            case .some(.some(let last)): onPiece(last.text, at: whisperStart + last.at)
+            case .some(.none): break
+            case .none:
+                Log.warn("Extended notes: Whisper didn't finish the last piece within a minute; stopping without it")
+                stream.cancel()
+            }
         }
         feed.end()
         s.seconds = feed.seconds
@@ -437,16 +508,33 @@ final class NotesRecorder: ObservableObject {
         isFinishing = false
         userPaused = false
         transcribing = false
+        Log.info("Extended notes: stopped \(s.id) after \(NoteSession.markerLabel(s.seconds))")
         store.sessionsChanged?()
         await releaseModel()
     }
 
-    /// The session or redo is done: an Ollama model other than the one dictation uses is let go at once, rather than
-    /// holding its memory until Ollama times it out.
+    /// How long Stop waits for the speech engine's last piece (NotesRecorder.cs: `StopAsync(60 s)`).
+    static var lastPieceWait: Double = 60
+
+    /// `work`'s result, or nil if it takes longer than `seconds` (it is then left to finish on its own).
+    static func within<T>(_ seconds: Double, _ work: @escaping () async -> T) async -> T? {
+        let once = Once()
+        return await withCheckedContinuation { (c: CheckedContinuation<T?, Never>) in
+            Task { let r = await work(); if once.claim() { c.resume(returning: r) } }
+            Task { try? await Task.sleep(for: .seconds(seconds)); if once.claim() { c.resume(returning: nil) } }
+        }
+    }
+
+    /// The session or redo is done: a model held in the Mac's memory rather than the GPU's (a big MoE such as Qwen3
+    /// 30B-A3B, a 27B) is let go at once, rather than holding ~20 GB until Ollama times it out (`ReleaseIfLargeAsync`).
+    /// Not while another session or redo has started meanwhile.
     private func releaseModel() async {
         let st = settings()
-        guard let model, model.provider == .ollama, !needsModels, model != st.defaultModel,
+        guard let model, model.provider == .ollama, !needsModels,
               let url = try? OllamaBackend.validated(st.ollamaEndpoint) else { return }
+        guard await OllamaBackend.size(endpoint: url, model: model.name).large,
+              await OllamaBackend.isLoaded(endpoint: url, model: model.name) else { return }
+        Log.info("Extended notes: letting \(model.name) go (held in memory)")
         await OllamaBackend.unload(endpoint: url, model: model.name)
     }
 
@@ -466,6 +554,18 @@ final class NotesRecorder: ObservableObject {
         current = nil
     }
 
+    #if os(iOS)
+    /// iOS: the app went to the background (it may be ended there without notice): what is typed and recorded so far
+    /// is written now. A session goes on recording in the background (UIBackgroundModes: audio).
+    func saveNow() {
+        store.flushDraft()
+        guard let s = current else { return }
+        feed.flush()
+        s.seconds = feed.seconds
+        store.saveNow(s)
+    }
+    #endif
+
     // MARK: Redoing a finished session's steps
 
     func cancelRedo() { redoTask?.cancel() }
@@ -477,6 +577,7 @@ final class NotesRecorder: ObservableObject {
         if redoing != nil { throw UserFacingError("Another step is being redone; wait for it to finish.") }
         redoSession = s
         model = nil
+        Log.info("Extended notes: redoing \(step) for \(s.id)")
         let task = Task { @MainActor in
             if step == .transcribe {
                 redoing = .transcribe
@@ -503,6 +604,7 @@ final class NotesRecorder: ObservableObject {
             redoProgress = ""
             s.resetSummary(source: self)
             await summarize(s, final: true)
+            Log.info("Extended notes: redid \(step) for \(s.id)")
         }
         redoTask = task
         defer {
@@ -525,7 +627,7 @@ final class NotesRecorder: ObservableObject {
         }
         redoProgress = "reading the recording"
         let st = settings()
-        if let whisper = st.whisperModel {
+        if let whisper = Self.whisperModel(st) {
             redoProgress = WhisperEngine.loadedModel == whisper ? "0%" : "loading \(WhisperModels.name(of: whisper))"
             let pieces = try await WhisperAudio.redo(url, model: whisper, language: st.whisperLanguage, vocabulary: st.vocabularyHint,
                                                      even: st.evenOutVolume) { fraction in
@@ -534,6 +636,7 @@ final class NotesRecorder: ObservableObject {
             try Task.checkCancellation()
             s.replaceTranscript(pieces, source: self)
             store.save(s)
+            Log.info("Extended notes: transcribed \(s.id) again")
             return
         }
         let locale = try await LiveTranscriber.prepare(locale: st.speechLocale)
@@ -563,11 +666,19 @@ final class NotesRecorder: ObservableObject {
             try Task.checkCancellation()
             s.replaceTranscript(pieces.filter { !$0.text.trimmed.isEmpty }, source: self)
             store.save(s)
+            Log.info("Extended notes: transcribed \(s.id) again")
         } catch {
             await analyzer.cancelAndFinishNow()
             throw error
         }
     }
+}
+
+/// Lets exactly one of several racing callers through.
+final class Once: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done = false
+    func claim() -> Bool { lock.withLock { if done { return false }; done = true; return true } }
 }
 
 /// What to redo; every step after it is redone too, since it is made from it.
@@ -601,6 +712,8 @@ final class NotesFeed: @unchecked Sendable {
     private var converter: AVAudioConverter?
     private var _analyzer: SpeechAnalyzer?
     private var _whisper: WhisperLiveStream?
+    /// "Even out the volume" for Apple's recognizer (Whisper levels its own input): what it hears, not the recording.
+    private var leveller: VolumeLeveller?
     private let source = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(WavWriter.sampleRate), channels: 1, interleaved: false)!
 
     var analyzer: SpeechAnalyzer? {
@@ -613,6 +726,9 @@ final class NotesFeed: @unchecked Sendable {
 
     /// Seconds recorded (pauses not counted).
     var seconds: Double { lock.withLock { Double(samples) / Double(WavWriter.sampleRate) } }
+
+    /// Seconds of audio waiting for the recognizer to start.
+    var backlogSeconds: Double { lock.withLock { Double(backlog.count) / Double(WavWriter.sampleRate) } }
 
     func begin(wav url: URL) throws {
         let w = try WavWriter(url: url)
@@ -635,8 +751,9 @@ final class NotesFeed: @unchecked Sendable {
     }
 
     /// The recognizer is running: the backlog goes first. Returns where in the recording its time 0 is.
-    func connect(input: AsyncStream<AnalyzerInput>.Continuation, format: AVAudioFormat) -> Double {
+    func connect(input: AsyncStream<AnalyzerInput>.Continuation, format: AVAudioFormat, evenOut: Bool) -> Double {
         lock.withLock {
+            leveller = evenOut ? VolumeLeveller(sampleRate: Double(WavWriter.sampleRate)) : nil
             analyzerFormat = format
             converter = format == source ? nil : AVAudioConverter(from: source, to: format)
             self.input = input
@@ -658,19 +775,21 @@ final class NotesFeed: @unchecked Sendable {
         }
     }
 
-    func disconnect() { lock.withLock { input?.finish(); input = nil; _analyzer = nil; _whisper = nil } }
+    func disconnect() { lock.withLock { input?.finish(); input = nil; _analyzer = nil; _whisper = nil; leveller = nil } }
     /// No more audio for the recognizer (Whisper's stream stays known, for `stop` to finish it).
     func finishInput() { lock.withLock { input?.finish(); input = nil } }
 
     func flush() { lock.withLock { wav }?.flush() }
 
     func end() {
-        let w = lock.withLock { () -> WavWriter? in let w = wav; wav = nil; _analyzer = nil; _whisper = nil; return w }
+        let w = lock.withLock { () -> WavWriter? in let w = wav; wav = nil; _analyzer = nil; _whisper = nil; leveller = nil; backlog = []; return w }
         w?.close()
     }
 
     /// Called with the lock held.
     private func send(_ chunk: [Float], to input: AsyncStream<AnalyzerInput>.Continuation) {
+        var chunk = chunk
+        leveller?.process(&chunk)
         guard let buffer = AVAudioPCMBuffer(pcmFormat: source, frameCapacity: AVAudioFrameCount(chunk.count)) else { return }
         buffer.frameLength = AVAudioFrameCount(chunk.count)
         chunk.withUnsafeBufferPointer { buffer.floatChannelData![0].update(from: $0.baseAddress!, count: chunk.count) }
