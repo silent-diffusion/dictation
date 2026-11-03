@@ -258,3 +258,29 @@ extension EditedTextView: UIViewRepresentable {
     func updateUIView(_ tv: EditedUITextView, context: Context) { update(context.coordinator, palette: context.environment.ob) }
 }
 #endif
+
+#if DEBUG && os(macOS)
+/// The Edited tab's own text view drawn to PNGs (the page snapshots can't draw a text view).
+@MainActor
+enum EditedTextSnapshots {
+    static func write(to dir: String, model: AppModel) {
+        guard let s = model.notes.store.sessions.first(where: { $0.id == "20261102-1015" }) else { return }
+        for dark in [false, true] {
+            let c = EditedTextController()
+            let scroll = c.makeView()
+            scroll.frame = CGRect(x: 0, y: 0, width: 640, height: 360)
+            let palette = Palette(dark: dark, accentChoice: model.settings.accent)
+            c.show(s, revision: 0, live: false, palette: palette)
+            c.textView.layoutManager?.ensureLayout(for: c.textView.textContainer!)
+            let host = NSView(frame: scroll.frame)
+            host.wantsLayer = true
+            host.layer?.backgroundColor = NSColor(palette.paper).cgColor
+            host.addSubview(scroll)
+            host.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { continue }
+            host.cacheDisplay(in: host.bounds, to: rep)
+            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: dir).appending(path: "notes-edited-view-\(dark ? "dark" : "light").png"))
+        }
+    }
+}
+#endif

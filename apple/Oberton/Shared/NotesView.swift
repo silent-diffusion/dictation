@@ -1035,7 +1035,7 @@ struct StarColumns: Layout {
     }
 
     private func widths(_ total: CGFloat, _ subviews: Subviews) -> [CGFloat] {
-        let auto = subviews.count > weights.count ? subviews[weights.count...].map { $0.sizeThatFits(.unspecified).width } : []
+        let auto = subviews.enumerated().filter { $0.offset >= weights.count }.map { $0.element.sizeThatFits(.unspecified).width }
         let room = max(0, total - auto.reduce(0, +))
         let sum = weights.reduce(0, +)
         return weights.prefix(subviews.count).map { room * $0 / sum } + auto

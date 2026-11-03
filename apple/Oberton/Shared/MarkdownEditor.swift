@@ -549,6 +549,7 @@ enum MarkdownEditorSnapshots {
                 save(s.formatted, line: nil, dark: dark, model: model, to: dir, name: "notes-markdown-formatted-\(dark ? "dark" : "light")")
             }
         }
+        EditedTextSnapshots.write(to: dir, model: model)
     }
 
     private static func save(_ text: String, line: Int?, dark: Bool, model: AppModel, to dir: String, name: String) {
