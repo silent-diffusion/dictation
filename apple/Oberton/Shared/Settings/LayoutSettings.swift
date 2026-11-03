@@ -50,7 +50,6 @@ struct LayoutSection: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             preview()
                 .frame(maxWidth: .infinity, minHeight: 200, maxHeight: .infinity)
-                .background(ob.subtle)
                 .clipped()
         }
         .fixedSize(horizontal: false, vertical: true)
@@ -67,7 +66,8 @@ struct LayoutSection: View {
                 Spacer()
                 Text("\(Int((value.wrappedValue * 100).rounded()))%").font(Ob.mono(12))
             }
-            Slider(value: value, in: 0.3...1, step: 0.02)
+            // Snapped to 0.02 in the binding: a stepped Slider would draw tick marks, which Windows' doesn't.
+            Slider(value: Binding(get: { value.wrappedValue }, set: { value.wrappedValue = ($0 / 0.02).rounded() * 0.02 }), in: 0.3...1)
                 .padding(.top, 6).padding(.bottom, 10)
                 .accessibilityLabel(name)
         }
@@ -105,5 +105,6 @@ struct LayoutSection: View {
             .overlay(Capsule().strokeBorder(Color(hex: 0xFFFFFF, alpha: 0x1F / 255.0), lineWidth: 1))
             .padding(.bottom, 22)
         }
+        .background(ob.subtle)
     }
 }

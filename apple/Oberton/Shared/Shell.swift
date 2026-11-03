@@ -520,13 +520,14 @@ struct NavCapsule: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 10) {
+            // A DockPanel: the icon (12 after it), the decor docked right, the label filling the rest.
+            HStack(spacing: 0) {
                 if let icon {
                     NavIcon(section: icon).stroke(style: StrokeStyle(lineWidth: 1.2, lineCap: .round, lineJoin: .round))
-                        .frame(width: 16, height: 16).padding(.trailing, 2)
+                        .frame(width: 16, height: 16).padding(.trailing, 12)
                 }
                 Text(title.uppercased()).font(Ob.mono(size, selected ? .semibold : .regular)).lineLimit(1)
-                Spacer(minLength: 4)
+                Spacer(minLength: 2)
                 if let japanese { Decor(japanese, size: 10.5, color: selected ? ob.onInk : ob.ink).opacity(0.6) }
             }
             .foregroundStyle(selected ? ob.onInk : ob.ink)
