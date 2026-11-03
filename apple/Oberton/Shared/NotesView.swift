@@ -829,7 +829,7 @@ struct PipeStep {
 enum NotesSteps {
     /// The speech model as Windows names it (`Speech.LoadedModel ?? SpeechModels.For(...)`): the Whisper model's id,
     /// or Apple Speech.
-    static func speechName(_ model: AppModel) -> String { NotesRecorder.whisperModel(model.settings) ?? "Apple Speech" }
+    static func speechName(_ model: AppModel) -> String { NotesRecorder.whisperModel(model.activeSpeech) ?? "Apple Speech" }
 
     /// The AI model the session uses, or the one a session would use now (worked out every half minute).
     static func aiName(_ n: NotesRecorder) -> String { (n.model ?? n.idleModel)?.notesName ?? "…" }

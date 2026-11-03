@@ -239,7 +239,8 @@ final class AppModel: ObservableObject {
         }
         if movesNotepad { settings.notepad = "" }
         startProfiles()
-        notes.settingsSource = { [weak self] in self?.settings ?? loadedSettings }
+        // Extended Notes transcribes with the active profile's speech model, as Windows' NotesRecorder (SpeechModels.For).
+        notes.settingsSource = { [weak self] in self.map { $0.settings.dictating(with: $0.activeProfile) } ?? loadedSettings }
         notesChange = notes.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         WhisperEngine.onChange = { [weak self] in Task { @MainActor in self?.whisperChanged() } }
         transcriber.onText = { [weak self] in self?.liveText = $0 }

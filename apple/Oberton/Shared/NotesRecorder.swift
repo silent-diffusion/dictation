@@ -265,8 +265,8 @@ final class NotesRecorder: ObservableObject {
         Log.info("Extended notes: listening" + (waiting > 0 ? " (\(Int(waiting)) s of audio waiting sent first)" : ""))
     }
 
-    /// The Whisper model Extended Notes transcribes with, or nil for Apple's recognizer. The global speech model for now;
-    /// Windows takes the active profile's (`SpeechModels.For`), which comes with the per-profile speech model.
+    /// The Whisper model Extended Notes transcribes with, or nil for Apple's recognizer: the active profile's
+    /// (`settingsSource` resolves it with `dictating(with:)`, as Windows' `SpeechModels.For`).
     static func whisperModel(_ st: AppSettings) -> String? { st.whisperModel }
 
     private func onSpeechEnded() {
