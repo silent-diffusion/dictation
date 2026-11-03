@@ -467,12 +467,14 @@ final class AppModel: ObservableObject {
         notice(text, kind: .warning, hold: false)
     }
 
-    /// TextProcessor reports a failed AI step as "{problem} Your original words were inserted."; Windows says it as the
-    /// words go in: "{problem} Inserting your original words."
+    /// A failed AI step, as Windows says it while the words go in: "{problem} Inserting your original words."
+    /// (TextProcessor words it so now; older wording is converted, and the sentence is never added twice.)
     static func aiFailureNotice(_ warning: String) -> String {
+        let windows = " Inserting your original words."
+        if warning.hasSuffix(windows) { return warning }
         let suffix = " Your original words were inserted."
         let problem = warning.hasSuffix(suffix) ? String(warning.dropLast(suffix.count)) : warning
-        return problem + " Inserting your original words."
+        return problem + windows
     }
 
     /// Insert the previewed text (`useOriginal`: the raw transcription instead).
