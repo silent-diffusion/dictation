@@ -909,12 +909,16 @@ final class AppModel: ObservableObject {
             // With the speech model of the profile it was dictated with (HistoryRerun.cs: SpeechModels.For).
             let profile = profiles.first { $0.name.caseInsensitiveCompare(entry.profileName) == .orderedSame } ?? activeProfile
             let (changed, message) = try await HistoryRerun.run(entry, profiles: profiles, active: activeProfile,
-                                                                settings: speechSettings(for: profile), progress: progress)
+                                                                settings: speechSettings(for: profile),
+                                                                canSwapSpeechModel: !notes.needsModels, progress: progress)
             historyStore.save(changed)
             history = historyStore.entries
             return "✓ " + message
+        } catch let error as UserFacingError {
+            return "⚠ " + error.message
         } catch {
-            return "⚠ " + ((error as? UserFacingError)?.message ?? "Running it again failed; the dictation was left as it was. (\(error.localizedDescription))")
+            Log.error("History: running a dictation again failed", error)
+            return "⚠ Running it again failed; the dictation was left as it was. See the log for details."
         }
     }
 
@@ -945,7 +949,7 @@ final class AppModel: ObservableObject {
     }
 
     func resetUsage() {
-        usage = UsageLog()
+        usage.clearDays() // the turnaround samples stay, as on Windows
         usageFile.save(usage)
     }
 

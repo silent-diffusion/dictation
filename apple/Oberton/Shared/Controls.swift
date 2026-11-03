@@ -212,10 +212,12 @@ struct DiffText: View {
     var edited: String
     var size: CGFloat = 15
     var onDark = false
+    /// The space between lines; half the size unless given (History's boxes: a WPF LineHeight of 21).
+    var lineSpacing: CGFloat?
     @Environment(\.ob) private var ob
 
     var body: some View {
-        Text(attributed).font(Ob.sans(size)).lineSpacing(size * 0.5)
+        Text(attributed).font(Ob.sans(size)).lineSpacing(lineSpacing ?? size * 0.5)
     }
 
     private var attributed: AttributedString {
@@ -248,6 +250,7 @@ struct ThreeBoxes: View {
     var inserted: String
     var editMeta: String?
     var editPlaceholder = "No AI edit for this dictation."
+    /// With no AI edit: the safety net rejected it (says so instead of the placeholder).
     var safetyNet = false
     var transcriptionEditor: Binding<String>? = nil
     /// Draw the hairline box around the three (off when a card around them already does).
@@ -259,35 +262,42 @@ struct ThreeBoxes: View {
     @Environment(\.ob) private var ob
     @Environment(\.horizontalSizeClass) private var sizeClass
 
+    /// HistoryPage's boxes: 14 pt text, lines 21 apart.
+    private static let size: CGFloat = 14
+    private static let spacing = Ob.lineSpacing(14, lineHeight: 21)
+
     var body: some View {
         let layout = sizeClass == .compact ? AnyLayout(VStackLayout(spacing: 0)) : AnyLayout(HStackLayout(alignment: .top, spacing: 0))
         layout {
-            column("01 // Transcription", copy: transcription) {
+            column("01 // Transcription", copy: transcription, copyName: "Copy Transcription", copyHelp: "Copy what you said") {
                 if let transcriptionEditor {
                     TextEditor(text: transcriptionEditor)
                         .font(Ob.mono(13)).scrollContentBackground(.hidden).frame(minHeight: 72)
                 } else {
-                    Text(lit(transcription, transcriptionLit)).font(Ob.sans(14)).lineSpacing(6)
+                    box(Text(lit(transcription, transcriptionLit)))
                 }
             }
             separator
-            column("02 // AI Edit", copy: aiEdit ?? "", meta: editMeta) {
-                if let aiEdit, !aiEdit.isEmpty {
-                    if safetyNet {
-                        Text("The safety net rejected the AI's edit, so your words went in as spoken.").font(Ob.sans(14)).foregroundStyle(ob.muted)
-                    } else {
-                        DiffText(original: transcription, edited: aiEdit, size: 14)
-                    }
+            // AI EDIT's COPY copies the AI's own output, and can't be used when there is none (HistoryPage: 35 %).
+            column("02 // AI Edit", copy: aiEdit ?? "", copyName: "Copy AI Edit",
+                   copyHelp: "Copy the AI's own output, before it was fitted into the surrounding text",
+                   copyEnabled: !(aiEdit ?? "").isEmpty, meta: editMeta) {
+                if let aiEdit {
+                    DiffText(original: transcription, edited: aiEdit, size: Self.size, lineSpacing: Self.spacing)
                 } else {
-                    Text(editPlaceholder).font(Ob.sans(14)).foregroundStyle(ob.muted)
+                    box(Text(safetyNet ? "The safety net rejected the AI's edit, so your words went in as spoken." : editPlaceholder), muted: true)
                 }
             }
             separator
-            column("03 // Inserted", copy: inserted) {
-                Text(lit(inserted, insertedLit)).font(Ob.sans(14)).lineSpacing(6)
+            column("03 // Inserted", copy: inserted, copyName: "Copy Inserted", copyHelp: "Copy the text that went in") {
+                box(Text(lit(inserted, insertedLit)))
             }
         }
         .overlay(Rectangle().strokeBorder(boxed ? ob.divider : .clear, lineWidth: 1))
+    }
+
+    private func box(_ text: Text, muted: Bool = false) -> some View {
+        text.font(Ob.sans(Self.size)).foregroundStyle(muted ? ob.muted : ob.ink).lineSpacing(Self.spacing).fixedSize(horizontal: false, vertical: true)
     }
 
     /// The text with `range` in the accent (only the colour, so nothing moves).
@@ -304,36 +314,44 @@ struct ThreeBoxes: View {
         Hairline(vertical: sizeClass != .compact)
     }
 
-    private func column<C: View>(_ title: String, copy: String, meta: String? = nil, @ViewBuilder content: () -> C) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Readout(title)
-                if let meta { Readout(meta, size: 10) }
-                Spacer()
-                TextCopyButton(text: copy)
+    /// One box: its name and COPY on one line (6 above the text), then the text (Margin 14,12,14,14).
+    private func column<C: View>(_ title: String, copy: String, copyName: String, copyHelp: String, copyEnabled: Bool = true,
+                                 meta: String? = nil, @ViewBuilder content: () -> C) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 0) {
+                Readout(title).lineLimit(1)
+                if let meta { Readout(meta, size: 10).lineLimit(1).padding(.leading, 8) }
+                Spacer(minLength: 0)
+                TextCopyButton(text: copy, enabled: copyEnabled).padding(.leading, 10).help(copyHelp).accessibilityLabel(copyName)
             }
-            content().textSelection(.enabled)
+            content()
         }
         .padding(EdgeInsets(top: 12, leading: 14, bottom: 14, trailing: 14))
-        .frame(maxWidth: .infinity, minHeight: 100, alignment: .topLeading)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 }
 
-/// A bare COPY in the readout face, as at the top of each of the three boxes.
+/// A bare COPY in the readout face, as at the top of each of the three boxes: flashes COPIED ✓ or NOTHING YET for 1.5 s;
+/// dimmed to 35 % when there is nothing it could copy.
 struct TextCopyButton: View {
     var text: String
     var onDark = false
+    var enabled = true
     @State private var label = "COPY"
     @Environment(\.ob) private var ob
 
     var body: some View {
         Button {
-            if text.isEmpty { label = "NOTHING YET" } else { Clipboard.copy(text); label = "COPIED ✓" }
-            Task { try? await Task.sleep(for: .seconds(1.2)); label = "COPY" }
+            let shown = text.isEmpty ? "NOTHING YET" : Clipboard.copy(text) ? "COPIED ✓" : "BUSY, TRY AGAIN"
+            label = shown
+            Task { try? await Task.sleep(for: .seconds(1.5)); if label == shown { label = "COPY" } }
         } label: {
             Text(label).font(Ob.mono(10.5)).foregroundStyle(onDark ? Color(hex: 0xE8E7E3) : ob.muted)
         }
         .buttonStyle(.plain)
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.35)
+        .handCursor(enabled)
     }
 }
 
