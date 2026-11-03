@@ -124,7 +124,7 @@ struct DashboardView: View {
             // The speech model (DashboardPage's speech dial): busy, off, on (kept or let go right after use), or the
             // minutes left until it unloads.
             let minutes = model.settings.unloadAfterMinutes
-            meterCell(settings: .speech, footer: AnyView(unloadButton)) {
+            meterCell(settings: .unloading, footer: AnyView(unloadButton)) {
                 if model.phase.isBusy {
                     RingMeter(fraction: 1, value: "busy", label: "Speech model", sub: "dictating now", accent: true)
                 } else if !model.speechLoaded {
