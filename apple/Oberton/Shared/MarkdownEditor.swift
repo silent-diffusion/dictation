@@ -270,6 +270,11 @@ final class MarkdownEditorController: NSObject {
         }
     }
 
+    #if DEBUG
+    /// Snapshots: light the word at `seconds` now, as a playback tick would.
+    func lightForSnapshot() { onPlayTick() }
+    #endif
+
     private func onPlayTick() {
         guard let p = playback, let t = p.time() else { showLit(nil); return }
         let span = spans.current(text: storage.string, playback: p, at: t)
@@ -650,9 +655,21 @@ enum MarkdownEditorSnapshots {
             }
         }
         EditedTextSnapshots.write(to: dir, model: model)
+        if let s = model.notes.store.sessions.first(where: { $0.id == "20261102-1015" }) {
+            // Mid-playback: the words heard spread over the recording, the word at 40 % lit (the follow scrolls to it).
+            let words = WordTimes.spread(s.heard, start: 0, end: s.seconds)
+            let at = s.seconds * 0.4
+            for dark in [false, true] {
+                for (name, text, run) in [("transcript", s.transcript, 1), ("formatted", s.formatted, 1)] {
+                    save(text, line: nil, dark: dark, model: model, to: dir, name: "notes-playback-\(name)-\(dark ? "dark" : "light")",
+                         playback: PlaybackWords(words: words, minRun: run, time: { at }))
+                }
+            }
+            HistoryPlaybackSnapshots.write(to: dir, model: model)
+        }
     }
 
-    private static func save(_ text: String, line: Int?, dark: Bool, model: AppModel, to dir: String, name: String) {
+    private static func save(_ text: String, line: Int?, dark: Bool, model: AppModel, to dir: String, name: String, playback: PlaybackWords? = nil) {
         let c = MarkdownEditorController()
         let scroll = c.makeView()
         scroll.frame = CGRect(x: 0, y: 0, width: 640, height: 560)
@@ -666,12 +683,17 @@ enum MarkdownEditorSnapshots {
             c.edit(at: NSMaxRange(ls[line].content))
         }
         c.layout.ensureLayout(for: c.container)
+        if let playback {
+            c.setPlayback(playback)
+            c.lightForSnapshot()
+        }
+        defer { c.setPlayback(nil) }
         let host = NSView(frame: scroll.frame)
         host.wantsLayer = true
         host.layer?.backgroundColor = NSColor(palette.paper).cgColor
         host.addSubview(scroll)
         host.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
-        scroll.contentView.scroll(to: .zero)
+        if playback == nil { scroll.contentView.scroll(to: .zero) }
         guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return }
         host.cacheDisplay(in: host.bounds, to: rep)
         if let png = rep.representation(using: .png, properties: [:]) {

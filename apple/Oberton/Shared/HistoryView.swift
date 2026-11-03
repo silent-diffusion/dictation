@@ -364,3 +364,28 @@ extension HistoryEntry {
         s < 60 ? "\(Int(s.rounded())) s" : String(format: "%d:%02d min", Int(s) / 60, Int(s) % 60)
     }
 }
+
+#if DEBUG && os(macOS)
+/// History's three boxes mid-playback (the word being said lit), drawn to PNGs with the page snapshots.
+@MainActor
+enum HistoryPlaybackSnapshots {
+    static func write(to dir: String, model: AppModel) {
+        let said = "okay so um can you send the release notes to the team before friday"
+        let inserted = "Can you send the release notes to the team before Friday?"
+        let words = WordTimes.spread(said, start: 0, end: 4.2)
+        let at = 2.6 // "notes"
+        let lit = [said, inserted].map { WordTimes.current(WordTimes.align($0, words), at: at)?.range }
+        for dark in [false, true] {
+            var s = model.settings
+            s.theme = dark ? .dark : .light
+            let view = ThreeBoxes(transcription: said, aiEdit: inserted, inserted: inserted, transcriptionLit: lit[0], insertedLit: lit[1])
+                .padding(20).frame(width: 900).background(Palette(dark: dark, accentChoice: s.accent).paper).obertonTheme(s)
+            let r = ImageRenderer(content: view)
+            r.scale = 2
+            if let cg = r.cgImage, let png = NSBitmapImageRep(cgImage: cg).representation(using: .png, properties: [:]) {
+                try? png.write(to: URL(fileURLWithPath: dir).appending(path: "history-playback-\(dark ? "dark" : "light").png"))
+            }
+        }
+    }
+}
+#endif
