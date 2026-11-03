@@ -53,6 +53,7 @@ public sealed class DictationController
     Task<InsertionContext?> _context = Task.FromResult<InsertionContext?>(null);
     string _pendingProcessed = "";
     string _pendingRaw = "";
+    IReadOnlyList<WordTiming> _pendingWords = Array.Empty<WordTiming>(); // when the raw transcript's words were said
     string _pendingProfile = "";
     bool _pendingSafetyNet;
     string? _pendingNote;
@@ -333,6 +334,7 @@ public sealed class DictationController
 
         await _engine; // if the model was still loading, it now catches up on the whole recording
         var raw = OutputSanitizer.CollapseDots(await _asr.StopAsync(ct));
+        _pendingWords = _asr.FinalWords;
         ct.ThrowIfCancellationRequested();
         Context = await _context;
         if (_live != null) await _live.DrainAsync(); // let pieces already on their way finish typing
@@ -482,7 +484,7 @@ public sealed class DictationController
             Seconds = Math.Round(_recordClock.Elapsed.TotalSeconds, 1),
             FinishSeconds = Math.Round(_finishClock.Elapsed.TotalSeconds, 2),
         };
-        _history.Add(entry, pcm);
+        _history.Add(entry, pcm, _pendingWords);
         _usage?.Record(entry);
         _tally?.Record(entry);
         // The dashboard's turnaround: only a dictation that went straight in counts (not one that waited for a click).

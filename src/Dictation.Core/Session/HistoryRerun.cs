@@ -50,6 +50,7 @@ public sealed class HistoryRerun
         var speechModel = _asr.LoadedModel ?? wanted;
         progress?.Report($"Transcribing again with {SpeechModels.NameOf(speechModel)}…");
         string heard;
+        IReadOnlyList<WordTiming> words;
         var client = new SpeechSessionClient();
         try
         {
@@ -71,6 +72,7 @@ public sealed class HistoryRerun
                 }
             }
             heard = (await client.StopAsync(TimeSpan.FromSeconds(Math.Max(60, seconds * 4)))).Trim();
+            words = client.LastWords;
             if (!client.IsConnected && heard.Length == 0)
                 throw new UserFacingException("The speech engine stopped while transcribing; nothing was changed.");
         }
@@ -115,7 +117,7 @@ public sealed class HistoryRerun
         entry.WasInserted = false;
         entry.RunAgainAt = DateTime.Now;
         entry.Note = note;
-        _history.Save(entry);
+        _history.Save(entry, words); // the timings of what was heard this time
         Log.Info($"History: ran {entry.Time:yyyyMMdd-HHmmss} again ({SpeechModels.NameOf(speechModel)}, {profile.Name}): " +
                  $"{entry.Earlier.Transcript.Length}->{raw.Length} chars heard");
         return $"Run again with {SpeechModels.NameOf(speechModel)} and the {profile.Name} profile{profileNote}. Not inserted anywhere: copy it, or insert it below.";

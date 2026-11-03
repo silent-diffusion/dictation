@@ -10,11 +10,15 @@ Protocol (WebSocket on 127.0.0.1 only):
   server -> client
     {"type":"ready","engine":"faster-whisper","model":...,"device":...,"compute_type":...}   (on connect)
     {"type":"partial","text":...}
-    {"type":"final","text":...,"seconds":...}
+    {"type":"commit","text":...,"words":[[word,start,end],...]}                  (live mode)
+    {"type":"final","text":...,"tail":...,"words":[...],"tail_words":[...],"seconds":...}
     {"type":"error","code":...,"message":...}
 
-Engines are pluggable: add a class with load()/transcribe(audio, final, language, prompt) and
-register it in ENGINES (a Parakeet engine would slot in here).
+Words are the timings of the words in the text (seconds into the session's audio, as sent): only the words that made
+it into the text, so a phrase or repeat the filters left out takes its timings with it. Partials carry none.
+
+Engines are pluggable: add a class with load()/transcribe(audio, final, language, prompt), transcribe_words (the same,
+with the words' timings) and segments (live mode), and register it in ENGINES (a Parakeet engine would slot in here).
 Audio is held in memory only for the duration of a session and is never written to disk.
 """
 import argparse
@@ -219,6 +223,48 @@ def original_time(t, regions):
 
 
 
+def word_key(text):
+    """A word as compared with the text it went into: lower case, letters and digits only."""
+    return re.sub(r"[\W_]", "", (text or "").lower())
+
+
+def seg_words(seg, regions=None):
+    """A segment's words as [text, start, end] (seconds in the audio as given, or, with regions, in the audio it was cut
+    from); words without a letter or digit (a lone dash, dots) left out."""
+    out = []
+    for w in getattr(seg, "words", None) or []:
+        text = (w.word or "").strip()
+        if not has_content(text):
+            continue
+        start, end = float(w.start), float(w.end)
+        if regions:
+            start, end = original_time(start, regions), original_time(end, regions)
+        out.append([text, round(start, 2), round(max(start, end), 2)])
+    return out
+
+
+def keep_words(words, text):
+    """The timings of the words that made it into text, after the filters took some out (made-up phrases, dot runs,
+    repeats): each word of the text takes the next heard word that matches it, so a sentence kept once out of three takes
+    the first one's timings. A word of the text with no match keeps none (and nothing is skipped for it)."""
+    out, i = [], 0
+    for token in (text or "").split():
+        key = word_key(token)
+        if not key:
+            continue
+        for j in range(i, len(words)):
+            if word_key(words[j][0]) == key:
+                out.append(words[j])
+                i = j + 1
+                break
+    return out
+
+
+def shifted(words, seconds):
+    """Word timings moved later by seconds (from a piece of the audio into the whole session)."""
+    return [[w, round(s + seconds, 2), round(e + seconds, 2)] for w, s, e in words] if seconds else list(words)
+
+
 def sentences(text):
     return [x for x in re.split(r"(?<=[.!?])\s+", (text or "").strip()) if x]
 
@@ -272,8 +318,9 @@ class FasterWhisperEngine:
                 log.warning("Could not load on %s: %s", dev, e)
         raise RuntimeError(f"Speech model could not be loaded: {last}")
 
-    def _decode(self, audio, beam, vad, language, prompt, temperature, drop_phantoms=False):
-        """Returns (text, seconds of speech the VAD kept, or None when the VAD was off)."""
+    def _decode(self, audio, beam, vad, language, prompt, temperature, drop_phantoms=False, words=False, regions=None):
+        """Returns (text, seconds of speech the VAD kept or None when the VAD was off, the timings of its words when
+        asked for: see seg_words)."""
         segs, info = self.model.transcribe(
             audio,
             language=language or None,
@@ -283,38 +330,51 @@ class FasterWhisperEngine:
             condition_on_previous_text=False,
             initial_prompt=prompt or None,
             temperature=temperature,
+            word_timestamps=words,
         )
-        text = " ".join(s.text.strip() for s in segs if not (drop_phantoms and is_phantom(s))).strip()
-        return text, (getattr(info, "duration_after_vad", None) if vad else None)
+        kept = [s for s in segs if not (drop_phantoms and is_phantom(s))]
+        text = " ".join(s.text.strip() for s in kept).strip()
+        timed = [w for s in kept for w in seg_words(s, regions)] if words else []
+        return text, (getattr(info, "duration_after_vad", None) if vad else None), timed
 
     def transcribe(self, audio, final, language, prompt, drop_phantoms=False, even=False):
-        vad = True
+        return self.transcribe_words(audio, final, language, prompt, drop_phantoms, even, words=False)[0]
+
+    def transcribe_words(self, audio, final, language, prompt, drop_phantoms=False, even=False, words=True):
+        """Like transcribe, also returning the timings of the text's words (seconds into the audio as given)."""
+        vad, regions = True, None
         if even:
             prepared = evened(audio)
             if prepared is None:
-                return ""  # nothing was said
-            audio, vad = prepared[0], False  # already cut to the speech
-        raw, speech = self._decode(audio, 5 if final else 1, vad, language, prompt, [0.0, 0.2, 0.4], drop_phantoms)
+                return "", []  # nothing was said
+            (audio, regions), vad = prepared, False  # already cut to the speech
+        raw, speech, timed = self._decode(audio, 5 if final else 1, vad, language, prompt, [0.0, 0.2, 0.4], drop_phantoms,
+                                          words, regions)
         text = clean(raw)
         if speech is not None and speech < MIN_SPEECH_SECONDS:
             # The VAD heard no speech. Decoding anyway (or retrying without the VAD) is exactly how Whisper
             # produces phantom "Thank you." / "Thanks for watching." on silence, so return nothing.
-            return ""
+            return "", []
         if final and not has_content(text):
             # Whisper sometimes emits only "..." on long/odd audio. Retry without VAD / with different decoding,
             # and as a last resort return nothing rather than junk.
             for beam, vad in ((1, False), (5, False)):
-                text = clean(self._decode(audio, beam, vad, language, prompt, [0.0, 0.3, 0.6], drop_phantoms)[0])
+                raw, _, timed = self._decode(audio, beam, vad, language, prompt, [0.0, 0.3, 0.6], drop_phantoms, words, regions)
+                text = clean(raw)
                 if has_content(text):
                     break
             else:
                 log.warning("final decode produced no usable text for %.1fs of audio", len(audio) / SAMPLE_RATE)
-                return ""
-        return text if has_content(text) else ""
+                return "", []
+        if not has_content(text):
+            return "", []
+        return text, keep_words(timed, text)
 
-    def segments(self, audio, language, prompt, even=False):
-        """Live mode: [(text, end_seconds)] for each phrase Whisper finds in the audio, silence skipped. A phrase it
-        made up rather than heard (see is_phantom) comes back as ("", end), so its audio can still be let go of."""
+    def segments(self, audio, language, prompt, even=False, words=False):
+        """Live mode: [(text, end_seconds, words)] for each phrase Whisper finds in the audio, silence skipped. A phrase
+        it made up rather than heard (see is_phantom) comes back as ("", end, []), so its audio can still be let go of.
+        words: the timings of the phrase's words (see seg_words), only when asked for (a piece is about to be committed);
+        otherwise []."""
         regions = None
         if even:
             prepared = evened(audio)
@@ -330,9 +390,15 @@ class FasterWhisperEngine:
             condition_on_previous_text=False,
             initial_prompt=prompt or None,
             temperature=[0.0, 0.2, 0.4],
+            word_timestamps=words,
         )
-        out = [("" if is_phantom(s) else clean(s.text.strip()), float(original_time(s.end, regions)) if regions else s.end) for s in segs]
-        return [(t if has_content(t) else "", e) for t, e in out]
+        out = []
+        for s in segs:
+            text = "" if is_phantom(s) else clean(s.text.strip())
+            text = text if has_content(text) else ""
+            end = float(original_time(s.end, regions)) if regions else s.end
+            out.append((text, end, keep_words(seg_words(s, regions), text) if words and text else []))
+        return out
 
 
 def choose_commit(segments, duration):
@@ -341,17 +407,17 @@ def choose_commit(segments, duration):
     Prefers the last phrase that ends a sentence; after a long stretch without one, settles for the last
     phrase boundary. Phrases ending within the final COMMIT_MARGIN seconds may still be cut off, so they wait.
     """
-    ready = [(t, e) for t, e in segments if e <= duration - COMMIT_MARGIN]
+    ready = [s for s in segments if s[1] <= duration - COMMIT_MARGIN]
     if not ready:
         return None
-    sentence_ends = [i for i, (t, _) in enumerate(ready) if t.rstrip("\"')").endswith((".", "!", "?"))]
+    sentence_ends = [i for i, s in enumerate(ready) if s[0].rstrip("\"')").endswith((".", "!", "?"))]
     if sentence_ends:
         last = sentence_ends[-1]
     elif duration >= LIVE_FORCE_SECONDS:
         last = len(ready) - 1
     else:
         return None
-    return " ".join(t for t, _ in ready[: last + 1] if t), ready[last][1]
+    return " ".join(s[0] for s in ready[: last + 1] if s[0]), ready[last][1]
 
 
 ENGINES = {"faster-whisper": FasterWhisperEngine}
@@ -379,6 +445,7 @@ class Session:
         self.even = False
         self.committed = 0          # samples already committed (live mode)
         self.committed_text = ""
+        self.committed_words = []   # live mode: the timings of the committed text's words (seconds in the session)
         self.dropped = 0            # live mode: committed samples already let go of (long sessions stay small)
 
     def audio(self):
@@ -442,13 +509,15 @@ class Session:
             last = self.samples
             due_commit = pending >= SAMPLE_RATE * LIVE_CHUNK_SECONDS
             audio = self.audio()[self.committed:]
+            base = (self.dropped + self.committed) / SAMPLE_RATE  # where that audio starts in the session
             # The text committed so far (plus the vocabulary hint) keeps casing and names consistent across pieces.
             prompt = self.prompt_for()
             try:
                 async with self.gpu_lock:
                     if not self.active:
                         break
-                    segs = await loop.run_in_executor(None, self.engine.segments, audio, self.language, prompt, self.even)
+                    segs = await loop.run_in_executor(None, self.engine.segments, audio, self.language, prompt, self.even,
+                                                      due_commit)
             except Exception as e:  # noqa: BLE001
                 log.exception("live decode failed")
                 await self.send({"type": "error", "code": "live_failed", "message": str(e)})
@@ -460,12 +529,15 @@ class Session:
             if pick:
                 text, end = pick
                 release = int(end * SAMPLE_RATE)
+                said = [w for _, e, ws in segs if e <= end for w in ws]
                 text = self.new_text(text)
                 if text:
+                    words = shifted(keep_words(said, text), base)
                     self.committed_text = (self.committed_text + " " + text).strip()
-                    await self.send({"type": "commit", "text": text})
-                segs = [(t, e) for t, e in segs if e > end]
-            elif due_commit and not any(t for t, _ in segs) and len(audio) >= SAMPLE_RATE * LIVE_FORCE_SECONDS:
+                    self.committed_words += words
+                    await self.send({"type": "commit", "text": text, "words": words})
+                segs = [s for s in segs if s[1] > end]
+            elif due_commit and not any(s[0] for s in segs) and len(audio) >= SAMPLE_RATE * LIVE_FORCE_SECONDS:
                 # Nothing heard for a while (silence, or only made-up phrases): let go of that audio too, keeping the
                 # last moments in case speech is just starting.
                 release = len(audio) - int((COMMIT_MARGIN + 1.0) * SAMPLE_RATE)
@@ -481,7 +553,7 @@ class Session:
                 self.dropped += drop
                 self.committed = 0
                 last = max(0, last - drop)
-            await self.send({"type": "partial", "text": " ".join(t for t, _ in segs if t).strip()})
+            await self.send({"type": "partial", "text": " ".join(s[0] for s in segs if s[0]).strip()})
 
     def start(self, msg):
         self.chunks, self.samples, self.last_decoded = [], 0, 0
@@ -492,7 +564,7 @@ class Session:
         self.drop_phantoms = bool(msg.get("drop_phantoms"))
         # Even out quiet speech before decoding (see evened); Settings › Speech, on by default.
         self.even = bool(msg.get("even"))
-        self.committed, self.committed_text, self.dropped = 0, "", 0
+        self.committed, self.committed_text, self.committed_words, self.dropped = 0, "", [], 0
         self.active = True
         self.partial_task = asyncio.create_task(self._live_loop() if self.live else self._partial_loop())
 
@@ -503,6 +575,7 @@ class Session:
         t0 = time.time()
         audio = self.audio()
         text = tail = ""
+        words, tail_words = [], []
         loop = asyncio.get_running_loop()
         rest = audio[self.committed:]
         if self.live and (self.committed or self.dropped):
@@ -511,20 +584,25 @@ class Session:
             if len(rest) >= SAMPLE_RATE * 0.3:
                 prompt = self.prompt_for()
                 async with self.gpu_lock:
-                    tail = await loop.run_in_executor(None, self.engine.transcribe, rest, True, self.language, prompt, True, self.even)
+                    tail, tail_words = await loop.run_in_executor(
+                        None, self.engine.transcribe_words, rest, True, self.language, prompt, True, self.even)
                 tail = self.new_text(tail)
+                tail_words = shifted(keep_words(tail_words, tail), (self.dropped + self.committed) / SAMPLE_RATE)
             text = (self.committed_text + " " + tail).strip()
+            words = self.committed_words + tail_words
         elif len(audio) >= SAMPLE_RATE * 0.3:
             async with self.gpu_lock:
-                text = await loop.run_in_executor(
-                    None, self.engine.transcribe, audio, True, self.language, self.prompt, self.live or self.drop_phantoms, self.even)
+                text, words = await loop.run_in_executor(
+                    None, self.engine.transcribe_words, audio, True, self.language, self.prompt, self.live or self.drop_phantoms, self.even)
             if self.live or self.drop_phantoms:
                 text = collapse_repeats(text)
-            tail = text if self.live else ""
+                words = keep_words(words, text)
+            tail, tail_words = (text, words) if self.live else ("", [])
         secs = (len(audio) + self.dropped) / SAMPLE_RATE
         self.chunks, self.samples, self.committed, self.dropped = [], 0, 0, 0  # discard audio
-        await self.send({"type": "final", "text": text, "tail": tail, "seconds": round(secs, 2),
-                         "decode_ms": int((time.time() - t0) * 1000)})
+        self.committed_words = []
+        await self.send({"type": "final", "text": text, "tail": tail, "words": words, "tail_words": tail_words,
+                         "seconds": round(secs, 2), "decode_ms": int((time.time() - t0) * 1000)})
 
     def cancel(self):
         self.active = False

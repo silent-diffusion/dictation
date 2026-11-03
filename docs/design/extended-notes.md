@@ -69,7 +69,16 @@ Agreed with the user on 2026-10-17; design mockup: https://claude.ai/artifact/47
 - **Playback copy**: the louder copy is made once per session and kept in `%TEMP%\oberton-notes\<id>.wav` (with its
   pauses in `<id>.json`; deleted with the session), so a session opens ready to play.
 - **Storage**: `data\notes\<yyyyMMdd-HHmmss>\session.json` and `audio.wav` (16 kHz mono, about 115 MB an hour; the wav
-  header is refreshed with every save, so a crash keeps everything up to the last save).
+  header is refreshed with every save, so a crash keeps everything up to the last save), and `words.json` (5.19).
+- **Word timings** (5.19): the speech engine sends, with every piece, when each of its words was said
+  (faster-whisper's word timestamps, only on the decodes that commit text, never on partials). Only words that made it
+  into the text keep a timing: a made-up phrase, a run of dots or a repeat the engine drops takes its timings with it.
+  They are kept in `words.json` beside `audio.wav`, `{"Version":1,"Words":[["Hello,",0.52,0.81],…]}` (seconds into
+  `audio.wav`; about 9,000 words an hour), written with the session when they changed, and read the first time playback
+  needs them. History keeps the same file beside each dictation's recording (and drops it with the recording). During
+  playback each tab's words are lined up with the heard ones (case and punctuation ignored; exactly for shorter texts,
+  cut first at words both have only once for long ones), so edits only cost the words edited; the Summary counts only
+  runs of three or more words. A missing or damaged file means no highlighting, nothing else.
 
 ## Data kept per session (session.json)
 

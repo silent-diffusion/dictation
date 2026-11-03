@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Text.Json.Serialization;
 using Dictation.Core.Infrastructure;
 using Dictation.Core.Settings;
+using Dictation.Core.Speech;
 using NAudio.Wave;
 
 namespace Dictation.Core.Session;
@@ -39,6 +40,9 @@ public sealed class HistoryEntry
     [JsonIgnore] public string Folder { get; set; } = "";
     [JsonIgnore] public string AudioPath => Path.Combine(Folder, "audio.wav");
     [JsonIgnore] public bool HasAudio => Folder.Length > 0 && File.Exists(AudioPath);
+    /// <summary>When each word heard in the recording was said (words.json beside audio.wav; none for dictations from
+    /// before word timings): the word being played back lights up.</summary>
+    [JsonIgnore] public string WordsPath => Path.Combine(Folder, WordTimings.FileName);
     [JsonIgnore] public string AppName => string.IsNullOrEmpty(App) ? "Unknown app" : App;
     [JsonIgnore] public string Preview
     {
@@ -67,7 +71,8 @@ public sealed class HistoryVersion
 }
 
 /// <summary>
-/// Recent dictations, kept in data\history (one folder each: entry.json and the recording as audio.wav). The data folder
+/// Recent dictations, kept in data\history (one folder each: entry.json, the recording as audio.wav and when its words
+/// were said as words.json). The data folder
 /// lives outside the program folder, so app updates never touch it. Only the newest <see cref="AppSettings.HistoryLimit"/>
 /// are kept. Use from the UI thread.
 /// </summary>
@@ -103,8 +108,9 @@ public sealed class HistoryStore
         Prune();
     }
 
-    /// <summary>Keep a finished dictation, with its recording (16 kHz mono 16-bit PCM) if audio is kept.</summary>
-    public void Add(HistoryEntry entry, byte[]? pcm)
+    /// <summary>Keep a finished dictation, with its recording (16 kHz mono 16-bit PCM) and when its words were said, if
+    /// audio is kept.</summary>
+    public void Add(HistoryEntry entry, byte[]? pcm, IReadOnlyList<WordTiming>? words = null)
     {
         if (!_settings.Current.KeepHistory) return;
         try
@@ -113,19 +119,27 @@ public sealed class HistoryStore
             Directory.CreateDirectory(folder);
             entry.Folder = folder;
             JsonStore.Save(Path.Combine(folder, "entry.json"), entry);
-            if (pcm is { Length: > 0 } && _settings.Current.SaveHistoryAudio) WavFile.Write(entry.AudioPath, pcm);
+            if (pcm is { Length: > 0 } && _settings.Current.SaveHistoryAudio)
+            {
+                WavFile.Write(entry.AudioPath, pcm);
+                if (words is { Count: > 0 }) WordTimings.Save(entry.WordsPath, words);
+            }
         }
         catch (Exception e) { Log.Error("Saving a dictation to History failed", e); }
         Entries.Insert(0, entry);
         Prune();
     }
 
-    /// <summary>Write a changed entry back to its entry.json (after it was run again).</summary>
-    public void Save(HistoryEntry entry)
+    /// <summary>Write a changed entry back to its entry.json (after it was run again), and, when given, the timings of
+    /// the words heard this time.</summary>
+    public void Save(HistoryEntry entry, IReadOnlyList<WordTiming>? words = null)
     {
         if (entry.Folder.Length == 0) return;
         try { JsonStore.Save(Path.Combine(entry.Folder, "entry.json"), entry); }
         catch (Exception e) { Log.Error("Saving a changed dictation to History failed", e); }
+        if (words == null) return;
+        try { WordTimings.Save(entry.WordsPath, words); }
+        catch (Exception e) { Log.Warn("Saving the word timings of a dictation failed: " + e.Message); }
     }
 
     /// <summary>Drop the entries beyond what is kept (by number or by age), and the recordings beyond what is kept of
@@ -144,7 +158,11 @@ public sealed class HistoryStore
             var e = Entries[i];
             var drop = (s.AudioLimit > 0 && i >= s.AudioLimit) || (s.AudioDays > 0 && e.Time < now.AddDays(-s.AudioDays));
             if (!drop || !e.HasAudio) continue;
-            try { File.Delete(e.AudioPath); }
+            try
+            {
+                File.Delete(e.AudioPath);
+                if (File.Exists(e.WordsPath)) File.Delete(e.WordsPath); // nothing to play them with
+            }
             catch (Exception ex) { Log.Warn("Could not delete a History recording: " + ex.Message); }
         }
     }

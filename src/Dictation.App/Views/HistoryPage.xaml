@@ -86,7 +86,7 @@
                        Text="Nothing here yet. Your dictations appear here, with their recordings."/>
 
             <!-- One dictation -->
-            <ScrollViewer Grid.Column="1" Margin="20,0,0,0" VerticalScrollBarVisibility="Auto">
+            <ScrollViewer x:Name="DetailScroll" Grid.Column="1" Margin="20,0,0,0" VerticalScrollBarVisibility="Auto">
                 <StackPanel x:Name="Detail" Visibility="Collapsed">
                     <DockPanel>
                         <Button DockPanel.Dock="Right" Content="DELETE" Style="{StaticResource QuietButton}" Click="Delete_Click"

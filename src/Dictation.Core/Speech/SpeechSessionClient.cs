@@ -21,8 +21,9 @@ public sealed class SpeechSessionClient : IAsyncDisposable
     TaskCompletionSource<string>? _final;
     volatile bool _connected;
 
-    /// <summary>A finished piece of text (background thread).</summary>
-    public event Action<string>? Committed;
+    /// <summary>A finished piece of text, with when its words were said (seconds into the audio sent on this connection;
+    /// empty when the engine sent none). Background thread.</summary>
+    public event Action<string, IReadOnlyList<WordTiming>>? Committed;
     /// <summary>The connection dropped (the engine stopped or restarted); background thread.</summary>
     public event Action? Disconnected;
 
@@ -39,12 +40,17 @@ public sealed class SpeechSessionClient : IAsyncDisposable
 
     bool _live = true;
 
+    /// <summary>When the words of what the last <see cref="StopAsync"/> returned were said (seconds into the audio sent
+    /// since <see cref="Start"/>); empty when the engine sent none.</summary>
+    public IReadOnlyList<WordTiming> LastWords { get; private set; } = Array.Empty<WordTiming>();
+
     /// <summary>Begin a session: live (finished pieces every few seconds, the rest when it stops), or not (everything
     /// sent is decoded at once when it stops). <paramref name="dropPhantoms"/>: leave out Whisper's made-up phrases.
     /// <paramref name="even"/>: even out quiet speech first (<see cref="Settings.AsrSettings.EvenOutVolume"/>).</summary>
     public void Start(string? language, string? prompt, bool live = true, bool dropPhantoms = false, bool even = false)
     {
         _live = live;
+        LastWords = Array.Empty<WordTiming>();
         var msg = JsonSerializer.Serialize(new { type = "start", language, prompt, live, drop_phantoms = dropPhantoms, even });
         _outbox.Writer.TryWrite((false, Encoding.UTF8.GetBytes(msg)));
     }
@@ -103,10 +109,12 @@ public sealed class SpeechSessionClient : IAsyncDisposable
             case "ready": _ready.TrySetResult(); break;
             case "commit":
                 var text = root.GetProperty("text").GetString() ?? "";
-                if (text.Trim().Length > 0) Committed?.Invoke(text);
+                if (text.Trim().Length > 0)
+                    Committed?.Invoke(text, root.TryGetProperty("words", out var words) ? WordTimings.Parse(words) : Array.Empty<WordTiming>());
                 break;
             case "final":
                 // Live: the speech after the last piece; otherwise the whole text.
+                LastWords = root.TryGetProperty(_live ? "tail_words" : "words", out var timed) ? WordTimings.Parse(timed) : Array.Empty<WordTiming>();
                 _final?.TrySetResult(root.TryGetProperty(_live ? "tail" : "text", out var tail) ? tail.GetString() ?? "" : "");
                 break;
             case "error":

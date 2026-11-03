@@ -10,6 +10,7 @@ using Dictation.Core.Infrastructure;
 using Dictation.Core.Notes;
 using Dictation.Core.Setup;
 using Dictation.Core.Speech;
+using Dictation.Core.Text;
 
 namespace Dictation.App.Views;
 
@@ -38,6 +39,11 @@ public partial class NotesPage : UserControl
     DateTime _editedBuilt = DateTime.MinValue;
     int _lastPlayCaret = -1;
     double? _pendingSeek;
+    // The word being played, lit up in the tab shown (see LightWord): one light per text, and each text's words matched
+    // to the heard ones, worked out again when the text changes.
+    readonly DispatcherTimer _wordTick = new() { Interval = TimeSpan.FromMilliseconds(50) };
+    readonly Dictionary<NoteDoc, WordLight> _lights = new();
+    readonly Dictionary<NoteDoc, (string Text, SpokenWords Words)> _spoken = new();
 
     public NotesPage()
     {
@@ -61,6 +67,8 @@ public partial class NotesPage : UserControl
         _views[NoteDoc.Formatted] = new MarkdownPresenter(FormattedBox, 14.5);
         _views[NoteDoc.Summary] = new MarkdownPresenter(SummaryBox, 14.5);
         foreach (var (doc, view) in _views) view.Shown = !_edited && _tab == doc; // the tab was chosen before the views existed
+        foreach (var (doc, view) in _views) _lights[doc] = new WordLight(view.Viewer, view.Viewer);
+        _wordTick.Tick += (_, _) => LightWord();
         AttachJump(TranscriptBox, NoteDoc.Transcript);
         AttachJump(FormattedBox, NoteDoc.Formatted);
         AttachJump(SummaryBox, NoteDoc.Summary);
@@ -322,6 +330,7 @@ public partial class NotesPage : UserControl
         ClosePlayer();
         Unbind();
         _session = s;
+        _spoken.Clear();
         Landing.Visibility = Visibility.Collapsed;
         SessionView.Visibility = Visibility.Visible;
         foreach (var view in _views.Values) view.ShowView();
@@ -474,6 +483,7 @@ public partial class NotesPage : UserControl
         _edited = EditedTab.IsChecked == true;
         _tab = FormattedTab.IsChecked == true ? NoteDoc.Formatted : SummaryTab.IsChecked == true ? NoteDoc.Summary : NoteDoc.Transcript;
         foreach (var (doc, view) in _views) view.Shown = !_edited && _tab == doc;
+        LightWord(); // in the tab shown now, if playing
         EditedPanel.Visibility = _edited ? Visibility.Visible : Visibility.Collapsed;
         TabHint.Text = _edited ? "EVERY CHANGE, IN COLOUR // READ ONLY"
             : _tab switch
@@ -799,6 +809,8 @@ public partial class NotesPage : UserControl
         _player.Play();
         _playing = true;
         if (SkipSilences.IsChecked == true) _skipTick.Start();
+        _wordTick.Start();
+        LightWord();
         ShowPlay();
     }
 
@@ -807,6 +819,8 @@ public partial class NotesPage : UserControl
         _player.Pause();
         _playing = false;
         _skipTick.Stop();
+        _wordTick.Stop();
+        LightWord(); // out
         ShowPlay();
     }
 
@@ -864,17 +878,50 @@ public partial class NotesPage : UserControl
         if (_seeking) return;
         if (_playerOpen) _player.Position = TimeSpan.FromSeconds(e.NewValue);
         else _pendingSeek = e.NewValue;
+        LightWord(); // the word at the new place, at once
     }
 
     void ClosePlayer()
     {
         _skipTick.Stop();
+        _wordTick.Stop();
+        foreach (var light in _lights.Values) light.Detach();
         _player.Stop();
         _player.Close();
         _playing = _playerOpen = _autoPlay = _prepareFailed = false;
         _prepared = null;
         _pendingSeek = null;
         if (IsInitialized) ShowPlay();
+    }
+
+    // ----- the word being played, lit up in the text -----
+
+    /// <summary>While playing: the word being said lights up in the tab shown (not in Edited), wherever the words of that
+    /// text match the ones heard, and stays in view (not while a line is open to edit). Otherwise nothing is lit.</summary>
+    void LightWord()
+    {
+        var playing = _playing && _playerOpen && _session != null && !Live;
+        var seconds = playing ? _player.Position.TotalSeconds : 0;
+        foreach (var (doc, light) in _lights)
+        {
+            if (!playing || _edited || doc != _tab) { light.Clear(); continue; }
+            var view = _views[doc];
+            var document = view.Viewer.Document;
+            // Rendered again since (an edit, a line opened): the runs are new.
+            if (!ReferenceEquals(light.Source, document))
+                light.Attach(document, view.RenderedText, view.TextRuns(), Spoken(doc, view.RenderedText));
+            light.Show(seconds, follow: !view.Editing);
+        }
+    }
+
+    /// <summary>The words of a text matched to the session's heard words; a summary only by phrases of three words or
+    /// more (it borrows them; single words would light up anywhere).</summary>
+    SpokenWords Spoken(NoteDoc doc, string text)
+    {
+        if (_spoken.TryGetValue(doc, out var known) && known.Text == text) return known.Words;
+        var words = _session is { } s ? SpokenWords.Map(text, s.Timings, doc == NoteDoc.Summary ? 3 : 1) : SpokenWords.None;
+        _spoken[doc] = (text, words);
+        return words;
     }
 
     // ----- the pipeline at the top: what each model is doing -----

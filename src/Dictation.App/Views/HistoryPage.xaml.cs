@@ -1,11 +1,13 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
+using System.Windows.Documents;
 using System.Windows.Media;
 using System.Windows.Threading;
 using Dictation.Core.Infrastructure;
 using Dictation.Core.Session;
 using Dictation.Core.Settings;
+using Dictation.Core.Speech;
 using Dictation.Core.Text;
 
 namespace Dictation.App.Views;
@@ -31,6 +33,9 @@ public partial class HistoryPage : UserControl
     readonly DispatcherTimer _tick = new() { Interval = TimeSpan.FromMilliseconds(200) };
     bool _playing, _seeking;
     string? _playCopy; // the player reads a temporary copy, so the entry's own file is never locked
+    // The word being played, lit up in each of the three boxes (see LightWord).
+    readonly DispatcherTimer _wordTick = new() { Interval = TimeSpan.FromMilliseconds(50) };
+    readonly List<WordLight> _lights = new();
 
     public HistoryPage()
     {
@@ -44,10 +49,13 @@ public partial class HistoryPage : UserControl
         _player.MediaEnded += (_, _) => StopPlayback();
         _player.MediaOpened += (_, _) => UpdateTime();
         _tick.Tick += (_, _) => UpdateTime();
+        _wordTick.Tick += (_, _) => LightWord();
+        foreach (var block in new[] { TranscriptBlock, DiffBlock, FinalBlock }) _lights.Add(new WordLight(block, DetailScroll));
         Unloaded += (_, _) =>
         {
             store.Entries.CollectionChanged -= OnEntriesChanged;
             _tick.Stop();
+            _wordTick.Stop();
             ClosePlayer();
         };
         UpdateCount();
@@ -211,6 +219,7 @@ public partial class HistoryPage : UserControl
                 : "No AI edit for this dictation.";
         }
         FinalBlock.Text = c.Final;
+        AttachWords(c);
         CopyAiButton.IsEnabled = !string.IsNullOrEmpty(c.AiOutput); // nothing to copy when no AI edit was used
         CopyAiButton.Opacity = CopyAiButton.IsEnabled ? 1 : 0.35;    // a bare text link doesn't grey out by itself
         NoteText.Text = c.Note ?? (c.SafetyNet ? "The safety net kept some of your original words." : "");
@@ -219,14 +228,16 @@ public partial class HistoryPage : UserControl
     void Play_Click(object sender, RoutedEventArgs e)
     {
         if (Current is not { HasAudio: true }) return;
-        if (_playing) { _player.Pause(); _playing = false; _tick.Stop(); }
+        if (_playing) { _player.Pause(); _playing = false; _tick.Stop(); _wordTick.Stop(); }
         else
         {
             _player.SpeedRatio = SpeedButton.IsChecked == true ? 2.0 : 1.0;
             _player.Play();
             _playing = true;
             _tick.Start();
+            _wordTick.Start();
         }
+        LightWord();
         PlayGlyph.Text = _playing ? "" : ""; // pause : play
     }
 
@@ -253,8 +264,48 @@ public partial class HistoryPage : UserControl
         _player.Stop();
         _playing = false;
         _tick.Stop();
+        _wordTick.Stop();
+        LightWord(); // out
         PlayGlyph.Text = "";
         UpdateTime();
+    }
+
+    // ----- the word being played, lit up -----
+
+    /// <summary>The shown dictation's three boxes, made ready to light up the word being played: each box's text matched
+    /// to the words heard in the recording (words.json; none for dictations from before word timings, which play
+    /// unlit). The AI Edit box is matched as shown, struck-through words included: those are the ones that were said.</summary>
+    void AttachWords(HistoryEntry c)
+    {
+        var heard = c.HasAudio ? WordTimings.Load(c.WordsPath) : new List<WordTiming>();
+        var blocks = new[] { TranscriptBlock, c.AiOutput != null ? DiffBlock : null, FinalBlock };
+        for (var i = 0; i < _lights.Count; i++)
+        {
+            if (blocks[i] is not { } block || heard.Count == 0) { _lights[i].Detach(); continue; }
+            var runs = new List<(int Offset, Run Run)>();
+            var text = new System.Text.StringBuilder();
+            foreach (var inline in block.Inlines)
+            {
+                if (inline is Run run)
+                {
+                    runs.Add((text.Length, run));
+                    text.Append(run.Text);
+                }
+                else text.Append('\n'); // a line break: no word runs across it
+            }
+            var shown = text.ToString();
+            _lights[i].Attach(c, shown, runs, SpokenWords.Map(shown, heard));
+        }
+    }
+
+    /// <summary>While playing, the word being said lights up in each box (and the first box keeps it in view, unless
+    /// the reader just scrolled); otherwise nothing is lit.</summary>
+    void LightWord()
+    {
+        var seconds = _player.Position.TotalSeconds;
+        for (var i = 0; i < _lights.Count; i++)
+            if (_playing) _lights[i].Show(seconds, follow: i == 0);
+            else _lights[i].Clear();
     }
 
     void UpdateTime()
@@ -272,6 +323,7 @@ public partial class HistoryPage : UserControl
         if (_seeking || !_player.NaturalDuration.HasTimeSpan) return;
         _player.Position = TimeSpan.FromSeconds(e.NewValue * _player.NaturalDuration.TimeSpan.TotalSeconds);
         UpdateTime();
+        LightWord(); // the word at the new place, at once
     }
 
     bool _rerunning;

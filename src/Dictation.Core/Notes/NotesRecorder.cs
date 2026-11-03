@@ -39,6 +39,9 @@ public sealed class NotesRecorder
     readonly object _wavLock = new();
     long _samples; // recorded, pauses not counted
     SpeechSessionClient? _speech;
+    // Where the audio sent to _speech begins in the recording, in seconds: its word timings count from there. (After a
+    // reconnect, the new connection starts with what waited in the backlog.)
+    double _speechStart;
     // Audio that arrives while the engine isn't connected (still loading, or the connection dropped) waits here, up to
     // three minutes of it, and goes out as soon as it is: the transcript has no gap. The lock guards _speech too.
     readonly object _audioLock = new();
@@ -168,6 +171,8 @@ public sealed class NotesRecorder
         lock (_wavLock) _wav?.Write(pcm, 0, pcm.Length);
         lock (_audioLock)
         {
+            // Counted here, under the lock, so a connection's start in the recording (_speechStart) is exact.
+            Interlocked.Add(ref _samples, pcm.Length / 2);
             if (_speech is { IsConnected: true } speech) speech.Send(pcm);
             else
             {
@@ -176,7 +181,6 @@ public sealed class NotesRecorder
                 while (_backlogBytes > MaxBacklogBytes) _backlogBytes -= _backlog.Dequeue().Length;
             }
         }
-        Interlocked.Add(ref _samples, pcm.Length / 2);
     }
 
     async Task ConnectSpeechAsync()
@@ -187,7 +191,8 @@ public sealed class NotesRecorder
         {
             if (!_asr.IsReady) await _asr.InitializeAsync(_speechModel(), CancellationToken.None);
             var client = new SpeechSessionClient();
-            client.Committed += text => OnUi(() => OnPiece(text));
+            var start = 0.0; // set below, before any audio goes out (so before any piece comes back)
+            client.Committed += (text, words) => OnUi(() => OnPiece(text, WordTimings.Shifted(words, start)));
             client.Disconnected += () => OnUi(() =>
             {
                 bool mine;
@@ -203,6 +208,7 @@ public sealed class NotesRecorder
             {
                 // What was said meanwhile goes first; the live audio follows on.
                 waiting = _backlog.Count;
+                start = _speechStart = (Interlocked.Read(ref _samples) - _backlogBytes / 2) / (double)MicCapture.SampleRate;
                 while (_backlog.Count > 0) client.Send(_backlog.Dequeue());
                 _backlogBytes = 0;
                 _speech = client;
@@ -221,13 +227,13 @@ public sealed class NotesRecorder
         finally { _connecting = false; }
     }
 
-    /// <summary>A finished piece of speech (UI thread).</summary>
-    void OnPiece(string text)
+    /// <summary>A finished piece of speech, with when its words were said in the recording (UI thread).</summary>
+    void OnPiece(string text, IReadOnlyList<WordTiming> words)
     {
         var s = Current;
         if (s == null) return;
         // The piece began about where the last one ended; it is reported a moment after it was said.
-        s.AppendHeard(text, _lastPieceSeconds, this);
+        s.AppendHeard(text, _lastPieceSeconds, this, words);
         _lastPieceSeconds = Math.Max(_lastPieceSeconds, Seconds - 1.0);
         _dirty = true;
     }
@@ -384,6 +390,7 @@ public sealed class NotesRecorder
         var client = await ConnectForRedoAsync(ct);
         var asr = _settings.Current.Asr;
         var pieces = new List<(double Seconds, string Text)>();
+        var words = new List<WordTiming>();
         var previous = "";
         var buffer = new byte[32000];
         try
@@ -425,13 +432,14 @@ public sealed class NotesRecorder
                 if (text.Length > 0)
                 {
                     pieces.Add((start, text));
+                    words.AddRange(WordTimings.Shifted(client.LastWords, start)); // the part's own times, into the recording
                     previous = text;
                 }
             }
         }
         finally { await client.DisposeAsync(); }
         ct.ThrowIfCancellationRequested();
-        s.ReplaceTranscript(pieces, this);
+        s.ReplaceTranscript(pieces, this, words);
         _store.Save(s);
         Log.Info($"Extended notes: transcribed {s.Id} again in {parts.Count} parts");
     }
@@ -587,9 +595,11 @@ public sealed class NotesRecorder
         try
         {
             SpeechSessionClient? speech;
+            double speechStart;
             lock (_audioLock)
             {
                 speech = _speech;
+                speechStart = _speechStart;
                 _speech = null;
                 if (_backlogBytes > 0)
                     Log.Warn($"Extended notes: {_backlogBytes / 2 / MicCapture.SampleRate} s of audio never reached the speech engine (not connected); the recording has it");
@@ -599,7 +609,7 @@ public sealed class NotesRecorder
             if (speech != null)
             {
                 var tail = await speech.StopAsync(TimeSpan.FromSeconds(60));
-                if (tail.Trim().Length > 0) s.AppendHeard(tail, _lastPieceSeconds, this);
+                if (tail.Trim().Length > 0) s.AppendHeard(tail, _lastPieceSeconds, this, WordTimings.Shifted(speech.LastWords, speechStart));
                 await speech.DisposeAsync();
             }
             CloseWav();
@@ -648,6 +658,8 @@ public sealed class NotesRecorder
         s.Finished = true;
         try { File.WriteAllText(Path.Combine(s.Folder, "session.json"), System.Text.Json.JsonSerializer.Serialize(s, JsonStore.Options)); }
         catch (Exception e) { Log.Warn("Extended notes: saving at exit failed: " + e.Message); }
+        try { if (s.TimingsDirty) WordTimings.Save(s.TimingsPath, s.Timings); }
+        catch (Exception e) { Log.Warn("Extended notes: saving the word timings at exit failed: " + e.Message); }
         _store.Usage.Record(s, _formatRequests, _summaryRequests);
         Current = null;
     }

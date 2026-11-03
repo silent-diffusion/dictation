@@ -208,7 +208,8 @@ puts it back to 100%; the size is remembered, and *Settings › Appearance* has 
 * **History**: every dictation's text, and recordings for a week, by default, kept in Oberton's data folder so they survive updates. Under *Settings › History*
   the text and the recordings each keep either the newest so many (10 to 500) or everything from a recent stretch (the
   last 24 hours to the last year); the text can also be kept for good, and a recording never outlives its text. Each has its recording (play it, also at 2×), the Transcription, AI Edit and Inserted boxes (each can be copied),
-  and the app and window it went into. List them grouped by app (the default; each app's group folds away) or newest first.
+  and the app and window it went into. While the recording plays, the word being said lights up in the accent colour in
+  each box (5.19; where the AI changed a word, it isn't lit; dictations from before 5.19 play unlit). List them grouped by app (the default; each app's group folds away) or newest first.
 * **Extended Notes** (5.0): for very long sessions, a lecture or a meeting. Pick what to listen to (**Mic**, **Computer
   audio**, which is what the speakers play, for the other people on a video call, or **Both**) and press *Extended notes
   session*. Four plain text tabs:
@@ -219,7 +220,10 @@ puts it back to 100%; the size is remembered, and *Settings › Appearance* has 
   AI struck through in grey, added by the AI in the accent, ¶ where the AI made a paragraph; removed by you, changed by you
   and notes typed by you in amber). The titles are click-to-rename. Once the session has stopped, the bar at the bottom
   plays the recording from where your cursor is in the text (1×, 1.5×, 2×, **Skip silences**) with its level brought up
-  (mic recordings are quiet), and a right-click in any tab jumps to that moment in the recording; **Export** saves the
+  (mic recordings are quiet), and a right-click in any tab jumps to that moment in the recording. While it plays, the
+  word being said lights up in the accent colour (5.19) in the Transcript and Formatted tabs, and in the Summary where it
+  quotes three or more words in a row, and the text scrolls to keep it in view (not for 5 seconds after you scroll
+  yourself); a word you changed isn't lit, and sessions from before 5.19 play unlit; **Export** saves the
   transcript, the formatted text, the summary or everything as .txt, .md or Word (.docx), and the recording (as played) as .wav.
   While a session records, **⚑ Mark** in the header (or the marker hotkey, if one is set under Settings › Hotkeys) drops a time marker
   on its own line in the transcript (the AI keeps it; a right-click on it jumps there; *Everything* exports list them).

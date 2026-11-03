@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Dictation.Core.Speech;
 
 namespace Dictation.Core.Notes;
 
@@ -102,6 +103,16 @@ public sealed class NoteSession
     [JsonIgnore] public string AudioPath => Path.Combine(Folder, "audio.wav");
     [JsonIgnore] public string Id => Path.GetFileName(Folder);
 
+    List<WordTiming>? _timings;
+    /// <summary>When each heard word was said, in the recording: the word being played back lights up wherever it is
+    /// in the texts (<see cref="Dictation.Core.Text.SpokenWords"/>). Kept in words.json beside audio.wav rather than here (an hour is
+    /// about 9,000 words), and read from there the first time it is needed. Empty for sessions from before word
+    /// timings, which play without highlighting.</summary>
+    [JsonIgnore] public List<WordTiming> Timings => _timings ??= Folder.Length > 0 ? WordTimings.Load(TimingsPath) : new();
+    [JsonIgnore] public string TimingsPath => Path.Combine(Folder, WordTimings.FileName);
+    /// <summary><see cref="Timings"/> changed since words.json was last written.</summary>
+    [JsonIgnore] public bool TimingsDirty { get; set; }
+
     /// <summary>A text changed; the argument is whoever changed it (a text box, or the recorder), so it can skip its own
     /// change.</summary>
     public event Action<NoteDoc, object?>? Changed;
@@ -117,11 +128,17 @@ public sealed class NoteSession
         _ => Transcript,
     };
 
-    /// <summary>A finished piece from the recognizer, at <paramref name="seconds"/> into the recording.</summary>
-    public void AppendHeard(string text, double seconds, object? source = null)
+    /// <summary>A finished piece from the recognizer, at <paramref name="seconds"/> into the recording, with when its
+    /// words were said (if the engine sent that).</summary>
+    public void AppendHeard(string text, double seconds, object? source = null, IReadOnlyList<WordTiming>? words = null)
     {
         text = text.Trim();
         if (text.Length == 0) return;
+        if (words is { Count: > 0 })
+        {
+            Timings.AddRange(words);
+            TimingsDirty = true;
+        }
         var heardAt = Heard.Length == 0 ? 0 : Heard.Length + 1;
         Heard = Join(Heard, text);
         var sep = Transcript.Length == 0 || char.IsWhiteSpace(Transcript[^1]) ? "" : " ";
@@ -163,12 +180,15 @@ public sealed class NoteSession
     // ===== redoing a step (a finished session) =====
 
     /// <summary>A new transcript, from the recording transcribed again: these pieces, with the markers back in place by
-    /// their time. What was formatted and summed up goes with the old one.</summary>
-    public void ReplaceTranscript(IReadOnlyList<(double Seconds, string Text)> pieces, object? source = null)
+    /// their time, and the timings of their words (the old ones go with the old transcript). What was formatted and
+    /// summed up goes with the old one.</summary>
+    public void ReplaceTranscript(IReadOnlyList<(double Seconds, string Text)> pieces, object? source = null, IReadOnlyList<WordTiming>? words = null)
     {
         Heard = "";
         Transcript = "";
         TranscriptAnchors.Clear();
+        _timings = (words ?? Array.Empty<WordTiming>()).OrderBy(w => w.Start).ToList();
+        TimingsDirty = true;
         ResetFormatting(source);
         var markers = Markers.OrderBy(m => m.Seconds).ToList();
         var next = 0;

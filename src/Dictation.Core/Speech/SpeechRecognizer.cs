@@ -36,6 +36,9 @@ public interface ISpeechRecognizer : IAsyncDisposable
     void AcceptAudio(byte[] pcm16kMono);
     /// <summary>Live mode: the transcript of the speech after the last <see cref="Committed"/> piece, from the last StopAsync.</summary>
     string FinalTail { get; }
+    /// <summary>When each word of the last final transcript was said (seconds into the audio sent), from the last
+    /// StopAsync; empty when the engine sent none.</summary>
+    IReadOnlyList<WordTiming> FinalWords { get; }
     /// <summary>Stop, finish decoding and return the final raw transcript.</summary>
     Task<string> StopAsync(CancellationToken ct = default);
     void Cancel();
@@ -65,6 +68,7 @@ public sealed class SidecarSpeechRecognizer : ISpeechRecognizer
     public event Action<string>? PartialTranscript;
     public event Action<string>? Committed;
     public string FinalTail { get; private set; } = "";
+    public IReadOnlyList<WordTiming> FinalWords { get; private set; } = Array.Empty<WordTiming>();
     public event Action<string>? FinalTranscript;
     public event Action<string, bool>? StatusChanged;
     public bool IsReady => _ready && _ws?.State == WebSocketState.Open;
@@ -258,6 +262,7 @@ public sealed class SidecarSpeechRecognizer : ISpeechRecognizer
             case "final":
                 var text = root.GetProperty("text").GetString() ?? "";
                 FinalTail = root.TryGetProperty("tail", out var tail) ? tail.GetString() ?? "" : "";
+                FinalWords = root.TryGetProperty("words", out var words) ? WordTimings.Parse(words) : Array.Empty<WordTiming>();
                 Log.Info($"asr final: {text.Length} chars, {root.GetProperty("seconds").GetDouble():0.0}s audio, {root.GetProperty("decode_ms").GetInt32()} ms decode");
                 FinalTranscript?.Invoke(text);
                 _final?.TrySetResult(text);
@@ -279,6 +284,7 @@ public sealed class SidecarSpeechRecognizer : ISpeechRecognizer
         var asr = _settings.Current.Asr;
         var msg = JsonSerializer.Serialize(new { type = "start", language = asr.Language, prompt = asr.VocabularyHint, live, even = asr.EvenOutVolume });
         _final = null;
+        FinalWords = Array.Empty<WordTiming>();
         _outbox.Writer.TryWrite((false, Encoding.UTF8.GetBytes(msg)));
     }
 

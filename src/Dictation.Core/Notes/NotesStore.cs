@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Xml;
 using Dictation.Core.Infrastructure;
+using Dictation.Core.Speech;
 
 namespace Dictation.Core.Notes;
 
@@ -78,14 +79,23 @@ public sealed class NotesStore
         return s;
     }
 
-    /// <summary>Save a session: serialized here (the UI thread owns it), written in the background.</summary>
+    /// <summary>Save a session: serialized here (the UI thread owns it), written in the background. Its word timings
+    /// go to words.json, when they changed.</summary>
     public void Save(NoteSession s)
     {
         if (s.Folder.Length == 0) return;
         string json;
-        try { json = JsonSerializer.Serialize(s, JsonStore.Options); }
+        string? words = null;
+        var wordsChanged = s.TimingsDirty;
+        try
+        {
+            json = JsonSerializer.Serialize(s, JsonStore.Options);
+            if (wordsChanged) words = s.Timings.Count > 0 ? WordTimings.Serialize(s.Timings) : null;
+        }
         catch (Exception e) { Log.Error("Extended notes: couldn't serialize a session", e); return; }
+        s.TimingsDirty = false;
         var path = Path.Combine(s.Folder, "session.json");
+        var wordsPath = s.TimingsPath;
         _ = Task.Run(() =>
         {
             lock (_writeLock)
@@ -97,6 +107,9 @@ public sealed class NotesStore
                     File.Move(tmp, path, true);
                 }
                 catch (Exception e) { Log.Warn("Extended notes: saving failed: " + e.Message); }
+                if (!wordsChanged) return;
+                try { WordTimings.Write(wordsPath, words); }
+                catch (Exception e) { Log.Warn("Extended notes: saving the word timings failed: " + e.Message); }
             }
         });
     }

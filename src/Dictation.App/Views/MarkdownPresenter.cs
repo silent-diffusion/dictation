@@ -108,6 +108,20 @@ sealed class MarkdownPresenter
 
     public bool Editing => _editing;
 
+    /// <summary>The text as last rendered: what the runs' offsets (<see cref="TextRuns"/>) point into.</summary>
+    public string RenderedText => _rendered;
+
+    /// <summary>The rendered runs of text, each with where it starts in <see cref="RenderedText"/>, in order (for lighting
+    /// up the word being played back).</summary>
+    public IEnumerable<(int Offset, Run Run)> TextRuns()
+    {
+        foreach (var block in Viewer.Document.Blocks)
+            if (block is Paragraph p)
+                foreach (var inline in p.Inlines)
+                    if (inline is Run { Tag: int offset } run)
+                        yield return (offset, run);
+    }
+
     void Apply()
     {
         _box.Visibility = Visibility.Collapsed;
