@@ -104,9 +104,11 @@ public struct HistoryEntry: Codable, Identifiable, Sendable, Hashable {
     public var seconds: Double
     public var turnaroundSeconds: Double
     public var warning: String?
+    /// The safety net rejected the AI's edit (all of it or some parts); nil in entries saved before this was kept.
+    public var safetyNet: Bool?
 
     public init(transcription: String, aiEdit: String?, inserted: String, profileName: String, model: String?, appName: String?,
-                seconds: Double, turnaroundSeconds: Double, warning: String?) {
+                seconds: Double, turnaroundSeconds: Double, warning: String?, safetyNet: Bool = false) {
         self.transcription = transcription
         self.aiEdit = aiEdit
         self.inserted = inserted
@@ -116,6 +118,7 @@ public struct HistoryEntry: Codable, Identifiable, Sendable, Hashable {
         self.seconds = seconds
         self.turnaroundSeconds = turnaroundSeconds
         self.warning = warning
+        self.safetyNet = safetyNet
     }
 
     public var words: Int { inserted.split(whereSeparator: \.isWhitespace).count }

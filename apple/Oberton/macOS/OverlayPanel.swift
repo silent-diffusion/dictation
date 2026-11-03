@@ -115,6 +115,15 @@ enum OverlaySnapshots {
                                  inserted: "The plan for Friday is to ship the beta to the first ten testers, and then collect feedback.",
                                  profileName: "Light Cleanup", model: nil, appName: "Microsoft Outlook (Work Account)", seconds: 14,
                                  turnaroundSeconds: 1.2, warning: error)
+        var clean = entry
+        clean.warning = nil
+        var rejected = entry
+        rejected.inserted = entry.transcription
+        rejected.warning = "The AI's edit failed the safety net, so your original words were inserted unchanged."
+        rejected.safetyNet = true
+        var partly = entry
+        partly.warning = "The AI's edit of 1 of 3 parts failed the safety net; those parts were inserted unchanged."
+        partly.safetyNet = true
         let long = String(repeating: "and then we collect feedback from all of them over the following week, ", count: 30)
         let shots: [(String, CGSize, AnyView)] = [
             ("pill-recording", room, AnyView(PillContent(phase: .recording, profile: "Light Cleanup", startedAt: .now, opacity: opacity))),
@@ -142,15 +151,15 @@ enum OverlaySnapshots {
             ("profile-notice", room, AnyView(ProfilePill(name: "Light Cleanup", index: 1, count: 4, opacity: opacity))),
             ("profile-notice-long", room, AnyView(ProfilePill(name: "Formal email to the leadership team, with British spelling and no contractions",
                                                               index: 3, count: 6, opacity: opacity))),
-            ("receipt-done", room, AnyView(VStack(spacing: 10) {
-                ReceiptCard(entry: entry) {}
-                PillContent(phase: .done("Inserted into Microsoft Outlook (Work Account)"), profile: "", opacity: opacity)
-            })),
-            ("receipt-long-short-screen", CGSize(width: 420, height: 480), AnyView(VStack(spacing: 10) {
-                ReceiptCard(entry: HistoryEntry(transcription: long, aiEdit: nil, inserted: long, profileName: "Raw", model: nil,
-                                                appName: "Notes", seconds: 90, turnaroundSeconds: 1, warning: nil)) {}
-                PillContent(phase: .done("Inserted into Notes"), profile: "", opacity: opacity)
-            })),
+            ("receipt", room, AnyView(ReceiptPill(entry: clean, opacity: opacity))),
+            ("receipt-open", room, AnyView(ReceiptPill(entry: clean, opacity: opacity, open: true))),
+            ("receipt-safety-net", room, AnyView(ReceiptPill(entry: rejected, opacity: opacity))),
+            ("receipt-safety-net-open", room, AnyView(ReceiptPill(entry: rejected, opacity: opacity, open: true))),
+            ("receipt-partly-edited", room, AnyView(ReceiptPill(entry: partly, opacity: opacity))),
+            ("receipt-note", room, AnyView(ReceiptPill(entry: entry, opacity: opacity))),
+            ("receipt-open-long-short-screen", CGSize(width: 420, height: 480), AnyView(ReceiptPill(
+                entry: HistoryEntry(transcription: long, aiEdit: nil, inserted: long, profileName: "Raw", model: nil,
+                                    appName: "Notes", seconds: 90, turnaroundSeconds: 1, warning: nil), opacity: opacity, open: true))),
         ]
         for (name, room, view) in shots {
             let content = view.environment(\.overlayRoom, room).padding(OverlayController.padding).fixedSize()
@@ -193,12 +202,8 @@ struct OverlayView: View {
         VStack(alignment: alignment.horizontal, spacing: 10) {
             if model.phase == .preview, let pending = model.pending {
                 ReceiptCard(entry: pending, preview: true) { model.cancel() }
-            } else if showReceipt, let receipt = model.receipt {
-                ReceiptCard(entry: receipt) { showReceipt = false }
             }
-            if model.phase != .idle && model.phase != .preview {
-                OverlayPill { if case .done = model.phase { showReceipt = true } }
-            }
+            OverlayPill(reader: model.reader, open: $showReceipt)
             ReaderCard(player: model.reader, opacity: model.settings.overlayOpacity)
         }
         .padding(OverlayController.padding)
@@ -206,7 +211,7 @@ struct OverlayView: View {
         .onGeometryChange(for: CGSize.self) { $0.size } action: { onSize($0) }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: alignment)
         .obertonTheme(model.settings)
-        .onChange(of: model.phase) { _, new in if new == .recording { showReceipt = false } }
+        .onChange(of: model.phase) { _, new in if case .done = new {} else { showReceipt = false } }
     }
 }
 #endif

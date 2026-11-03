@@ -131,6 +131,7 @@ final class AppModel: ObservableObject {
         platform?.captureTarget()
         liveText = ""
         pending = nil
+        receipt = nil
         phase = .starting
         startedAt = Date()
         work = Task {
@@ -182,7 +183,8 @@ final class AppModel: ObservableObject {
         let entry = HistoryEntry(transcription: raw, aiEdit: profile.isRaw ? nil : result.text, inserted: result.text,
                                  profileName: profile.name, model: profile.isRaw ? nil : processor.model(for: profile).description,
                                  appName: platform?.targetAppName, seconds: seconds,
-                                 turnaroundSeconds: Date().timeIntervalSince(stoppedAt ?? Date()), warning: result.warning)
+                                 turnaroundSeconds: Date().timeIntervalSince(stoppedAt ?? Date()), warning: result.warning,
+                                 safetyNet: result.safetyNet)
         if profile.showPreview {
             pending = entry
             phase = .preview
@@ -213,7 +215,8 @@ final class AppModel: ObservableObject {
             fail(error)
             return
         }
-        scheduleIdle()
+        // The receipt stays 3 s, or 6 s when it has a warning to read (as on Windows).
+        scheduleIdle(after: entry.warning == nil ? 3 : 6)
     }
 
     private func fail(_ error: Error) {
@@ -231,10 +234,23 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// The pointer is on the receipt: it stays until the pointer leaves, then goes after `seconds`.
+    func holdReceipt(_ hold: Bool, release seconds: Double = 2) {
+        guard case .done = phase else { return }
+        if hold { idleTask?.cancel() } else { scheduleIdle(after: seconds) }
+    }
+
+    /// The receipt's ✕.
+    func dismissReceipt() {
+        guard case .done = phase else { return }
+        idleTask?.cancel()
+        phase = .idle
+    }
+
     func cycleProfile() {
         guard let i = profiles.firstIndex(where: { $0.id == activeProfile.id }), !profiles.isEmpty else { return }
         activeProfile = profiles[(i + 1) % profiles.count]
-        // Mid-dictation the pill's chip already shows the profile; otherwise the notice takes the pill's place.
+        // Mid-dictation the pill's chip already shows the profile; otherwise the notice takes the receipt's place.
         guard !phase.isBusy else { return }
         idleTask?.cancel()
         phase = .idle

@@ -62,17 +62,14 @@ struct PhoneOverlay: View {
         VStack(spacing: 10) {
             if model.phase == .preview, let pending = model.pending {
                 ReceiptCard(entry: pending, preview: true) { model.cancel() }.frame(maxWidth: 360)
-            } else if showReceipt, let r = model.receipt {
-                ReceiptCard(entry: r) { showReceipt = false }.frame(maxWidth: 360)
             }
-            if model.phase != .idle && model.phase != .preview {
-                OverlayPill { if case .done = model.phase { showReceipt = true } }
-            }
+            OverlayPill(reader: model.reader, open: $showReceipt)
         }
         .padding(.horizontal, 12)
         .padding(.bottom, 8)
         .scaleEffect(0.92)
         .animation(.easeOut(duration: 0.2), value: model.phase)
+        .onChange(of: model.phase) { _, new in if case .done = new {} else { showReceipt = false } }
     }
 }
 #endif

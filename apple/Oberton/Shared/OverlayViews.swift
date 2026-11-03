@@ -45,21 +45,29 @@ private struct HeightCap: Layout {
     }
 }
 
-/// The pill: ● 00:14 ▮▮▮ LIGHT CLEANUP 録音 ✕ CANCEL. Clicking it after a dictation shows the receipt. For a moment
-/// after the cycle-profile hotkey, it shows which profile is on now.
+/// The pill: ● 00:14 ▮▮▮ LIGHT CLEANUP 録音 ✕ CANCEL; after a dictation went in, the receipt (click it to compare);
+/// or, for a moment after the cycle-profile hotkey, which profile is on now.
 struct OverlayPill: View {
     @EnvironmentObject var model: AppModel
-    var onTap: () -> Void = {}
+    @ObservedObject var reader: ReadAloudPlayer
+    /// The receipt's three boxes are open.
+    @Binding var open: Bool
 
     var body: some View {
+        let opacity = model.settings.overlayOpacity
         if model.profileNotice, !model.phase.isBusy {
             let i = model.profiles.firstIndex { $0.id == model.activeProfile.id } ?? 0
-            ProfilePill(name: model.activeProfile.name, index: i, count: model.profiles.count, opacity: model.settings.overlayOpacity)
+            ProfilePill(name: model.activeProfile.name, index: i, count: model.profiles.count, opacity: opacity)
+        } else if case .done = model.phase, let entry = model.receipt {
+            // A profile can read what went in aloud: the player then takes the receipt's place, unless it has a warning.
+            if !reader.isSpeaking || entry.warning != nil {
+                ReceiptPill(entry: entry, opacity: opacity, open: open, onOpen: { open = true },
+                            onHover: { model.holdReceipt($0, release: open ? 4 : 2) }, onClose: { model.dismissReceipt() })
+            }
         } else if model.phase != .idle, model.phase != .preview {
             let live = [.recording, .transcribing, .processing].contains(model.phase) ? model.liveText : ""
             PillContent(phase: model.phase, profile: model.activeProfile.name, level: model.level, startedAt: model.startedAt,
-                        live: live, opacity: model.settings.overlayOpacity, onCancel: { model.cancel() })
-                .onTapGesture(perform: onTap)
+                        live: live, opacity: opacity, onCancel: { model.cancel() })
         }
     }
 }
@@ -115,6 +123,161 @@ struct ProfilePill: View {
             .modifier(PillBox(opacity: opacity))
             .accessibilityElement(children: .combine)
         }
+    }
+}
+
+/// ✓ INSERTED  17 WORDS // 1.2 S  挿入 — after a dictation went in. Dimmed so it doesn't compete with the text; the
+/// pointer on it brings it back and keeps it. When the safety net stepped in (or there is a note), a warning and the
+/// note instead. Clicking it opens 01 // TRANSCRIPTION, 02 // AI EDIT, 03 // INSERTED, read top to bottom, with ✕.
+struct ReceiptPill: View {
+    var entry: HistoryEntry
+    var opacity: Double
+    var open = false
+    var onOpen: () -> Void = {}
+    var onHover: (Bool) -> Void = { _ in }
+    var onClose: () -> Void = {}
+    @Environment(\.ob) private var ob
+    @Environment(\.overlayRoom) private var room
+    @State private var hovering = false
+
+    private var safetyNet: Bool { entry.safetyNet ?? false }
+    private var noted: Bool { safetyNet || entry.warning != nil }
+    private var edited: Bool { entry.inserted != entry.transcription }
+
+    var body: some View {
+        // Windows' widths: 360 for the receipt, 470 with a note, 560 with the boxes open.
+        let width: CGFloat = open ? 560 : noted ? 470 : 360
+        WidthCap(width: min(width, room.width)) {
+            VStack(alignment: .leading, spacing: 0) {
+                row
+                if open {
+                    boxes.padding(EdgeInsets(top: 6, leading: 0, bottom: 8, trailing: 10))
+                } else if noted {
+                    note.padding(EdgeInsets(top: 4, leading: 0, bottom: 6, trailing: 10))
+                }
+            }
+            .frame(minWidth: min(width, room.width) - 26, alignment: .leading)
+            .modifier(PillBox(opacity: opacity))
+            .opacity(noted || open || hovering ? 1 : 0.55)
+        }
+        .onHover { on in
+            hovering = on
+            onHover(on)
+        }
+        .onTapGesture { if !open { onOpen() } }
+    }
+
+    private var row: some View {
+        HStack(spacing: 0) {
+            Group {
+                if noted {
+                    Image(systemName: "exclamationmark.triangle").font(.system(size: 12)).foregroundStyle(lightText)
+                } else {
+                    Image(systemName: "checkmark").font(.system(size: 11, weight: .semibold)).foregroundStyle(lightText)
+                }
+            }
+            .frame(width: 16, height: 16)
+            .padding(.trailing, 12)
+            Text(title).font(Ob.mono(11, .semibold)).fixedSize()
+            if !noted {
+                Text("\(entry.words) \(entry.words == 1 ? "WORD" : "WORDS") // \(String(format: "%.1f", entry.turnaroundSeconds)) S")
+                    .font(Ob.mono(11)).foregroundStyle(mutedText).lineLimit(1).truncationMode(.tail)
+                    .padding(.horizontal, 12)
+            }
+            Spacer(minLength: 12)
+            if !noted { Decor("挿入", size: 10, color: lightText.opacity(0.5)).fixedSize().padding(.trailing, 10) }
+            if open {
+                Button(action: onClose) {
+                    Text("✕").font(Ob.mono(11)).frame(width: 36, height: 36)
+                        .overlay(Circle().strokeBorder(lightText.opacity(0.22), lineWidth: 1))
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close")
+            }
+        }
+        .frame(minHeight: 24)
+    }
+
+    private var title: String {
+        !safetyNet ? "INSERTED" : edited ? "PARTLY EDITED" : "ORIGINAL WORDS INSERTED"
+    }
+
+    /// The note, or what the safety net did: 15 pt on 22 pt lines, at most five lines (the end of it if longer).
+    private var note: some View {
+        let text = entry.warning ?? "The AI's edit changed too much (or came back empty), so your words went in unchanged. "
+            + "You can adjust the safety net on the profile's page."
+        return Text(LiveWords.tail(text, 260))
+            .font(Ob.sans(15)).lineSpacing(5).foregroundStyle(lightText)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxHeight: 112, alignment: .top).clipped()
+    }
+
+    /// The AI's edit is shown as a diff unless there was none: no AI, or the AI's words were not used at all.
+    private var hasEdit: Bool { entry.aiEdit != nil && !(entry.warning != nil && !edited) }
+
+    private var boxes: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            box("01 // TRANSCRIPTION", copy: entry.transcription) {
+                Text(entry.transcription).foregroundStyle(lightText.opacity(0.85))
+            }
+            rule
+            box("02 // AI EDIT", copy: hasEdit ? entry.aiEdit ?? "" : "") {
+                if hasEdit, let edit = entry.aiEdit {
+                    DiffText(original: entry.transcription, edited: edit.trimmingCharacters(in: .whitespacesAndNewlines), size: 14, onDark: true)
+                } else {
+                    Text(safetyNet ? "The safety net rejected the AI's edit, so your words went in as spoken." : "No AI edit for this dictation.")
+                        .foregroundStyle(mutedText)
+                }
+            }
+            rule
+            box("03 // INSERTED", copy: entry.inserted) {
+                Text(entry.inserted.trimmingCharacters(in: .whitespacesAndNewlines)).foregroundStyle(lightText)
+            }
+        }
+    }
+
+    private var rule: some View { Rectangle().fill(lightText.opacity(0.22)).frame(height: 1).padding(.vertical, 9) }
+
+    /// A box: its name and COPY, then its text, which scrolls past 130 pt.
+    private func box<C: View>(_ title: String, copy: String, @ViewBuilder content: () -> C) -> some View {
+        let text = content().font(Ob.sans(14)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(title).font(Ob.mono(10.5)).foregroundStyle(lightText.opacity(0.6))
+                Spacer()
+                CopyLink(text: copy)
+            }
+            HeightCap(height: 130) {
+                ViewThatFits(in: .vertical) {
+                    text
+                    ScrollView { text }.scrollIndicators(.automatic)
+                }
+            }
+        }
+    }
+}
+
+/// COPY next to a box's name; COPIED ✓ for a moment after.
+private struct CopyLink: View {
+    var text: String
+    @State private var copied = false
+
+    var body: some View {
+        Button {
+            let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !t.isEmpty else { return }
+            Clipboard.copy(t)
+            copied = true
+            Task { try? await Task.sleep(for: .seconds(1.4)); copied = false }
+        } label: {
+            Text(copied ? "COPIED ✓" : "COPY").font(Ob.mono(10.5)).foregroundStyle(lightText.opacity(0.8))
+                .padding(.horizontal, 8).padding(.vertical, 1)
+                .overlay(Capsule().strokeBorder(lightText.opacity(0.22), lineWidth: 1))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
     }
 }
 
