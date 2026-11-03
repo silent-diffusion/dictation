@@ -165,6 +165,10 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, N
         overlay = OverlayController(model: model)
         reader = ReaderController(model: model)
         makeStatusItem()
+        #if OBERTON_DIRECT
+        // The direct download's startup update check (lane A's Updater), after the setup as on Windows.
+        Updater.shared.start(model: model)
+        #endif
         // Re-register as soon as a shortcut changes in Settings, and let go of them while one is being recorded.
         // (@Published sends before the value is stored, so the values come from the publishers.) The Extended Notes
         // marker key is held only while a session records (paused or not); the rest of the time it stays with
