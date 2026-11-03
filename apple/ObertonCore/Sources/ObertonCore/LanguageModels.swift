@@ -86,6 +86,54 @@ public enum CloudCatalog {
     ]
 }
 
+/// A local model offered for download through Ollama (Windows' ModelsPage `LocalModels`), word for word, with "PC"
+/// read as "Mac".
+public struct LocalCatalogModel: Sendable, Identifiable, Equatable {
+    /// The Ollama tag.
+    public var id: String
+    public var name: String
+    public var description: String
+    public var size: String
+    /// The memory it needs (a model that runs from memory), 0 for none.
+    public var minRamGB: Double = 0
+}
+
+public enum LocalCatalog {
+    /// Windows' default local AI model (Llm.DefaultModel, and what setup downloads).
+    public static let defaultModel = "qwen2.5:3b"
+
+    public static let all: [LocalCatalogModel] = [
+        LocalCatalogModel(id: "qwen2.5:3b", name: "Qwen 2.5 3B", description: "Fast, faithful cleanup. The default.", size: "1.9 GB"),
+        LocalCatalogModel(id: "llama3.2:3b", name: "Llama 3.2 3B", description: "Fast, natural phrasing.", size: "2.0 GB"),
+        LocalCatalogModel(id: "phi4-mini", name: "Phi-4 mini", description: "Good at following instructions.", size: "2.5 GB"),
+        LocalCatalogModel(id: "gemma3:4b", name: "Gemma 3 4B", description: "Strong writing for its size.", size: "3.3 GB"),
+        LocalCatalogModel(id: "qwen2.5:7b", name: "Qwen 2.5 7B",
+                          description: "Better rewriting (emails, summaries). Needs about 8 GB of GPU memory to be quick.", size: "4.7 GB"),
+        LocalCatalogModel(id: "qwen3:30b-a3b-instruct-2507-q4_K_M", name: "Qwen3 30B-A3B",
+                          description: "By far the smartest here: the best for Extended Notes' formatting and summaries. A mixture of experts: 30B parameters, " +
+                              "but only 3B work on each word, so it runs from the Mac's memory, with as much of it on the GPU as there is room for. " +
+                              "Needs 32 GB of RAM. For dictation it is slower (several seconds a paragraph).", size: "19 GB", minRamGB: 30),
+        LocalCatalogModel(id: "qwen3.8:27b-q4_K_M", name: "Qwen3.8 27B",
+                          description: "The newest and strongest writer here, but an ordinary model: all 27B parameters work on each word. Quick only on a " +
+                              "graphics card with 24 GB; with less, most of it runs from the Mac's memory on the processor and is very slow " +
+                              "(a minute or more for each notes step, several for a summary). Needs 32 GB of RAM. Chosen by hand for " +
+                              "Extended Notes (Best on this Mac passes it over when it doesn't fit the GPU).", size: "18 GB", minRamGB: 30),
+    ]
+
+    /// Ollama names a model without a tag "name:latest": both are the same model (Windows' `Same`).
+    public static func same(_ a: String, _ b: String) -> Bool {
+        a.caseInsensitiveCompare(b) == .orderedSame || a.caseInsensitiveCompare(b + ":latest") == .orderedSame
+            || b.caseInsensitiveCompare(a + ":latest") == .orderedSame
+    }
+
+    /// " · this Mac has 16 GB of RAM: too little", for a model that needs more memory and isn't downloaded yet.
+    public static func ramWarning(_ m: LocalCatalogModel, downloaded: Bool, ramBytes: Int64 = LocalModel.systemRam) -> String {
+        let gb = Double(ramBytes) / (1024 * 1024 * 1024)
+        guard m.minRamGB > 0, !downloaded, gb < m.minRamGB else { return "" }
+        return " · this Mac has \(Int(gb.rounded())) GB of RAM: too little"
+    }
+}
+
 /// One chat completion: instructions, optional before/after examples, the user's text.
 public protocol LanguageModelBackend: Sendable {
     func complete(system: String, examples: [(input: String, output: String)], user: String, maxTokens: Int) async throws -> String
@@ -225,6 +273,53 @@ public struct OllamaBackend: LanguageModelBackend {
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
         guard let (_, resp) = try? await URLSession.shared.data(for: req) else { return false }
         return ((resp as? HTTPURLResponse)?.statusCode ?? 0) / 100 == 2
+    }
+
+    /// Whether the runtime answers at all (Windows' OllamaHost.PingAsync: /api/version within 2 s).
+    public static func ping(endpoint: URL) async -> Bool {
+        let req = URLRequest(url: endpoint.appending(path: "api/version"), timeoutInterval: 2)
+        guard let (_, resp) = try? await URLSession.shared.data(for: req) else { return false }
+        return ((resp as? HTTPURLResponse)?.statusCode ?? 0) / 100 == 2
+    }
+
+    /// Download a model (Windows' RuntimeInstaller.PullAsync): /api/pull streams JSON lines with per-layer byte
+    /// counts, which gives real progress (nil while unknown). Cancelling the task stops it.
+    public static func pull(endpoint: URL, model: String, progress: @escaping @Sendable (Double?) -> Void) async throws {
+        var req = URLRequest(url: endpoint.appending(path: "api/pull"), timeoutInterval: 3600)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["model": model, "stream": true] as [String: Any])
+        let bytes: URLSession.AsyncBytes, resp: URLResponse
+        do { (bytes, resp) = try await URLSession.shared.bytes(for: req) } catch let e as URLError where e.code != .cancelled {
+            throw UserFacingError("Couldn't reach the AI runtime to download the model.")
+        }
+        guard ((resp as? HTTPURLResponse)?.statusCode ?? 0) / 100 == 2 else {
+            throw UserFacingError("Couldn't reach the AI runtime to download the model.")
+        }
+        var layers: [String: (done: Double, total: Double)] = [:]
+        for try await line in bytes.lines {
+            guard let o = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any] else { continue }
+            if let err = o["error"] as? String { throw UserFacingError("Downloading the AI model failed: \(err). Click Retry.") }
+            if let digest = o["digest"] as? String, let total = (o["total"] as? NSNumber)?.doubleValue {
+                layers[digest] = ((o["completed"] as? NSNumber)?.doubleValue ?? 0, total)
+                let t = layers.values.reduce(0) { $0 + $1.total }
+                progress(t > 0 ? layers.values.reduce(0) { $0 + $1.done } / t : nil)
+            }
+            if o["status"] as? String == "success" { progress(1); return }
+        }
+        try Task.checkCancellation()
+        throw UserFacingError("Downloading the AI model stopped unexpectedly. Click Retry.")
+    }
+
+    /// How much of a loaded model sits in GPU memory, as a percentage (/api/ps size_vram of size), or nil when it
+    /// isn't loaded.
+    public static func gpuShare(endpoint: URL, model: String) async -> Int? {
+        guard let (data, _) = try? await URLSession.shared.data(from: endpoint.appending(path: "api/ps")),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let models = json["models"] as? [[String: Any]],
+              let m = models.first(where: { LocalCatalog.same(($0["name"] as? String) ?? "", model) }) else { return nil }
+        let size = (m["size"] as? NSNumber)?.doubleValue ?? 0, vram = (m["size_vram"] as? NSNumber)?.doubleValue ?? 0
+        return size <= 0 ? 0 : Int((100 * vram / size).rounded())
     }
 
     /// Whether Ollama has this model in memory right now.

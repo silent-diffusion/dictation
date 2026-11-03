@@ -17,6 +17,7 @@ public struct TextProcessor: Sendable {
         guard id.provider == .ollama else { return try plainBackend(for: id) }
         let endpoint = try OllamaBackend.validated(settings.ollamaEndpoint)
         try checkOffline(id)
+        try await OllamaRuntime.ensureRunning(settings: settings)
         let size = await OllamaBackend.size(endpoint: endpoint, model: id.name)
         return OllamaBackend(endpoint: endpoint, model: id.name,
                              timeout: ask ? size.askTimeout(setting: settings.aiTimeoutSeconds) : size.dictationTimeout(setting: settings.aiTimeoutSeconds),

@@ -9,6 +9,7 @@ public enum CoreLog {
     /// Tests catch the lines here instead of writing them to the data folder.
     nonisolated(unsafe) static var sink: ((String, String) -> Void)?
 
+    public static func info(_ message: String) { write("INFO", message); logger.info("\(message, privacy: .public)") }
     public static func warn(_ message: String) { write("WARN", message); logger.warning("\(message, privacy: .public)") }
     public static func error(_ message: String) { write("ERROR", message); logger.error("\(message, privacy: .public)") }
 

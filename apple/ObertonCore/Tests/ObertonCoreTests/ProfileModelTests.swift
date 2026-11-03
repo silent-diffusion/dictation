@@ -192,3 +192,48 @@ final class BudgetBackend: LanguageModelBackend, @unchecked Sendable {
     }
 
 }
+
+/// Windows' ModelsPage local list and the AI status lines.
+@Suite struct LocalAITests {
+    @Test func theCatalogueIsWindowsWithQwenFirstAsTheDefault() {
+        #expect(LocalCatalog.all.map(\.id) == ["qwen2.5:3b", "llama3.2:3b", "phi4-mini", "gemma3:4b", "qwen2.5:7b",
+                                               "qwen3:30b-a3b-instruct-2507-q4_K_M", "qwen3.8:27b-q4_K_M"])
+        #expect(LocalCatalog.defaultModel == LocalCatalog.all[0].id)
+        #expect(LocalCatalog.all.filter { $0.minRamGB == 30 }.count == 2)
+    }
+
+    @Test func aTagAndItsLatestAreTheSameModel() {
+        #expect(LocalCatalog.same("phi4-mini:latest", "phi4-mini"))
+        #expect(LocalCatalog.same("Qwen2.5:3b", "qwen2.5:3b"))
+        #expect(!LocalCatalog.same("qwen2.5:7b", "qwen2.5:3b"))
+    }
+
+    @Test func bigModelsWarnAboutTooLittleMemoryUntilDownloaded() {
+        let big = LocalCatalog.all.first { $0.minRamGB > 0 }!
+        let gb16: Int64 = 16 * 1024 * 1024 * 1024
+        #expect(LocalCatalog.ramWarning(big, downloaded: false, ramBytes: gb16) == " · this Mac has 16 GB of RAM: too little")
+        #expect(LocalCatalog.ramWarning(big, downloaded: true, ramBytes: gb16) == "")
+        #expect(LocalCatalog.ramWarning(big, downloaded: false, ramBytes: gb16 * 4) == "")
+        #expect(LocalCatalog.ramWarning(LocalCatalog.all[0], downloaded: false, ramBytes: gb16) == "")
+    }
+
+    @Test func loadedLinesSayHowMuchIsOnTheGPU() {
+        #expect(AIStatus.describe("qwen2.5:3b", gpuPercent: 100, large: false) == "Ready · qwen2.5:3b · GPU")
+        #expect(AIStatus.describe("qwen2.5:7b", gpuPercent: 60, large: false) == "Ready · qwen2.5:7b · 60% GPU (slower: free up GPU memory or pick a smaller model)")
+        #expect(AIStatus.describe("big", gpuPercent: 40, large: true) == "Ready · big · 40% on the GPU, the rest in memory")
+        #expect(AIStatus.describe("big", gpuPercent: 0, large: true) == "Ready · big · in memory, on the processor (no GPU memory free)")
+    }
+
+    @Test func cloudModelsHaveNothingToLoad() async {
+        var s = AppSettings()
+        let id = ModelID(provider: .anthropic, name: "claude-haiku-4-5-20251001")
+        #expect(await AIStatus.current(id, settings: s) == ("claude-haiku-4-5-20251001 is a cloud model; \"Keep everything offline\" blocks it", false))
+        s.cloud.keepOffline = false
+        #expect(await AIStatus.current(id, settings: s) == ("Ready · claude-haiku-4-5-20251001 (cloud)", true))
+    }
+
+    @Test func theRuntimeStartsByItselfByDefault() throws {
+        #expect(AppSettings().startOllama)
+        #expect(try JSONDecoder().decode(AppSettings.self, from: Data(#"{"startOllama": false}"#.utf8)).startOllama == false)
+    }
+}

@@ -95,6 +95,9 @@ public struct AppSettings: Codable, Sendable, Equatable {
     /// A local Ollama server, optional (Ollama's own default port; the Windows app's private 11435 is its bundled copy).
     public var ollamaEndpoint = "http://127.0.0.1:11434"
     public var aiTimeoutSeconds = 60.0
+    /// Start Oberton's own Ollama when nothing answers at the address (Windows' Llm.AutoStartRuntime; the direct
+    /// download only, where Oberton can install it).
+    public var startOllama = true
     /// Speech recognition language (BCP 47, e.g. "en-US"). Empty: Whisper detects it (Apple Speech then uses the
     /// system's language).
     public var language = "en-US"
@@ -198,7 +201,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
         func take<T: Decodable>(_ key: CodingKeys, _ into: inout T) { if let v = try? c.decode(T.self, forKey: key) { into = v } }
         take(.hotkey, &hotkey); take(.cycleProfileHotkey, &cycleProfileHotkey); take(.speakHotkey, &speakHotkey)
         take(.notesMarkerHotkey, &notesMarkerHotkey); take(.notesSource, &notesSource); take(.notesModel, &notesModel)
-        take(.defaultModel, &defaultModel); take(.ollamaEndpoint, &ollamaEndpoint); take(.aiTimeoutSeconds, &aiTimeoutSeconds)
+        take(.defaultModel, &defaultModel); take(.ollamaEndpoint, &ollamaEndpoint); take(.aiTimeoutSeconds, &aiTimeoutSeconds); take(.startOllama, &startOllama)
         take(.language, &language); take(.speechModel, &speechModel); take(.vocabularyHint, &vocabularyHint); take(.activeProfileID, &activeProfileID)
         take(.showOverlay, &showOverlay); take(.overlayPosition, &overlayPosition); take(.overlayOpacity, &overlayOpacity)
         take(.ttsVoice, &ttsVoice); take(.ttsBaseSpeed, &ttsBaseSpeed); take(.restoreClipboard, &restoreClipboard)
