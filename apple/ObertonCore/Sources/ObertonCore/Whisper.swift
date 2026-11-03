@@ -154,6 +154,22 @@ public actor WhisperEngine {
     private var kitID: String?
     private var loading: Task<WhisperKit, Error>?
     private var loadingID: String?
+    /// The loaded model's no-speech probability, which WhisperKit doesn't work out (see `NoSpeechProbe`).
+    private var probe: NoSpeechProbe?
+    /// The loaded model's tokens for symbols and sound markers, never sampled (faster-whisper's `suppress_tokens=[-1]`).
+    private var nonSpeech: [Int] = []
+    /// One decode at a time (Windows' `gpu_lock`): Extended Notes, a dictation and Run again share the model, and the
+    /// probe follows one decode.
+    private var decoding = false
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+
+    private func beginDecode() async {
+        if decoding { await withCheckedContinuation { waiting.append($0) } } else { decoding = true }
+    }
+
+    private func endDecode() {
+        if waiting.isEmpty { decoding = false } else { waiting.removeFirst().resume() }
+    }
 
     private static let lock = NSLock()
     nonisolated(unsafe) private static var loadedID: String?
@@ -177,7 +193,7 @@ public actor WhisperEngine {
         // checking `loading` and setting it, so two callers for the same model share one load.
         loading?.cancel()
         let old = kit
-        kit = nil
+        kit = nil; probe = nil
         kitID = nil
         Self.lock.withLock { Self.loadedID = nil }
         let task = Task<WhisperKit, Error> {
@@ -202,6 +218,13 @@ public actor WhisperEngine {
         }
         WhisperModels.markPrepared(m)
         NSLog("Whisper: loaded %@ in %.1f s", id, Date().timeIntervalSince(started))
+        if let tokenizer = loaded.tokenizer {
+            let probe = NoSpeechProbe(tokenizer: tokenizer)
+            loaded.textDecoder.logitsFilters = [probe]
+            loaded.segmentDiscoveryCallback = { probe.found($0) }
+            self.probe = probe
+            nonSpeech = Self.nonSpeechTokens(tokenizer)
+        }
         kit = loaded
         kitID = id
         Self.lock.withLock { Self.loadedID = id }
@@ -214,7 +237,7 @@ public actor WhisperEngine {
         loading = nil
         loadingID = nil
         if let kit { await kit.unloadModels() }
-        kit = nil
+        kit = nil; probe = nil
         kitID = nil
         Self.lock.withLock { Self.loadedID = nil; Self.loadingNow = nil }
         Self.changed()
@@ -245,44 +268,219 @@ public actor WhisperEngine {
         changed()
     }
 
-    /// Transcribe 16 kHz mono samples. `language` nil = detect it. `prompt`: the vocabulary hint (and, for a piece of
-    /// a longer session, the words just before it), so names come out as written there. `quick`: one decoding pass,
-    /// for the running transcript while the user speaks.
-    public func transcribe(_ samples: [Float], model id: String, language: String?, prompt: String, quick: Bool = false,
-                           onWindow: (@Sendable (Int) -> Void)? = nil) async throws -> [WhisperPiece] {
+    /// One decode of audio already cut to speech (faster-whisper's `model.transcribe` as asr_server.py calls it:
+    /// `condition_on_previous_text=False`, `initial_prompt`, temperatures 0, `step`, 2·`step`), with Whisper's own
+    /// segments and what it reported about each.
+    ///
+    /// faster-whisper's defaults are set to match where WhisperKit has them: non-speech tokens suppressed, no blank
+    /// first token, the first timestamp within 1 s, the prompt's last 223 tokens. Its temperature fallback runs here
+    /// rather than in WhisperKit (whose compression ratio counts token bytes, not text, and which has no no-speech
+    /// probability), so the thresholds are faster-whisper's: text compression ratio 2.4, mean log probability −1, and
+    /// no fallback for a window that is silence.
+    func decode(_ audio: [Float], model id: String, language: String?, prompt: String, step: Float,
+                onWindow: (@Sendable (Int) -> Void)? = nil) async throws -> [WhisperText.Segment] {
         let kit = try await kit(for: id)
-        guard samples.count >= WhisperKit.sampleRate / 4 else { return [] }
+        guard !audio.isEmpty else { return [] }
         var promptTokens: [Int]?
-        if let tokenizer = kit.tokenizer, !prompt.trimmingCharacters(in: .whitespaces).isEmpty {
-            // The last 200 or so tokens: Whisper's prompt holds about half its context.
-            promptTokens = Array(tokenizer.encode(text: " " + prompt.trimmingCharacters(in: .whitespaces))
-                .filter { $0 < tokenizer.specialTokens.specialTokenBegin }.suffix(200))
+        if let tokenizer = kit.tokenizer, !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            promptTokens = Array(tokenizer.encode(text: " " + prompt.trimmingCharacters(in: .whitespacesAndNewlines))
+                .filter { $0 < tokenizer.specialTokens.specialTokenBegin }.suffix(223))
         }
-        let options = DecodingOptions(language: language, temperatureFallbackCount: quick ? 0 : 3, usePrefillPrompt: true,
-                                      detectLanguage: language == nil, skipSpecialTokens: true, promptTokens: promptTokens,
-                                      chunkingStrategy: samples.count > WhisperKit.sampleRate * 30 ? .vad : nil)
-        // A cancelled caller (a running transcript the user stopped speaking over) stops at the next token.
-        let results = try await kit.transcribe(audioArray: samples, decodeOptions: options) { progress in
-            onWindow?(progress.windowId)
-            return Task.isCancelled ? false : nil
+        // WhisperKit decodes nothing within 1 s of the end of the audio (`windowClipTime`), so a short word is padded
+        // with the silence Whisper pads every window with anyway. Only to 1.25 s: past that, WhisperKit would go on to
+        // decode the padding as a window of its own, where Whisper makes up words.
+        let padded = audio + [Float](repeating: 0, count: max(0, WhisperKit.sampleRate * 5 / 4 - audio.count))
+        let long = audio.count > WhisperKit.sampleRate * 30
+        func options(_ temperature: Float) -> DecodingOptions {
+            DecodingOptions(language: language, temperature: temperature, temperatureIncrementOnFallback: step,
+                            // Past one window, WhisperKit falls back window by window (on its own compression ratio).
+                            temperatureFallbackCount: long ? 2 : 0,
+                            usePrefillPrompt: true, detectLanguage: language == nil, skipSpecialTokens: true,
+                            withoutTimestamps: false, wordTimestamps: false, maxInitialTimestamp: 1.0,
+                            promptTokens: promptTokens, suppressBlank: true, suppressTokens: nonSpeech,
+                            compressionRatioThreshold: long ? 2.4 : nil, logProbThreshold: long ? -1.0 : nil,
+                            firstTokenLogProbThreshold: nil, noSpeechThreshold: nil, chunkingStrategy: nil)
         }
-        try Task.checkCancellation()
-        return results.flatMap(\.segments).map {
-            WhisperPiece(text: Self.clean($0.text), start: Double($0.start), end: Double($0.end))
+        func run(_ temperature: Float) async throws -> [WhisperText.Segment] {
+            await beginDecode()
+            defer { endDecode() }
+            try Task.checkCancellation()
+            let kit = try await self.kit(for: id) // the same one, unless the model was switched meanwhile
+            probe?.begin()
+            // A cancelled caller (a running transcript the user stopped speaking over) stops at the next token.
+            let results = try await kit.transcribe(audioArray: padded, decodeOptions: options(temperature)) { progress in
+                onWindow?(progress.windowId)
+                return Task.isCancelled ? false : nil
+            }
+            try Task.checkCancellation()
+            return Self.segments(results.flatMap(\.segments), noSpeech: probe?.noSpeech ?? [:])
+        }
+        var segments: [WhisperText.Segment]
+        if long {
+            segments = try await run(0)
+        } else {
+            // faster-whisper's generate_with_fallback, for the one window.
+            var tried: [(segments: [WhisperText.Segment], ratio: Double, logprob: Double)] = []
+            segments = []
+            for k in 0...2 {
+                let found = try await run(step * Float(k))
+                let text = found.map { $0.text.trimmingCharacters(in: .whitespaces) }.joined(separator: " ")
+                let ratio = WhisperText.compressionRatio(text)
+                let logprob = found.first?.avgLogprob ?? 0, noSpeech = found.first?.noSpeechProb ?? 0
+                tried.append((found, ratio, logprob))
+                var fallback = ratio > 2.4 || logprob < -1.0
+                if noSpeech > 0.6 && logprob < -1.0 { fallback = false } // silence: a hotter decode only makes things up
+                if !fallback { segments = found; break }
+                if k == 2 {
+                    let below = tried.filter { $0.ratio <= 2.4 }
+                    segments = (below.isEmpty ? tried : below).max { $0.logprob < $1.logprob }!.segments
+                }
+            }
+        }
+        // A window Whisper itself thinks is silence, decoded without confidence, is skipped (faster-whisper's
+        // no_speech_threshold 0.6 with log_prob_threshold −1).
+        return segments.filter { !($0.noSpeechProb > 0.6 && $0.avgLogprob <= -1.0) }
+    }
+
+    /// WhisperKit's segments with what is known about their window: the no-speech probability from the probe, and the
+    /// compression ratio of the window's whole text (as faster-whisper reports it). Sound markers are not words.
+    static func segments(_ found: [TranscriptionSegment], noSpeech: [Int: Double]) -> [WhisperText.Segment] {
+        var windowText: [Int: String] = [:]
+        for s in found { windowText[s.seek, default: ""] += s.text }
+        return found.map { s in
+            WhisperText.Segment(text: clean(s.text), start: Double(s.start), end: Double(s.end), noSpeechProb: noSpeech[s.id] ?? 0,
+                                avgLogprob: Double(s.avgLogprob),
+                                compressionRatio: WhisperText.compressionRatio(clean(windowText[s.seek] ?? s.text)))
         }
     }
 
-    /// The text of the whole of `samples`.
-    public func text(_ samples: [Float], model id: String, language: String?, prompt: String, quick: Bool = false) async throws -> String {
-        FragmentStitcher.join(try await transcribe(samples, model: id, language: language, prompt: prompt, quick: quick).map(\.text))
+    /// Text from `samples` (asr_server.py `transcribe`): cut to speech (and levelled, when `even`), nothing at all when
+    /// no one spoke, Whisper's runs of dots collapsed, and, with `dropPhantoms`, the phrases it made up rather than heard
+    /// left out. `final`: the whole recording at the end, decoded again more freely when the first pass gave only
+    /// punctuation. The text is as Whisper wrote it, segments joined with spaces.
+    public func transcribe(_ samples: [Float], model id: String, language: String?, prompt: String, final: Bool,
+                           dropPhantoms: Bool = false, even: Bool, onWindow: (@Sendable (Int) -> Void)? = nil) async throws -> String {
+        // No speech: decoding anyway is exactly how Whisper produces "Thank you." on silence.
+        guard let prepared = WhisperPrep.prepare(samples, even: even) else { return "" }
+        func text(_ segments: [WhisperText.Segment]) -> String {
+            OutputSanitizer.collapseDots(segments.filter { !(dropPhantoms && WhisperText.isPhantom($0)) }
+                .map { $0.text.trimmingCharacters(in: .whitespaces) }.joined(separator: " ").trimmingCharacters(in: .whitespaces))
+        }
+        var result = text(try await decode(prepared.audio, model: id, language: language, prompt: prompt, step: 0.2, onWindow: onWindow))
+        if final && !WhisperText.hasContent(result) {
+            // Only "..." on long or odd audio: once more, more freely (and without the cut, when it was only the voice
+            // detector's); as a last resort nothing rather than junk.
+            let again = even ? prepared.audio : samples
+            result = text(try await decode(again, model: id, language: language, prompt: prompt, step: 0.3, onWindow: onWindow))
+            if !WhisperText.hasContent(result) { NSLog("Whisper: no usable text for %.1f s of audio", Double(samples.count) / 16_000) }
+        }
+        return WhisperText.hasContent(result) ? result : ""
     }
 
-    /// Whisper's markers ("[BLANK_AUDIO]", "(music)", "<|…|>") aren't words.
+    /// Live mode (asr_server.py `segments`): each phrase Whisper finds in `samples`, with where it starts and ends in
+    /// `samples`, silence skipped. A phrase it made up rather than heard comes back empty, so its audio can still be let go of.
+    public func segments(_ samples: [Float], model id: String, language: String?, prompt: String, even: Bool) async throws -> [WhisperPiece] {
+        guard let prepared = WhisperPrep.prepare(samples, even: even) else { return [] }
+        return try await decode(prepared.audio, model: id, language: language, prompt: prompt, step: 0.2).map { s in
+            let t = WhisperText.isPhantom(s) ? "" : OutputSanitizer.collapseDots(s.text.trimmingCharacters(in: .whitespaces))
+            return WhisperPiece(text: WhisperText.hasContent(t) ? t : "", start: prepared.originalTime(s.start), end: prepared.originalTime(s.end))
+        }
+    }
+
+    /// Whisper's markers ("[BLANK_AUDIO]", "(music)", "<|…|>", a segment that is only "(clapping)" or "♪") aren't
+    /// words. (faster-whisper suppresses the tokens these start with, as `decode` does; this catches what gets through.)
     static func clean(_ text: String) -> String {
         var t = text.replacingOccurrences(of: #"<\|[^|]*\|>"#, with: "", options: .regularExpression)
         t = t.replacingOccurrences(of: #"\[[^\]]*\]|\((?:music|applause|laughter|silence|inaudible|blank_audio)\)"#, with: "",
                                    options: [.regularExpression, .caseInsensitive])
-        return t.trimmingCharacters(in: .whitespacesAndNewlines)
+        t = t.trimmingCharacters(in: .whitespacesAndNewlines)
+        if t.range(of: #"^(?:\([^()]*\)|\*[^*]*\*|[♩♪♫♬\s]+)$"#, options: .regularExpression) != nil { return "" }
+        return t
+    }
+
+    /// The tokens faster-whisper never samples by default (`suppress_tokens=[-1]`, OpenAI's `non_speech_tokens`):
+    /// symbols that begin sound markers such as "[Music]", "(applause)" or "♪", kept out of the text.
+    static func nonSpeechTokens(_ tokenizer: any WhisperTokenizer) -> [Int] {
+        let special = tokenizer.specialTokens.specialTokenBegin
+        func encode(_ s: String) -> [Int] { tokenizer.encode(text: s).filter { $0 < special } }
+        var symbols = "\"#()*+/:;<=>@[\\]^_`{|}~「」『』".map(String.init)
+        symbols += "<< >> <<< >>> -- --- -( -[ (' (\" (( )) ((( ))) [[ ]] {{ }} ♪♪ ♪♪♪".split(separator: " ").map(String.init)
+        let misc = "♩♪♫♬♭♮♯".map(String.init)
+        var result = Set([encode(" -").first, encode(" '").first].compactMap { $0 })
+        for symbol in symbols + misc {
+            for tokens in [encode(symbol), encode(" " + symbol)] where tokens.count == 1 || (misc.contains(symbol) && !tokens.isEmpty) {
+                result.insert(tokens[0])
+            }
+        }
+        return result.sorted()
+    }
+}
+
+/// Whisper's no-speech probability, which WhisperKit 1.1.1 leaves at 0: the probability of the `<|nospeech|>` token
+/// right after `<|startoftranscript|>`, as OpenAI's and faster-whisper's decoders work it out. It sits first among
+/// the decoder's logits filters, so it sees each step's logits unfiltered; it counts the steps itself (a new decode
+/// starts when the tokens don't follow on), and pairs each window's value with that window's segments as WhisperKit
+/// reports them (`segmentDiscoveryCallback`).
+final class NoSpeechProbe: LogitsFiltering, @unchecked Sendable {
+    private let sot: Int, noSpeechToken: Int
+    private let lock = NSLock()
+    private var step = 0, prompt: [Int] = [], sotIndex = -1
+    private var current = 0.0
+    private var bySegment: [Int: Double] = [:]
+
+    init(tokenizer: any WhisperTokenizer) {
+        sot = tokenizer.specialTokens.startOfTranscriptToken
+        // English-only models call it <|nocaptions|>. A name the tokenizer doesn't know comes back as <|endoftext|>.
+        let special = tokenizer.specialTokens
+        func id(_ name: String) -> Int? { tokenizer.convertTokenToId(name).flatMap { $0 > special.endToken ? $0 : nil } }
+        noSpeechToken = id("<|nospeech|>") ?? id("<|nocaptions|>") ?? special.noSpeechToken
+    }
+
+    /// Before a transcription: forget the last one's.
+    func begin() { lock.withLock { bySegment = [:]; current = 0; prompt = []; step = 0 } }
+
+    /// Each segment's window's no-speech probability, by segment id, for the transcription since `begin`.
+    var noSpeech: [Int: Double] { lock.withLock { bySegment } }
+
+    func found(_ segments: [TranscriptionSegment]) { lock.withLock { for s in segments { bySegment[s.id] = current } } }
+
+    func filterLogits(_ logits: MLMultiArray, withTokens tokens: [Int]) -> MLMultiArray {
+        lock.withLock {
+            // During the prompt the tokens are the whole prompt; after it, one more each step.
+            let next = step + 1, promptCount = prompt.count
+            let expected = next < promptCount - 1 ? promptCount : next + 1
+            if promptCount > 0, tokens.count == expected, tokens.starts(with: prompt) {
+                step = next
+            } else {
+                step = 0
+                prompt = tokens
+                sotIndex = tokens.firstIndex(of: sot) ?? -1
+            }
+            if step == sotIndex { current = Self.probability(of: noSpeechToken, in: logits) }
+        }
+        return logits
+    }
+
+    /// Softmax probability of `token` in the step's logits.
+    static func probability(of token: Int, in logits: MLMultiArray) -> Double {
+        let n = logits.count
+        guard token >= 0, token < n else { return 0 }
+        var values = [Float](repeating: 0, count: n)
+        switch logits.dataType {
+        case .float16:
+            let p = logits.dataPointer.bindMemory(to: Float16.self, capacity: n)
+            for i in 0..<n { values[i] = Float(p[i]) }
+        case .float32:
+            let p = logits.dataPointer.bindMemory(to: Float.self, capacity: n)
+            for i in 0..<n { values[i] = p[i] }
+        default:
+            for i in 0..<n { values[i] = logits[i].floatValue }
+        }
+        let top = values.filter(\.isFinite).max() ?? 0
+        var sum = 0.0
+        for v in values where v.isFinite { sum += exp(Double(v - top)) }
+        guard sum > 0, values[token].isFinite else { return 0 }
+        return exp(Double(values[token] - top)) / sum
     }
 }
 
@@ -314,7 +512,7 @@ public enum WhisperLive {
 /// Extended Notes' audio to Whisper as it comes in (asr_server.py live mode). Finished sentences come back through
 /// `onPiece` with where they start, in seconds from the stream's start; `finish()` hands over the rest.
 public final class WhisperLiveStream: @unchecked Sendable {
-    private let model: String, language: String?, vocabulary: String
+    private let model: String, language: String?, vocabulary: String, even: Bool
     private let onPiece: @Sendable (String, Double) -> Void
     private let lock = NSLock()
     /// The audio not committed yet, and where it starts in the stream (samples).
@@ -324,8 +522,9 @@ public final class WhisperLiveStream: @unchecked Sendable {
     private var loop: Task<Void, Never>?
     private static let rate = Double(WhisperKit.sampleRate)
 
-    public init(model: String, language: String?, vocabulary: String, onPiece: @escaping @Sendable (String, Double) -> Void) {
-        self.model = model; self.language = language; self.vocabulary = vocabulary; self.onPiece = onPiece
+    /// `vocabulary`: the vocabulary hint as typed; `even`: even out quiet speech first (Settings › Speech).
+    public init(model: String, language: String?, vocabulary: String, even: Bool = true, onPiece: @escaping @Sendable (String, Double) -> Void) {
+        self.model = model; self.language = language; self.vocabulary = vocabulary; self.even = even; self.onPiece = onPiece
     }
 
     /// 16 kHz mono samples (any thread).
@@ -341,27 +540,25 @@ public final class WhisperLiveStream: @unchecked Sendable {
                 // Once 5 s of new audio have built up, and not again before 2 s more.
                 guard audio.count >= Int(Self.rate * WhisperLive.chunkSeconds), total - decodedAt >= Int(Self.rate * 2) else { continue }
                 decodedAt = total
-                if let (text, at) = await self.commit(audio, final: false) { self.onPiece(text, at) }
+                if let (text, at) = await self.commit(audio) { self.onPiece(text, at) }
             }
         }
     }
 
     /// Decode the audio not committed yet and commit what is finished: its text and where it starts, or nil.
-    private func commit(_ audio: [Float], final: Bool) async -> (String, Double)? {
-        let (start, prompt) = lock.withLock { (dropped, vocabulary + " " + committedText.suffix(400)) }
-        guard let pieces = try? await WhisperEngine.shared.transcribe(audio, model: model, language: language, prompt: prompt) else { return nil }
+    private func commit(_ audio: [Float]) async -> (String, Double)? {
+        // The text committed so far (plus the vocabulary hint) keeps casing and names consistent across pieces.
+        let (start, prompt) = lock.withLock { (dropped, WhisperText.prompt(vocabulary: vocabulary, committed: committedText)) }
+        guard let pieces = try? await WhisperEngine.shared.segments(audio, model: model, language: language, prompt: prompt, even: even) else { return nil }
         let duration = Double(audio.count) / Self.rate
         var release = 0, text = "", at = 0.0
-        if final {
-            text = pieces.map(\.text).filter { !$0.isEmpty }.joined(separator: " ")
-            at = pieces.first { !$0.text.isEmpty }?.start ?? 0
-            release = audio.count
-        } else if let pick = WhisperLive.chooseCommit(pieces, duration: duration) {
-            text = pick.text
+        if let pick = WhisperLive.chooseCommit(pieces, duration: duration) {
+            text = lock.withLock { WhisperText.newText(pick.text, after: committedText) }
             at = pieces.first { !$0.text.isEmpty }?.start ?? 0
             release = min(audio.count, Int(pick.end * Self.rate))
         } else if !pieces.contains(where: { !$0.text.isEmpty }), duration >= WhisperLive.forceSeconds {
-            // Nothing heard for a while: let that audio go too, keeping the last moments in case speech is starting.
+            // Nothing heard for a while (silence, or only made-up phrases): let go of that audio too, keeping the last
+            // moments in case speech is just starting.
             release = audio.count - Int((WhisperLive.commitMargin + 1) * Self.rate)
         }
         guard release > 0 else { return nil }
@@ -373,13 +570,22 @@ public final class WhisperLiveStream: @unchecked Sendable {
         return text.isEmpty ? nil : (text, Double(start) / Self.rate + at)
     }
 
-    /// Stop listening and transcribe what is left: returned (not sent to `onPiece`), so the caller has it at once.
+    /// Stop listening and transcribe what is left (the speech after the last piece, decoded once, Whisper's made-up
+    /// phrases and loops left out): returned (not sent to `onPiece`), so the caller has it at once.
     public func finish() async -> (text: String, at: Double)? {
         loop?.cancel()
         await loop?.value
-        let rest = lock.withLock { pending }
-        guard rest.count >= Int(Self.rate * 0.3), let (text, at) = await commit(rest, final: true) else { return nil }
-        return (text, at)
+        let (rest, start, prompt) = lock.withLock { (pending, dropped, WhisperText.prompt(vocabulary: vocabulary, committed: committedText)) }
+        guard rest.count >= Int(Self.rate * 0.3),
+              let heard = try? await WhisperEngine.shared.transcribe(rest, model: model, language: language, prompt: prompt, final: true,
+                                                                     dropPhantoms: true, even: even) else { return nil }
+        let text = lock.withLock { WhisperText.newText(heard, after: committedText) }
+        lock.withLock {
+            pending = []
+            dropped += rest.count
+            if !text.isEmpty { committedText = (committedText + " " + text).trimmingCharacters(in: .whitespaces) }
+        }
+        return text.isEmpty ? nil : (text, Double(start) / Self.rate)
     }
 
     public func cancel() { loop?.cancel() }
@@ -416,31 +622,41 @@ public enum WhisperAudio {
         return out
     }
 
-    /// A whole recording transcribed in 5-minute parts (each part's pieces timed from the recording's start), with the
-    /// fraction done after each part.
-    public static func transcribe(_ url: URL, model: String, language: String?, prompt: String,
-                                  progress: @escaping @Sendable (Double) async -> Void = { _ in }) async throws -> [WhisperPiece] {
+    /// A kept dictation transcribed again (HistoryRerun.cs): the whole recording at once, as the final pass of a
+    /// dictation does it, with the vocabulary hint; its text tidied (`FragmentStitcher.tidy`), or "" when nothing was heard.
+    public static func rerun(_ url: URL, model: String, language: String?, vocabulary: String, even: Bool) async throws -> String {
         let all = try samples(url)
+        let heard = try await WhisperEngine.shared.transcribe(all, model: model, language: language, prompt: vocabulary, final: true, even: even)
+        return FragmentStitcher.tidy(heard)
+    }
+
+    /// An Extended Notes recording transcribed again (NotesRecorder.cs `RetranscribeAsync`): in parts of about 15 s cut
+    /// in its pauses (`NotesRedo.planParts`), like a live session's pieces; each with the vocabulary hint and the end of
+    /// the part before (loops left out) as its prompt, Whisper's made-up phrases and loops left out. Returns each part's
+    /// text with where it starts, and reports the fraction done after each part.
+    public static func redo(_ url: URL, model: String, language: String?, vocabulary: String, even: Bool,
+                            progress: @escaping @Sendable (Double) async -> Void = { _ in }) async throws -> [(seconds: Double, text: String)] {
+        let all = try samples(url)
+        let rate = Double(WhisperKit.sampleRate)
+        let pauses = (try? NotesAudio.pauses(url)) ?? []
+        let parts = NotesRedo.planParts(seconds: Double(all.count) / rate, pauses: pauses)
         try await WhisperEngine.shared.load(model) // first, so the caller's "loading" shows until it is in
-        let part = WhisperKit.sampleRate * 300
-        var pieces: [WhisperPiece] = []
-        var from = 0
-        while from < all.count {
+        var pieces: [(seconds: Double, text: String)] = []
+        var previous = ""
+        for (i, part) in parts.enumerated() {
             try Task.checkCancellation()
-            let to = min(all.count, from + part)
-            let offset = Double(from) / Double(WhisperKit.sampleRate)
-            let context = pieces.suffix(8).map(\.text).joined(separator: " ")
-            let total = Double(max(1, all.count)), start = Double(from), window = Double(WhisperKit.sampleRate * 30)
-            let report: @Sendable (Int) -> Void = { id in
-                let f = min(Double(to), start + Double(id) * window) / total
-                Task { await progress(f) }
+            let tail = WhisperText.tail(NotesFormat.collapseRepeats(previous), 200)
+            let prompt = [vocabulary, tail].filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.joined(separator: " ")
+            let from = min(all.count, Int(part.start * rate)), to = min(all.count, Int(part.end * rate))
+            let heard = try await WhisperEngine.shared.transcribe(Array(all[from..<to]), model: model, language: language, prompt: prompt,
+                                                                  final: true, dropPhantoms: true, even: even)
+            let text = WhisperText.collapseRepeats(heard).trimmingCharacters(in: .whitespaces)
+            if !text.isEmpty {
+                pieces.append((part.start, text))
+                previous = text
             }
-            pieces += try await WhisperEngine.shared.transcribe(Array(all[from..<to]), model: model, language: language, prompt: prompt + " " + context,
-                                                               onWindow: report)
-                .map { WhisperPiece(text: $0.text, start: $0.start + offset, end: $0.end + offset) }
-            from = to
-            await progress(Double(to) / Double(max(1, all.count)))
+            await progress(Double(i + 1) / Double(max(1, parts.count)))
         }
-        return pieces.filter { !$0.text.isEmpty }
+        return pieces
     }
 }

@@ -21,9 +21,8 @@ public enum HistoryRerun {
         let heard: String
         if let whisper = settings.whisperModel {
             await progress("Transcribing again with \(WhisperModels.name(of: whisper))…")
-            let pieces = try await WhisperAudio.transcribe(url, model: whisper, language: settings.whisperLanguage,
-                                                           prompt: settings.vocabulary.joined(separator: ", "))
-            heard = FragmentStitcher.join(pieces.map(\.text))
+            heard = try await WhisperAudio.rerun(url, model: whisper, language: settings.whisperLanguage,
+                                                 vocabulary: settings.vocabularyHint, even: settings.evenOutVolume)
         } else {
             await progress("Transcribing again with on-device speech recognition…")
             heard = try await transcribe(url, locale: settings.speechLocale, vocabulary: settings.vocabulary)

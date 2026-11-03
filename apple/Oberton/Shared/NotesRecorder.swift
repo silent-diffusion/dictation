@@ -219,7 +219,7 @@ final class NotesRecorder: ObservableObject {
     private func connectWhisper(_ id: String, _ st: AppSettings) async throws {
         try await WhisperEngine.shared.load(id)
         guard current != nil else { return }
-        let stream = WhisperLiveStream(model: id, language: st.whisperLanguage, vocabulary: st.vocabulary.joined(separator: ", ")) { [weak self] text, at in
+        let stream = WhisperLiveStream(model: id, language: st.whisperLanguage, vocabulary: st.vocabularyHint, even: st.evenOutVolume) { [weak self] text, at in
             Task { @MainActor in self?.onPiece(text, at: (self?.whisperStart ?? 0) + at) }
         }
         whisperStart = feed.connect(whisper: stream)
@@ -527,12 +527,12 @@ final class NotesRecorder: ObservableObject {
         let st = settings()
         if let whisper = st.whisperModel {
             redoProgress = WhisperEngine.loadedModel == whisper ? "0%" : "loading \(WhisperModels.name(of: whisper))"
-            let pieces = try await WhisperAudio.transcribe(url, model: whisper, language: st.whisperLanguage,
-                                                           prompt: st.vocabulary.joined(separator: ", ")) { fraction in
+            let pieces = try await WhisperAudio.redo(url, model: whisper, language: st.whisperLanguage, vocabulary: st.vocabularyHint,
+                                                     even: st.evenOutVolume) { fraction in
                 await MainActor.run { self.redoProgress = "\(Int(min(99, fraction * 100)))%" }
             }
             try Task.checkCancellation()
-            s.replaceTranscript(pieces.map { (seconds: $0.start, text: $0.text) }, source: self)
+            s.replaceTranscript(pieces, source: self)
             store.save(s)
             return
         }

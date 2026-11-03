@@ -26,7 +26,10 @@ public final class LiveTranscriber: @unchecked Sendable {
     private var resultsTask: Task<Void, Error>?
     private var converter: AVAudioConverter?
     private var analyzerFormat: AVAudioFormat?
+    /// Evens out the volume for Apple's recognizer as the audio comes in. Whisper gets the audio as recorded and evens
+    /// out the whole of it before each decode (`WhisperPrep.evened`), as Windows' speech engine does.
     private var leveller: VolumeLeveller?
+    private var evenOut = true
     /// Set instead of `analyzer` when this recording goes to Whisper.
     private var whisper: WhisperDictation?
     private let lock = NSLock()
@@ -126,6 +129,7 @@ public final class LiveTranscriber: @unchecked Sendable {
             generation += 1
             pieces = []; volatile = ""; waiting = []; streaming = false
             peakLevel = 0; silentFrames = 0; sawSignal = false
+            self.evenOut = evenOut
         }
         #if DEBUG
         if let url = Self.fakeAudio { try playFake(url, evenOut: evenOut); return }
@@ -194,11 +198,12 @@ public final class LiveTranscriber: @unchecked Sendable {
 
     /// Get the Whisper model ready (loading it if needed), then hand it everything recorded so far. While the user
     /// speaks, the running transcript of the last 28 s comes back about once a second (asr_server.py's partials).
-    public func startWhisper(model: String, language: String?, vocabulary: [String]) async throws {
-        let mine = lock.withLock { generation }
+    /// `prompt`: the vocabulary hint as typed.
+    public func startWhisper(model: String, language: String?, prompt: String) async throws {
+        let (mine, even) = lock.withLock { (generation, evenOut) }
         try await WhisperEngine.shared.load(model)
         guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false) else { return }
-        let dictation = WhisperDictation(model: model, language: language, prompt: vocabulary.joined(separator: ", ")) { [weak self] text in
+        let dictation = WhisperDictation(model: model, language: language, prompt: prompt, even: even) { [weak self] text in
             let cb = self?.onText
             DispatchQueue.main.async { cb?(text) }
         }
@@ -246,9 +251,6 @@ public final class LiveTranscriber: @unchecked Sendable {
         }
         if silent { let cb = onSilence; DispatchQueue.main.async { cb?() } }
         onAudio?(buffer) // as recorded: History's "Run again" evens it out afresh
-        if let leveller = lock.withLock({ leveller }), let channels = buffer.floatChannelData {
-            leveller.process((0..<Int(buffer.format.channelCount)).map { channels[$0] }, count: Int(buffer.frameLength))
-        }
         lock.withLock {
             if streaming { feed(buffer) } else { waiting.append(buffer) }
         }
@@ -268,8 +270,11 @@ public final class LiveTranscriber: @unchecked Sendable {
         return out
     }
 
-    /// Hand one buffer to the recognizer (called with the lock held).
+    /// Hand one buffer to the recognizer (called with the lock held): evened out first for Apple's.
     private func feed(_ buffer: AVAudioPCMBuffer) {
+        if whisper == nil, let leveller, let channels = buffer.floatChannelData {
+            leveller.process((0..<Int(buffer.format.channelCount)).map { channels[$0] }, count: Int(buffer.frameLength))
+        }
         guard let format = analyzerFormat, buffer.format != format else { deliver(buffer); return }
         if converter?.inputFormat != buffer.format { converter = AVAudioConverter(from: buffer.format, to: format) }
         guard let converter else { return }
@@ -386,15 +391,15 @@ final class WhisperDictation: @unchecked Sendable {
     static let partialEvery = 1.0
     static let partialWindow = 28 * 16_000
 
-    private let model: String, language: String?, prompt: String
+    private let model: String, language: String?, prompt: String, even: Bool
     private let onText: (String) -> Void
     private let lock = NSLock()
     private var samples: [Float] = []
     private var latest = ""
     private var partials: Task<Void, Never>?
 
-    init(model: String, language: String?, prompt: String, onText: @escaping (String) -> Void) {
-        self.model = model; self.language = language; self.prompt = prompt; self.onText = onText
+    init(model: String, language: String?, prompt: String, even: Bool, onText: @escaping (String) -> Void) {
+        self.model = model; self.language = language; self.prompt = prompt; self.even = even; self.onText = onText
     }
 
     /// 16 kHz mono float audio (the audio thread).
@@ -417,11 +422,15 @@ final class WhisperDictation: @unchecked Sendable {
                 guard count - last >= Int(16_000 * every), count >= 16_000 * 6 / 10 else { continue }
                 last = count
                 let started = Date()
-                guard let text = try? await WhisperEngine.shared.text(tail, model: self.model, language: self.language, prompt: self.prompt, quick: true),
+                guard let heard = try? await WhisperEngine.shared.transcribe(tail, model: self.model, language: self.language, prompt: self.prompt,
+                                                                             final: false, even: self.even),
                       !Task.isCancelled else { continue }
+                let text = FragmentStitcher.tidy(heard)
                 let took = Date().timeIntervalSince(started)
-                self.lock.withLock { self.latest = text }
-                self.onText(text)
+                if !text.isEmpty { // nothing heard (yet): the last running transcript stays, as on Windows
+                    self.lock.withLock { self.latest = text }
+                    self.onText(text)
+                }
                 if took > Self.slowPartial { NSLog("Whisper: a running transcript took %.1f s; no more until the end", took); return }
                 every = max(Self.partialEvery, took * 2)
             }
@@ -431,14 +440,16 @@ final class WhisperDictation: @unchecked Sendable {
     /// A running transcript slower than this ends the running transcripts for this dictation.
     static let slowPartial = 4.0
 
-    /// The whole recording's transcript (a full pass; the running transcript if that fails). A running transcript
-    /// still being worked out is stopped first, so the final pass doesn't wait for it.
+    /// The whole recording's transcript (a full pass; the running transcript if that fails), tidied as Windows tidies
+    /// a dictation decoded at once (`FragmentStitcher.join` of the one piece). A running transcript still being worked
+    /// out is stopped first, so the final pass doesn't wait for it.
     func finish() async -> String {
         partials?.cancel()
         await partials?.value
         let (all, latest) = lock.withLock { (samples, self.latest) }
         do {
-            let text = try await WhisperEngine.shared.text(all, model: model, language: language, prompt: prompt)
+            let text = FragmentStitcher.join([try await WhisperEngine.shared.transcribe(all, model: model, language: language, prompt: prompt,
+                                                                                         final: true, even: even)])
             onText(text)
             return text
         } catch {

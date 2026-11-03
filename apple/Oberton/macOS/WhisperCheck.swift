@@ -72,8 +72,10 @@ enum WhisperCheck {
 
             // Transcribe again from the file (Extended Notes' redo, History's Run again).
             do {
-                let again = try await WhisperAudio.transcribe(wav, model: id, language: model.settings.whisperLanguage, prompt: "Oberton")
-                Log.info("WhisperCheck: from the file: \(again.map { String(format: "[%.1f s] ", $0.start) + $0.text }.joined(separator: " "))")
+                let again = try await WhisperAudio.redo(wav, model: id, language: model.settings.whisperLanguage, vocabulary: "Oberton", even: true)
+                Log.info("WhisperCheck: from the file: \(again.map { String(format: "[%.1f s] ", $0.seconds) + $0.text }.joined(separator: " "))")
+                let rerun = try await WhisperAudio.rerun(wav, model: id, language: model.settings.whisperLanguage, vocabulary: "Oberton", even: true)
+                Log.info("WhisperCheck: Run again: \(rerun)")
             } catch { Log.error("WhisperCheck: from the file failed: \(error)") }
 
             let unloaded = await model.unloadNow(speech: true, ai: false, voice: false)

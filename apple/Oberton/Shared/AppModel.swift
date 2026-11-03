@@ -285,11 +285,11 @@ final class AppModel: ObservableObject {
         startedAt = Date()
         phase = .recording
         speechLoading = !speechWarm
-        let vocabulary = settings.vocabulary, locale = settings.speechLocale
+        let vocabulary = settings.vocabulary, hint = settings.vocabularyHint, locale = settings.speechLocale
         let whisper = settings.whisperModel, language = settings.whisperLanguage
         let engine = Task { [transcriber] in
             if let whisper {
-                try await transcriber.startWhisper(model: whisper, language: language, vocabulary: vocabulary)
+                try await transcriber.startWhisper(model: whisper, language: language, prompt: hint)
             } else {
                 try await transcriber.startRecognizer(locale: locale, vocabulary: vocabulary)
             }

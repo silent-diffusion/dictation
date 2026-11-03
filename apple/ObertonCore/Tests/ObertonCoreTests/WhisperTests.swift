@@ -68,7 +68,7 @@ import Testing
         let buffer = try #require(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)))
         try file.read(into: buffer)
         let samples = Array(UnsafeBufferPointer(start: buffer.floatChannelData![0], count: Int(buffer.frameLength)))
-        let text = try await WhisperEngine.shared.text(samples, model: "base.en", language: "en", prompt: "Oberton")
+        let text = try await WhisperEngine.shared.transcribe(samples, model: "base.en", language: "en", prompt: "Oberton", final: true, even: true)
         print("Whisper heard: \(text)")
         #expect(text.lowercased().contains("quick brown fox"))
         #expect(WhisperEngine.loadedModel == "base.en")
