@@ -79,6 +79,7 @@ struct PhoneOverlay: View {
 
 #if os(macOS)
 import AppKit
+import Combine
 
 /// Owns what lives as long as the app: the hotkeys and the overlay. Closing the window keeps Oberton running in the
 /// menu bar, as the Windows app keeps running in the tray.
@@ -88,6 +89,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
     private lazy var platform = MacPlatform { [unowned self] in self.model.settings }
     private let hotkeys = HotkeyManager()
     private var overlay: OverlayController?
+    private var watch: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         #if DEBUG
@@ -95,20 +97,25 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         #endif
         model.platform = platform
         overlay = OverlayController(model: model)
-        registerHotkeys()
+        // Re-register as soon as a shortcut changes in Settings, and let go of them while one is being recorded.
+        // (@Published sends before the value is stored, so the values come from the publishers.)
+        watch = model.$settings.map { [$0.hotkey, $0.cycleProfileHotkey, $0.speakHotkey] }.removeDuplicates()
+            .combineLatest(HotkeyStatus.shared.$recording.map { $0 != nil }.removeDuplicates())
+            .sink { [weak self] keys, paused in self?.registerHotkeys(keys, paused: paused) }
         Task { await platform.requestPermissions() }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
-    func registerHotkeys() {
-        let s = model.settings
-        let failed = hotkeys.register([
-            (s.hotkey, { [weak self] in self?.model.toggleDictation() }),
-            (s.cycleProfileHotkey, { [weak self] in self?.model.cycleProfile() }),
-            (s.speakHotkey, { [weak self] in self?.model.readSelection() }),
+    private func registerHotkeys(_ keys: [String], paused: Bool) {
+        guard !paused else { hotkeys.register([]); return }
+        let errors = hotkeys.register([
+            (keys[0], "the dictation shortcut", { [weak self] in self?.model.toggleDictation() }),
+            (keys[1], "the profile-switching shortcut", { [weak self] in self?.model.cycleProfile() }),
+            (keys[2], "the Read aloud shortcut", { [weak self] in self?.model.readSelection() }),
         ])
-        if !failed.isEmpty { NSLog("Oberton: couldn't register hotkeys %@", failed.joined(separator: ", ")) }
+        HotkeyStatus.shared.error = errors.isEmpty ? nil : errors.joined(separator: "\n")
+        if !errors.isEmpty { NSLog("Oberton: %@", errors.joined(separator: " ")) }
     }
 }
 
@@ -150,7 +157,7 @@ enum Snapshots {
             ("history", Place(section: .history)), ("analytics", Place(section: .analytics)),
             ("settings-appearance", Place(section: .settings, settings: .appearance)), ("settings-history", Place(section: .settings, settings: .history)),
             ("settings-models", Place(section: .settings, settings: .models)), ("settings-layout", Place(section: .settings, settings: .layout)),
-            ("settings-about", Place(section: .settings, settings: .about)),
+            ("settings-about", Place(section: .settings, settings: .about)), ("settings-hotkeys", Place(section: .settings, settings: .hotkeys)),
         ]
         for dark in [false, true] {
             var s = model.settings
@@ -167,6 +174,13 @@ enum Snapshots {
                 .obertonTheme(phone).frame(width: 390, height: 2900).background(Palette(dark: dark, accentChoice: s.accent).paper)
             save(narrow, to: dir, name: "analytics-phone-\(dark ? "dark" : "light")")
         }
+        // Hotkeys with a combination another app holds, and the dictation box recording.
+        HotkeyStatus.shared.error = "Ctrl+Alt+D is already used by another app. Choose a different shortcut under Settings › Hotkeys."
+        HotkeyStatus.shared.recording = "Start / stop dictation"
+        save(RootView(start: Place(section: .settings, settings: .hotkeys)).environmentObject(model).obertonTheme(model.settings).frame(width: 1200, height: 780),
+             to: dir, name: "settings-hotkeys-taken")
+        HotkeyStatus.shared.error = nil
+        HotkeyStatus.shared.recording = nil
         let overlay = VStack(spacing: 16) {
             ReceiptCard(entry: HistoryEntry(transcription: "um so the plan for friday is we ship the beta to the uh first ten testers and then we collect feedback",
                                             aiEdit: "The plan for Friday is to ship the beta to the first ten testers, and then collect feedback.",
