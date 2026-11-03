@@ -6,6 +6,9 @@ import Speech
 /// (`startRecording`); the recognizer gets ready meanwhile (`startRecognizer`) and catches up on what was said, as on
 /// Windows. The words recognized so far come back while the user speaks, for the overlay; `stop()` returns the whole
 /// transcript once the recognizer has finished with the last of the audio. Nothing leaves the device.
+///
+/// The engine is started and stopped on the main actor only, in the order the calls come: a stop or cancel running on
+/// another thread could otherwise stop the next recording's engine, or start and stop it at the same time.
 public final class LiveTranscriber: @unchecked Sendable {
     /// Called on the main queue with the transcript so far (settled words plus the recognizer's current guess).
     public var onText: ((String) -> Void)?
@@ -110,7 +113,7 @@ public final class LiveTranscriber: @unchecked Sendable {
 
     /// Start listening now. Audio is kept until `startRecognizer` has the recognizer ready. `microphone`: a device name
     /// from `Microphones.names`, nil for the system default. `evenOut`: level the volume before the recognizer hears it.
-    public func startRecording(microphone: String?, evenOut: Bool) throws {
+    @MainActor public func startRecording(microphone: String?, evenOut: Bool) throws {
         #if os(iOS)
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playAndRecord, mode: .measurement, options: [.duckOthers, .defaultToSpeaker, .allowBluetoothHFP])
@@ -127,8 +130,9 @@ public final class LiveTranscriber: @unchecked Sendable {
         guard micFormat.sampleRate > 0, micFormat.channelCount > 0 else {
             throw UserFacingError("No microphone was found. Connect one, or pick another in Settings › Microphone.")
         }
-        leveller = evenOut ? VolumeLeveller(sampleRate: micFormat.sampleRate) : nil
-        node.installTap(onBus: 0, bufferSize: 4096, format: micFormat) { [weak self] buffer, _ in
+        let leveller = evenOut ? VolumeLeveller(sampleRate: micFormat.sampleRate) : nil
+        lock.withLock { self.leveller = leveller }
+        try Microphones.tap(node, bufferSize: 4096) { [weak self] buffer, _ in
             self?.capture(buffer)
         }
         engine.prepare()
@@ -156,7 +160,7 @@ public final class LiveTranscriber: @unchecked Sendable {
         guard lock.withLock({ generation == mine }) else { await analyzer.cancelAndFinishNow(); return }
 
         let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
-        resultsTask = Task { [weak self] in
+        let results = Task { [weak self] in
             for try await result in transcriber.results {
                 guard let self else { return }
                 let text = String(result.text.characters)
@@ -168,19 +172,19 @@ public final class LiveTranscriber: @unchecked Sendable {
                 DispatchQueue.main.async { cb?(full) }
             }
         }
-        try await analyzer.start(inputSequence: stream)
-        lock.withLock {
-            guard generation == mine else { return }
+        do { try await analyzer.start(inputSequence: stream) } catch { results.cancel(); throw error }
+        let current = lock.withLock {
+            guard generation == mine else { return false }
             self.analyzer = analyzer
             self.analyzerFormat = format
             self.input = continuation
-            let micFormat = engine.inputNode.outputFormat(forBus: 0)
-            if let format, micFormat != format { converter = AVAudioConverter(from: micFormat, to: format) }
+            self.resultsTask = results
             for buffer in waiting { feed(buffer) }
             waiting = []
             streaming = true
+            return true
         }
-        if lock.withLock({ generation != mine }) { await analyzer.cancelAndFinishNow() }
+        if !current { results.cancel(); await analyzer.cancelAndFinishNow() }
     }
 
     /// The level on Windows' meter scale (`sqrt(rms) · 1.8`), used for the speech guard's peak.
@@ -215,7 +219,7 @@ public final class LiveTranscriber: @unchecked Sendable {
         }
         if silent { let cb = onSilence; DispatchQueue.main.async { cb?() } }
         onAudio?(buffer) // as recorded: History's "Run again" evens it out afresh
-        if let leveller, let channels = buffer.floatChannelData {
+        if let leveller = lock.withLock({ leveller }), let channels = buffer.floatChannelData {
             leveller.process((0..<Int(buffer.format.channelCount)).map { channels[$0] }, count: Int(buffer.frameLength))
         }
         lock.withLock {
@@ -239,7 +243,9 @@ public final class LiveTranscriber: @unchecked Sendable {
 
     /// Hand one buffer to the recognizer (called with the lock held).
     private func feed(_ buffer: AVAudioPCMBuffer) {
-        guard let converter, let format = analyzerFormat else { input?.yield(AnalyzerInput(buffer: buffer)); return }
+        guard let format = analyzerFormat, buffer.format != format else { input?.yield(AnalyzerInput(buffer: buffer)); return }
+        if converter?.inputFormat != buffer.format { converter = AVAudioConverter(from: buffer.format, to: format) }
+        guard let converter else { return }
         let capacity = AVAudioFrameCount(Double(buffer.frameLength) * format.sampleRate / buffer.format.sampleRate) + 1
         guard let out = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { return }
         var consumed = false
@@ -254,30 +260,39 @@ public final class LiveTranscriber: @unchecked Sendable {
     }
 
     /// Stop listening now (the recognizer may still be getting ready; `stop()` then collects the transcript).
-    public func stopRecording() { stopAudio() }
+    @MainActor public func stopRecording() { stopAudio() }
 
     /// Stop listening and wait for the recognizer to settle the last words. Returns the whole transcript, its pieces
-    /// stitched (`FragmentStitcher`). Call once the recognizer has started (or failed to).
-    public func stop() async -> String {
+    /// stitched (`FragmentStitcher`). Call once the recognizer has started (or failed to). A recording started while
+    /// this waits (after a `cancel`) is left alone.
+    @MainActor public func stop() async -> String {
         stopAudio()
-        input?.finish()
+        let (mine, analyzer, results) = lock.withLock {
+            input?.finish()
+            return (generation, self.analyzer, resultsTask)
+        }
         try? await analyzer?.finalizeAndFinishThroughEndOfInput()
-        _ = try? await resultsTask?.value
-        let parts = lock.withLock { pieces + [volatile] }
-        reset()
+        _ = try? await results?.value
+        let parts = lock.withLock {
+            defer { if generation == mine { clear() } }
+            return pieces + [volatile]
+        }
         return FragmentStitcher.join(parts)
     }
 
-    /// Throw the recording away.
-    public func cancel() async {
+    /// Throw the recording away, at once: a recording started right after it is not touched.
+    @MainActor public func cancel() {
         stopAudio()
-        input?.finish()
-        await analyzer?.cancelAndFinishNow()
-        resultsTask?.cancel()
-        reset()
+        let (analyzer, results) = lock.withLock {
+            input?.finish()
+            defer { clear() }
+            return (self.analyzer, resultsTask)
+        }
+        results?.cancel()
+        if let analyzer { Task { await analyzer.cancelAndFinishNow() } }
     }
 
-    private func stopAudio() {
+    @MainActor private func stopAudio() {
         if engine.isRunning { engine.stop() }
         engine.inputNode.removeTap(onBus: 0)
         #if os(iOS)
@@ -289,16 +304,15 @@ public final class LiveTranscriber: @unchecked Sendable {
     /// Set while something else (an Extended Notes session) records, so a dictation ending leaves the audio session on.
     nonisolated(unsafe) public static var audioSessionHeld = false
 
-    private func reset() {
-        lock.withLock {
-            generation += 1
-            analyzer = nil
-            input = nil
-            converter = nil
-            waiting = []
-            streaming = false
-        }
+    /// Forget the recording (called with the lock held).
+    private func clear() {
+        generation += 1
+        analyzer = nil
+        input = nil
         resultsTask = nil
+        converter = nil
+        waiting = []
+        streaming = false
         leveller = nil
     }
 }

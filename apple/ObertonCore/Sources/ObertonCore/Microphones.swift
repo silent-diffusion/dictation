@@ -32,12 +32,39 @@ public enum Microphones {
         // The engine is reused, so the default is set again too when no microphone (or a missing one) is chosen.
         guard let unit = engine.inputNode.audioUnit,
               var id = name.flatMap({ n in inputDevices().first { $0.name == n }?.id }) ?? defaultInputDevice() else { return }
+        // Only a real change: each one sends the engine a device-change notice on a queue of its own.
+        var current = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        if AudioUnitGetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &current, &size) == noErr,
+           current == id { return }
         AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &id, UInt32(MemoryLayout<AudioDeviceID>.size))
         #else
         let session = AVAudioSession.sharedInstance()
         let port = name.flatMap { n in session.availableInputs?.first { $0.portName == n } }
         try? session.setPreferredInput(port)
         #endif
+    }
+
+    /// Tap the microphone (bus 0 of the input node, in its own format). The input device may have changed its format a
+    /// moment ago (a Bluetooth headset switching to its microphone mode, or another engine opening it at another rate)
+    /// with the engine not caught up yet: a tap then raises an Objective-C exception, which ends the app. So this waits
+    /// up to a second for the engine to catch up, and reports a failure as an error.
+    public static func tap(_ node: AVAudioInputNode, bufferSize: AVAudioFrameCount,
+                           block: @escaping (AVAudioPCMBuffer, AVAudioTime) -> Void) throws {
+        func pending() -> Bool { node.inputFormat(forBus: 0).sampleRate != node.outputFormat(forBus: 0).sampleRate }
+        for _ in 0..<20 where pending() { Thread.sleep(forTimeInterval: 0.05) }
+        node.removeTap(onBus: 0)
+        let busy = node.inputFormat(forBus: 0).sampleRate > 0
+            ? UserFacingError("The microphone is still switching over. Try again in a moment.")
+            : UserFacingError("The microphone isn't giving any sound. Check that Oberton may use it (Privacy & Security › Microphone), or pick another one in Settings › Microphone.")
+        #if compiler(>=6.4)
+        if #available(macOS 27, iOS 27, *) {
+            do { try node.__installTap(onBus: 0, bufferSize: bufferSize, format: nil, error: (), block: block) } catch { throw busy }
+            return
+        }
+        #endif
+        guard !pending() else { throw busy }
+        node.installTap(onBus: 0, bufferSize: bufferSize, format: nil, block: block)
     }
 
     #if os(macOS)
@@ -87,9 +114,15 @@ public enum Microphones {
 }
 
 /// The INPUT LEVEL meter on Settings › Microphone: its own microphone, open while the page is (as Windows' AudioPage),
-/// never while a dictation records.
+/// never while a dictation records. On the main actor.
 public final class MicrophoneMeter: @unchecked Sendable {
-    private let engine = AVAudioEngine()
+    /// One engine for every meter, kept for good. The page makes a new meter each time it opens or the microphone
+    /// changes; an engine freed just after it was stopped or given another device crashes when Core Audio's
+    /// device-change notice for it arrives a moment later (AVAudioIOUnit::IOUnitPropertyListener).
+    nonisolated(unsafe) private static let engine = AVAudioEngine()
+    /// The meter using the engine now: an older one going away late leaves it running.
+    nonisolated(unsafe) private static var owner: ObjectIdentifier?
+    private var engine: AVAudioEngine { Self.engine }
     /// Called on the main queue with the level, 0…1.
     public var onLevel: ((Float) -> Void)?
 
@@ -97,7 +130,8 @@ public final class MicrophoneMeter: @unchecked Sendable {
 
     /// Start metering the named microphone (nil: the system default). Throws a message for the page's hint.
     public func start(microphone: String?) throws {
-        stop()
+        Self.owner = ObjectIdentifier(self)
+        halt()
         #if os(iOS)
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playAndRecord, mode: .measurement, options: [.defaultToSpeaker, .allowBluetoothHFP])
@@ -107,7 +141,7 @@ public final class MicrophoneMeter: @unchecked Sendable {
         let node = engine.inputNode
         let format = node.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else { throw UserFacingError("No microphone was found.") }
-        node.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self] buffer, _ in
+        try Microphones.tap(node, bufferSize: 2048) { [weak self] buffer, _ in
             guard let (rms, _) = LiveTranscriber.rms(buffer) else { return }
             let level = LiveTranscriber.meterLevel(rms: rms), cb = self?.onLevel
             DispatchQueue.main.async { cb?(level) }
@@ -120,6 +154,12 @@ public final class MicrophoneMeter: @unchecked Sendable {
     }
 
     public func stop() {
+        guard Self.owner == ObjectIdentifier(self) else { return }
+        Self.owner = nil
+        halt()
+    }
+
+    private func halt() {
         if engine.isRunning { engine.stop() }
         engine.inputNode.removeTap(onBus: 0)
         #if os(iOS)

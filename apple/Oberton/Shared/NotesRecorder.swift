@@ -137,12 +137,16 @@ final class NotesRecorder: ObservableObject {
         }
         micConverter = converter
         let both = source == .both
-        input.installTap(onBus: 0, bufferSize: 4096, format: micFormat) { buffer, _ in
-            let samples = NotesFeed.convert(buffer, with: converter, to: target)
+        var tapConverter = converter // the tap's own (its thread only), made again if the microphone's format changes
+        try Microphones.tap(input, bufferSize: 4096) { buffer, _ in
+            if tapConverter.inputFormat != buffer.format, let c = AVAudioConverter(from: buffer.format, to: target) { tapConverter = c }
+            let samples = NotesFeed.convert(buffer, with: tapConverter, to: target)
             feed.take(both ? feed.mixer.mix(withMic: samples) : samples)
         }
         engine.prepare()
-        try engine.start()
+        do { try engine.start() } catch {
+            throw UserFacingError("The microphone couldn't be started (\(error.localizedDescription)).")
+        }
     }
 
     private func stopAudio() {

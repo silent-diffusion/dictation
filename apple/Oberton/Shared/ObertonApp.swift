@@ -145,6 +145,14 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         #endif
         Log.info("=== Oberton \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "") starting" + (startedHidden ? " (at login, hidden)" : "") + " ===")
         NSSetUncaughtExceptionHandler { e in Log.error("Unhandled exception: \(e.name.rawValue): \(e.reason ?? "")") }
+        #if DEBUG
+        // No platform: nothing is typed into other apps.
+        if let rounds = ProcessInfo.processInfo.environment["OBERTON_STRESS"] {
+            overlay = OverlayController(model: model)
+            StressTest.run(model, rounds: Int(rounds) ?? 30)
+            return
+        }
+        #endif
         model.platform = platform
         overlay = OverlayController(model: model)
         reader = ReaderController(model: model)

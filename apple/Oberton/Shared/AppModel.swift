@@ -283,7 +283,7 @@ final class AppModel: ObservableObject {
         Task { [weak self] in
             // The engine failed to start while the user was still speaking: say so now, not at the end.
             do { try await engine.value; self?.speechReady() } catch {
-                if let self, self.engineTask == engine, self.phase == .recording { await self.transcriber.cancel(); self.fail(error) }
+                if let self, self.engineTask == engine, self.phase == .recording { self.transcriber.cancel(); self.fail(error) }
             }
             if self?.engineTask == engine { self?.speechLoading = false }
         }
@@ -309,11 +309,14 @@ final class AppModel: ObservableObject {
         let engine = engineTask
         work = Task {
             // If the model was still loading, it now catches up on the whole recording.
+            // Cancelled meanwhile: `cancel()` already let the recording go, and a new one may be running.
             do { try await engine?.value } catch {
-                await transcriber.cancel()
-                if !Task.isCancelled { fail(error) }
+                if Task.isCancelled { return }
+                transcriber.cancel()
+                fail(error)
                 return
             }
+            if Task.isCancelled { return }
             let peak = transcriber.peak
             let raw = NotesFormat.collapseRepeats(OutputSanitizer.collapseDots(await transcriber.stop()))
             if Task.isCancelled { return }
@@ -337,7 +340,7 @@ final class AppModel: ObservableObject {
         engineTask = nil
         speechLoading = false
         pending = nil
-        Task { await transcriber.cancel() }
+        transcriber.cancel() // now, before the next dictation can start
         level = 0
         phase = .idle
     }

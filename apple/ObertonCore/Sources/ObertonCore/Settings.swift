@@ -220,6 +220,14 @@ public struct AppSettings: Codable, Sendable, Equatable {
 /// The app's data folder: Application Support/Oberton (inside the sandbox container on the App Store build).
 public enum AppPaths {
     public static var dataDir: URL {
+        #if DEBUG
+        // The start/stop stress run (`OBERTON_STRESS`) keeps its history and notes out of the user's own.
+        if let dir = ProcessInfo.processInfo.environment["OBERTON_DATA_DIR"] {
+            let url = URL(fileURLWithPath: dir, isDirectory: true)
+            try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            return url
+        }
+        #endif
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let dir = base.appending(path: "Oberton", directoryHint: .isDirectory)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
