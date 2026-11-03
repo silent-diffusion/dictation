@@ -1,6 +1,7 @@
 import Foundation
 
-/// One day's counts. Numbers only: never any text, audio or window titles (as Windows' data\usage.json).
+/// One day's counts. Numbers only: never any text, audio or window titles (of a browser's tab, only the site's name), as
+/// Windows' data\usage.json.
 public struct UsageDay: Codable, Sendable, Equatable {
     public var dictations = 0
     public var words = 0
@@ -17,6 +18,9 @@ public struct UsageDay: Codable, Sendable, Equatable {
     public var aiKept = 0
     /// Dictations per app name ("Unknown app" when there is none), names told apart ignoring case.
     public var apps: [String: Int] = [:]
+    /// For browsers: dictations per site, by browser ("Google Chrome" → "Gmail" → 3). Only the site's name (`WebSites`),
+    /// never the tab's title. Browsers and sites told apart ignoring case, as apps.
+    public var sites: [String: [String: Int]] = [:]
     /// Dictations per hour of the day (0–23), for "when you dictate".
     public var hours = [Int](repeating: 0, count: 24)
 
@@ -29,7 +33,7 @@ public struct UsageDay: Codable, Sendable, Equatable {
         take(.dictations, &dictations); take(.words, &words); take(.secondsSpoken, &secondsSpoken)
         take(.turnaroundSeconds, &turnaroundSeconds); take(.turnaroundCount, &turnaroundCount)
         take(.readings, &readings); take(.wordsRead, &wordsRead); take(.secondsRead, &secondsRead)
-        take(.aiEdits, &aiEdits); take(.aiKept, &aiKept); take(.apps, &apps); take(.hours, &hours)
+        take(.aiEdits, &aiEdits); take(.aiKept, &aiKept); take(.apps, &apps); take(.sites, &sites); take(.hours, &hours)
         hours = TallyDay.fit(hours)
     }
 }
@@ -60,6 +64,9 @@ public struct UsageLog: Codable, Sendable, Equatable {
     /// How many recent turnarounds are kept.
     public static let keepTurnarounds = 100
 
+    /// 2: days have `UsageDay.sites` (filled in from History for older days when first loaded, `fillSites`). A new
+    /// log starts at 2; a file without one is 1.
+    public var version = 2
     /// Keyed by local date, "yyyy-MM-dd".
     public var days: [String: UsageDay] = [:]
     /// The latest turnarounds with the models that produced them (no text), newest last.
@@ -67,7 +74,7 @@ public struct UsageLog: Codable, Sendable, Equatable {
     /// Every word dictated, over the days kept (UsageStore.TotalWords: it drops as old days go).
     public var totalWords: Int { days.values.reduce(0) { $0 + $1.words } }
 
-    enum CodingKeys: String, CodingKey { case days, samples }
+    enum CodingKeys: String, CodingKey { case version, days, samples }
 
     public init() {}
 
@@ -79,6 +86,7 @@ public struct UsageLog: Codable, Sendable, Equatable {
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        version = (try? c.decode(Int.self, forKey: .version)) ?? 1
         days = (try? c.decode([String: UsageDay].self, forKey: .days)) ?? [:]
         samples = (try? c.decode([TurnaroundSample].self, forKey: .samples)) ?? []
     }
@@ -103,7 +111,42 @@ public struct UsageLog: Codable, Sendable, Equatable {
     public mutating func record(_ e: HistoryEntry) {
         let safetyNet = e.isSafetyNet, aiOutput = e.aiOutput
         recordDictation(words: e.words, seconds: e.seconds, turnaround: e.turnaroundSeconds, usedAI: aiOutput != nil || safetyNet,
-                        keptAI: aiOutput != nil && !safetyNet, app: e.appLabel, on: e.date)
+                        keptAI: aiOutput != nil && !safetyNet, app: e.appLabel, site: e.site, on: e.date)
+    }
+
+    /// Sites are new (version 1): fill them in for the dictations History still has (it keeps their window titles);
+    /// older ones stay counted under the browser alone. Once (UsageStore's version 2 step); true when it ran.
+    @discardableResult
+    public mutating func fillSites(from history: [HistoryEntry]) -> Bool {
+        guard version < 2 else { return false }
+        for e in history {
+            guard let site = e.site, var d = days[Self.key(e.date)] else { continue }
+            Self.count(site, in: e.appLabel, on: &d)
+            days[Self.key(e.date)] = d
+        }
+        version = 2
+        return true
+    }
+
+    /// A browser's sites over these days, most dictated first, then by name (UsageStore.SitesOf).
+    public static func sitesOf(_ days: [UsageDay], _ app: String) -> [(site: String, count: Int)] {
+        var sums: [(site: String, count: Int)] = []
+        for d in days {
+            guard let sites = d.sites.first(where: { $0.key.caseInsensitiveCompare(app) == .orderedSame })?.value else { continue }
+            for (s, n) in sites.sorted(by: { $0.key < $1.key }) {
+                if let i = sums.firstIndex(where: { $0.site.caseInsensitiveCompare(s) == .orderedSame }) { sums[i].count += n } else { sums.append((s, n)) }
+            }
+        }
+        return sums.sorted { $0.count != $1.count ? $0.count > $1.count : $0.site.compare($1.site, locale: .current) == .orderedAscending }
+    }
+
+    /// A dictation into a browser: which site, by its name only, under the browser's spelling seen first.
+    private static func count(_ site: String, in app: String, on d: inout UsageDay) {
+        let browser = d.sites.keys.first { $0.caseInsensitiveCompare(app) == .orderedSame } ?? app
+        var sites = d.sites[browser] ?? [:]
+        let key = sites.keys.first { $0.caseInsensitiveCompare(site) == .orderedSame } ?? site
+        sites[key, default: 0] += 1
+        d.sites[browser] = sites
     }
 
     /// Remember how long a dictation took from stop to text in place, and with which models.
@@ -112,7 +155,8 @@ public struct UsageLog: Codable, Sendable, Equatable {
         if samples.count > Self.keepTurnarounds { samples.removeFirst(samples.count - Self.keepTurnarounds) }
     }
 
-    public mutating func recordDictation(words: Int, seconds: Double, turnaround: Double, usedAI: Bool, keptAI: Bool, app: String?, on date: Date = Date()) {
+    public mutating func recordDictation(words: Int, seconds: Double, turnaround: Double, usedAI: Bool, keptAI: Bool, app: String?,
+                                         site: String? = nil, on date: Date = Date()) {
         var d = days[Self.key(date)] ?? UsageDay()
         d.dictations += 1
         d.words += words
@@ -123,6 +167,7 @@ public struct UsageLog: Codable, Sendable, Equatable {
             // One app however its name is written ("Slack" and "slack"): counted under the spelling seen first.
             let key = d.apps.keys.first { $0.caseInsensitiveCompare(app) == .orderedSame } ?? app
             d.apps[key, default: 0] += 1
+            if let site { Self.count(site, in: app, on: &d) }
         }
         d.hours[min(max(Calendar.current.component(.hour, from: date), 0), 23)] += 1
         days[Self.key(date)] = d

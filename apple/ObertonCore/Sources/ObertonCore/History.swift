@@ -11,6 +11,9 @@ public struct HistoryEntry: Codable, Identifiable, Sendable, Hashable {
     public var profileName: String
     public var model: String?
     public var appName: String?
+    /// The window's title at the time (Windows' WindowTitle), when it could be read: the Mac's direct build with
+    /// Accessibility. nil otherwise, and in entries from before titles were kept.
+    public var windowTitle: String?
     public var seconds: Double
     public var turnaroundSeconds: Double
     public var warning: String?
@@ -28,18 +31,20 @@ public struct HistoryEntry: Codable, Identifiable, Sendable, Hashable {
     public var folder: URL?
 
     enum CodingKeys: String, CodingKey {
-        case id, date, transcription, aiEdit, inserted, profileName, model, appName, seconds, turnaroundSeconds, warning, safetyNet
+        case id, date, transcription, aiEdit, inserted, profileName, model, appName, windowTitle, seconds, turnaroundSeconds, warning, safetyNet
         case wasInserted, runAgainAt, earlier, showingEarlier
     }
 
     public init(transcription: String, aiEdit: String?, inserted: String, profileName: String, model: String?, appName: String?,
-                seconds: Double, turnaroundSeconds: Double, warning: String?, safetyNet: Bool = false, wasInserted: Bool = true) {
+                windowTitle: String? = nil, seconds: Double, turnaroundSeconds: Double, warning: String?, safetyNet: Bool = false,
+                wasInserted: Bool = true) {
         self.transcription = transcription
         self.aiEdit = aiEdit
         self.inserted = inserted
         self.profileName = profileName
         self.model = model
         self.appName = appName
+        self.windowTitle = windowTitle.map(Self.keptTitle)
         self.seconds = seconds
         self.turnaroundSeconds = turnaroundSeconds
         self.warning = warning
@@ -58,6 +63,18 @@ public struct HistoryEntry: Codable, Identifiable, Sendable, Hashable {
     public var isSafetyNet: Bool { safetyNet ?? (aiEdit != nil && aiEdit == transcription && warning != nil) }
     /// The app's name, or "Unknown app".
     public var appLabel: String { appName.flatMap { $0.isEmpty ? nil : $0 } ?? "Unknown app" }
+    /// The browser site it went to, by name only (`WebSites`); nil when it didn't go into a browser, or when its
+    /// window title was never read (the App Store build, and entries from before titles were kept).
+    public var site: String? { windowTitle == nil ? nil : WebSites.site(appName, windowTitle) }
+
+    /// As much of a window title as Windows keeps: GetWindowText into 256 characters, so the first 255 (UTF-16 units,
+    /// without a half character at the cut).
+    public static func keptTitle(_ title: String) -> String {
+        guard title.utf16.count > 255 else { return title }
+        var units = Array(title.utf16.prefix(255))
+        if let last = units.last, UTF16.isLeadSurrogate(last) { units.removeLast() }
+        return String(decoding: units, as: UTF16.self)
+    }
     public var audioURL: URL? { folder?.appending(path: "audio.wav") }
     /// The words heard with when each was said, beside the recording (playback lights the word being said).
     public var wordsURL: URL? { folder?.appending(path: "words.json") }

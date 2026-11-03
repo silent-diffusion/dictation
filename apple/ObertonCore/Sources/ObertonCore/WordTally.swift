@@ -26,7 +26,7 @@ public struct ProfileTally: Codable, Sendable, Equatable {
     }
 }
 
-/// One app's share of a day of the word tally.
+/// One app's (or site's) share of a day of the word tally.
 public struct TallyPart: Codable, Sendable, Equatable {
     public var dictations = 0
     public var words: [String: Int] = [:]
@@ -64,7 +64,8 @@ public struct TallyDay: Codable, Sendable, Equatable {
     public var hours = [Int](repeating: 0, count: 24)
     /// Per profile name: how it was used and how much it edited.
     public var profiles: [String: ProfileTally] = [:]
-    /// The same counts per app ("Mail"), so Analytics can show one app's words.
+    /// The same counts per app ("Mail") and per browser site ("Safari › Gmail", see `WordTally.appKey`), so Analytics
+    /// can show one app's (or site's) words.
     public var apps: [String: TallyPart] = [:]
 
     public init(day: String) { self.day = day }
@@ -139,12 +140,12 @@ public struct WordTally: Codable, Sendable, Equatable {
         return days.filter { $0.day >= key }
     }
 
-    /// The key a dictation's app is counted under: its name, or "Unknown app" (WordTally.AppKey). Lane J: Windows adds
-    /// "app › site" for a browser's site.
-    public static func appKey(_ app: String) -> String { app }
+    /// The key a dictation's app (and, in a browser, its site) is counted under: "Mail", "Safari › Gmail"
+    /// (WordTally.AppKey). The app is its name, or "Unknown app".
+    public static func appKey(_ app: String, _ site: String? = nil) -> String { site.map { app + " › " + $0 } ?? app }
 
-    /// The tally of one app, as days of its own (without profiles), so the figures work on it as on the whole. App keys
-    /// are told apart ignoring case.
+    /// The tally of one app or site (`appKey`), as days of its own (without profiles), so the figures work on it as on
+    /// the whole. Keys are told apart ignoring case.
     public static func forApp(_ days: [TallyDay], _ app: String) -> [TallyDay] {
         days.compactMap { d in
             guard let p = d.apps[app] ?? d.apps.first(where: { $0.key.caseInsensitiveCompare(app) == .orderedSame })?.value else { return nil }
@@ -181,8 +182,9 @@ public struct WordTally: Codable, Sendable, Equatable {
         if e.turnaroundSeconds > 0 { p.turnaroundSeconds += e.turnaroundSeconds; p.turnaroundCount += 1 }
         d.profiles[name] = p
 
-        do {
-            let app = d.apps.keys.first { $0.caseInsensitiveCompare(Self.appKey(e.appLabel)) == .orderedSame } ?? Self.appKey(e.appLabel)
+        // The dictation's words again, under its app, and under its site when it went into a browser.
+        for k in [Self.appKey(e.appLabel)] + (e.site.map { [Self.appKey(e.appLabel, $0)] } ?? []) {
+            let app = d.apps.keys.first { $0.caseInsensitiveCompare(k) == .orderedSame } ?? k
             var a = d.apps[app] ?? TallyPart()
             a.dictations += 1
             for w in item.words { a.words[w, default: 0] += 1 }
