@@ -8,49 +8,64 @@ import Speech
 /// back. Nothing is inserted, and the dashboard counts and Analytics are left as they were (the dictation happened once).
 public enum HistoryRerun {
     /// Run `entry` again. Returns the changed entry and a sentence saying what was done; throws `UserFacingError`.
+    /// `canSwapSpeechModel`: false while something else relies on the speech model loaded now (an Extended Notes
+    /// session); the rerun then uses that model instead of the profile's.
     public static func run(_ entry: HistoryEntry, profiles: [Profile], active: Profile, settings: AppSettings,
+                           canSwapSpeechModel: Bool = true,
                            progress: @MainActor (String) -> Void) async throws -> (HistoryEntry, String) {
         guard entry.hasAudio, let url = entry.audioURL else {
             throw UserFacingError("The recording of this dictation isn't kept any more, so it can't be run again.")
         }
+        try checkFormat(url)
         let found = profiles.first { $0.name.caseInsensitiveCompare(entry.profileName) == .orderedSame }
         let profileNote = found == nil ? " (the profile \"\(entry.profileName)\" is gone, so \(active.name) was used)" : ""
         let profile = found ?? active
 
-        // 1. Speech: the speech model in Settings (Apple's on-device recognizer or Whisper), from the file.
+        // 1. Speech: the profile's speech model (Apple's on-device recognizer or Whisper), unless another one must stay
+        // loaded; loaded first when it isn't in yet.
+        var whisper = settings.whisperModel
+        if let wanted = whisper, let loaded = WhisperEngine.loadedModel, loaded != wanted, !canSwapSpeechModel { whisper = loaded }
         let heard: String
-        if let whisper = settings.whisperModel {
+        if let whisper {
+            if WhisperEngine.loadedModel?.caseInsensitiveCompare(whisper) != .orderedSame {
+                await progress("Loading \(WhisperModels.name(of: whisper))…")
+                try await WhisperEngine.shared.load(whisper)
+            }
             await progress("Transcribing again with \(WhisperModels.name(of: whisper))…")
             heard = try await WhisperAudio.rerun(url, model: whisper, language: settings.whisperLanguage,
                                                  vocabulary: settings.vocabularyHint, even: settings.evenOutVolume)
         } else {
             await progress("Transcribing again with on-device speech recognition…")
-            heard = try await transcribe(url, locale: settings.speechLocale, vocabulary: settings.vocabulary)
+            heard = try await transcribe(url, locale: settings.speechLocale, vocabulary: settings.vocabulary, even: settings.evenOutVolume)
         }
         try Task.checkCancellation()
         guard OutputSanitizer.hasContent(heard) else {
             throw UserFacingError("Nothing was heard in the recording this time; the dictation was left as it was.")
         }
 
-        // 2. Cleanup by the profile, as a dictation does.
-        var aiEdit: String?, warning: String?, final = heard, safetyNet = false
+        // 2. Cleanup by the profile, as a dictation does (but no surrounding text to fit: that moment is gone).
+        let raw = FragmentStitcher.tidy(heard)
+        var aiEdit: String?, warning: String?, final = raw, safetyNet = false
         if !profile.isRaw {
             await progress("Cleaning up with \(profile.name)…")
-            let result = await TextProcessor(settings: settings).process(heard, profile: profile)
+            let result = await TextProcessor(settings: settings).process(raw, profile: profile)
             final = result.text
             if result.modified { aiEdit = result.text }
             safetyNet = result.safetyNet
-            warning = result.error.map { $0 + " The transcription was kept as heard." } ?? result.warning
+            // An AI error keeps the transcription as heard; the safety net's note only when it stepped in.
+            warning = result.error.map { $0 + " The transcription was kept as heard." } ?? (safetyNet ? result.warning : nil)
         }
         try Task.checkCancellation()
 
         var changed = entry
         changed.earlier = entry.version
-        changed.apply(HistoryVersion(transcription: heard, aiEdit: aiEdit, inserted: final.trimmingCharacters(in: .whitespacesAndNewlines),
+        changed.apply(HistoryVersion(transcription: raw, aiEdit: aiEdit, inserted: final.trimmingCharacters(in: .whitespacesAndNewlines),
                                      safetyNet: safetyNet, warning: warning, profileName: profile.name, wasInserted: false))
         changed.runAgainAt = Date()
         changed.showingEarlier = false
-        let speech = settings.whisperModel.map(WhisperModels.name(of:)) ?? "on-device speech recognition"
+        let speech = whisper.map(WhisperModels.name(of:)) ?? "on-device speech recognition"
+        CoreLog.info("History: ran \(HistoryStore.folderName(entry.date)) again (\(speech), \(profile.name)): "
+                     + "\(entry.transcription.utf16.count)->\(raw.utf16.count) chars heard")
         return (changed, "Run again with \(speech) and the \(profile.name) profile\(profileNote). Not inserted anywhere: copy it, or insert it below.")
     }
 
@@ -64,14 +79,27 @@ public enum HistoryRerun {
         return swapped
     }
 
-    /// The whole transcript of an audio file, from Apple's on-device recognizer.
-    public static func transcribe(_ url: URL, locale: Locale, vocabulary: [String]) async throws -> String {
+    /// History keeps its recordings as 16 kHz mono 16-bit PCM; anything else isn't one of them.
+    static func checkFormat(_ url: URL) throws {
+        let format = try AVAudioFile(forReading: url).fileFormat
+        let bits = (format.settings[AVLinearPCMBitDepthKey] as? Int) ?? 0
+        let float = (format.settings[AVLinearPCMIsFloatKey] as? Bool) ?? false
+        guard format.sampleRate == 16000, format.channelCount == 1, bits == 16, !float else {
+            throw UserFacingError("This recording isn't in the format Oberton records in, so it can't be run again.")
+        }
+    }
+
+    /// The whole transcript of an audio file, from Apple's on-device recognizer; with `even`, quiet speech is evened
+    /// out first, as a dictation's is.
+    public static func transcribe(_ url: URL, locale: Locale, vocabulary: [String], even: Bool = false) async throws -> String {
         let locale = try await LiveTranscriber.prepare(locale: locale)
         LiveTranscriber.markInUse()
-        let file: AVAudioFile
-        do { file = try AVAudioFile(forReading: url) } catch {
-            throw UserFacingError("This recording can't be read, so it can't be run again.")
+        var levelled: URL?
+        defer { if let levelled { try? FileManager.default.removeItem(at: levelled) } }
+        if even {
+            levelled = try evenedOut(url)
         }
+        let file = try AVAudioFile(forReading: levelled ?? url)
         let transcriber = SpeechTranscriber(locale: locale, transcriptionOptions: [], reportingOptions: [], attributeOptions: [])
         let analyzer = SpeechAnalyzer(modules: [transcriber])
         if !vocabulary.isEmpty {
@@ -96,5 +124,23 @@ public enum HistoryRerun {
             throw error
         }
         return try await collect.value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// A copy of a recording with quiet speech evened out (VolumeLeveller), as 16 kHz mono 16-bit PCM in a temporary file.
+    static func evenedOut(_ url: URL) throws -> URL {
+        let file = try AVAudioFile(forReading: url, commonFormat: .pcmFormatFloat32, interleaved: false)
+        let frames = AVAudioFrameCount(file.length)
+        guard frames > 0, let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: frames) else { return url }
+        try file.read(into: buffer)
+        guard let channel = buffer.floatChannelData?[0] else { return url }
+        var samples = Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength)))
+        VolumeLeveller(sampleRate: file.processingFormat.sampleRate).process(&samples)
+        var pcm = Data(capacity: samples.count * 2)
+        for s in samples {
+            withUnsafeBytes(of: Int16(max(-1, min(1, s)) * 32767).littleEndian) { pcm.append(contentsOf: $0) }
+        }
+        let out = FileManager.default.temporaryDirectory.appending(path: "oberton-rerun-\(UUID().uuidString).wav")
+        try WavFile.data(pcm: pcm, sampleRate: Int(file.processingFormat.sampleRate)).write(to: out, options: .atomic)
+        return out
     }
 }

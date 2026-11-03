@@ -47,8 +47,15 @@ public struct HistoryEntry: Codable, Identifiable, Sendable, Hashable {
         self.wasInserted = wasInserted
     }
 
-    public var words: Int { inserted.split(whereSeparator: \.isWhitespace).count }
+    /// Words in what went in, or in what was heard when nothing went in (HistoryEntry.Words).
+    public var words: Int { (inserted.isEmpty ? transcription : inserted).split(whereSeparator: \.isWhitespace).count }
     public var didInsert: Bool { wasInserted ?? true }
+    /// The AI's own output (Windows' AiOutput): nil when no AI edit was used, or when the AI step gave back the words
+    /// unchanged with a warning (a failure in entries saved before failures were kept as nil: nothing of the AI's went in).
+    public var aiOutput: String? { aiEdit == transcription && warning != nil ? nil : aiEdit }
+    /// The safety net rejected the AI's edit (all of it or some parts); entries from before it was kept fall back to
+    /// what their text shows.
+    public var isSafetyNet: Bool { safetyNet ?? (aiEdit != nil && aiEdit == transcription && warning != nil) }
     /// The app's name, or "Unknown app".
     public var appLabel: String { appName.flatMap { $0.isEmpty ? nil : $0 } ?? "Unknown app" }
     public var audioURL: URL? { folder?.appending(path: "audio.wav") }

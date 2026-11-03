@@ -7,9 +7,9 @@ import Testing
 
 @Suite struct WordTallyTests {
     private func entry(_ transcript: String, ai: String? = nil, inserted: String? = nil, profile: String = "Light Cleanup",
-                       app: String? = nil, date: Date = Date(), warning: String? = nil) -> HistoryEntry {
+                       app: String? = nil, date: Date = Date(), warning: String? = nil, safetyNet: Bool = false) -> HistoryEntry {
         var e = HistoryEntry(transcription: transcript, aiEdit: ai, inserted: inserted ?? ai ?? transcript, profileName: profile, model: nil,
-                             appName: app, seconds: 3, turnaroundSeconds: 1.2, warning: warning)
+                             appName: app, seconds: 3, turnaroundSeconds: 1.2, warning: warning, safetyNet: safetyNet)
         e.date = date
         return e
     }
@@ -121,10 +121,51 @@ import Testing
 
     @Test func aRejectedEditCountsAsEditedButNotKeptAndTeachesNothing() {
         var tally = WordTally()
-        tally.record(entry("the Overton release", ai: "the Overton release", profile: "Formal", warning: "The safety net kept your words"))
+        // As Windows keeps it: no AI output, the safety net flag set.
+        tally.record(entry("the Overton release", profile: "Formal", warning: "The safety net kept your words", safetyNet: true))
         #expect(tally.days[0].profiles["Formal"]?.aiEdited == 1)
         #expect(tally.days[0].profiles["Formal"]?.aiKept == 0)
         #expect(tally.days[0].corrections.isEmpty)
+        // An entry from before the flag was kept: the AI gave back the words unchanged, with a warning.
+        var old = entry("the Overton release", ai: "the Overton release", profile: "Formal", warning: "The safety net kept your words")
+        old.safetyNet = nil
+        tally.record(old)
+        #expect(tally.days[0].profiles["Formal"]?.aiEdited == 2)
+        #expect(tally.days[0].profiles["Formal"]?.aiKept == 0)
+    }
+
+    @Test func aPartlyRejectedEditStillTeachesItsCorrections() {
+        // WordTally.cs analyzes AiOutput whenever there is one, also when the safety net kept part of it.
+        var tally = WordTally()
+        tally.record(entry("I opened Overton today", ai: "I opened Oberton today.", profile: "Formal",
+                           warning: "The AI's edit of 1 of 2 parts failed the safety net; those parts were inserted unchanged.", safetyNet: true))
+        #expect(tally.days[0].corrections == ["overton" + WordTally.arrow + "Oberton": 1])
+        #expect(tally.days[0].profiles["Formal"]?.aiEdited == 1)
+        #expect(tally.days[0].profiles["Formal"]?.aiKept == 0)
+    }
+
+    @Test func appsAreToldApartIgnoringCaseAndAnUnnamedAppIsCounted() {
+        var tally = WordTally()
+        tally.record(entry("release notes for the team", app: "Mail"))
+        tally.record(entry("release notes for the board", app: "mail"))
+        tally.record(entry("standup tomorrow morning"))
+        #expect(tally.days[0].apps.count == 2)
+        #expect(tally.days[0].apps["Mail"]?.dictations == 2)
+        #expect(tally.days[0].apps["Unknown app"]?.dictations == 1)
+        #expect(WordTally.forApp(tally.days, "MAIL").count == 1)
+    }
+
+    @Test func profilesWithTheSameUseKeepTheOrderTheyWereFirstMet() {
+        let cal = Calendar.current, now = Date()
+        var tally = WordTally()
+        tally.record(entry("one two three", profile: "Zebra", date: cal.date(byAdding: .day, value: -2, to: now)!))
+        tally.record(entry("one two three", profile: "Alpha", date: cal.date(byAdding: .day, value: -1, to: now)!))
+        #expect(WordTally.byProfile(tally.days).map(\.profile) == ["Zebra", "Alpha"])
+    }
+
+    @Test func allDigitWordsAreLeftOutButOtherNumbersAreNot() {
+        let item = WordTally.analyze(transcript: "", aiOutput: nil, final: "room 42 needs ½½ and x²")
+        #expect(item.words.contains("room") && item.words.contains("½½") && !item.words.contains("42"))
     }
 
     @Test func oldDaysLoseTheirOneOffPhrasesAndVeryOldDaysGo() {
@@ -154,9 +195,46 @@ import Testing
         #expect(Vocabulary.adding("oberton", to: "Kubernetes, Oberton") == "Kubernetes, Oberton")
         #expect(!Vocabulary.contains("Obertonia", "Oberton"))
     }
+
+    @Test func aWordAnywhereInTheHintCountsAsAdded() {
+        // AnalyticsPage.InVocabulary: a whole-word match anywhere, ignoring case.
+        #expect(Vocabulary.contains("Oberton Pro, Kubernetes", "oberton"))
+        #expect(Vocabulary.contains("Kubernetes; Oberton.", "Oberton"))
+        #expect(!Vocabulary.contains("Obertonia", "Oberton"))
+        // Only the end loses its , and ; (hint.Trim().TrimEnd(',', ';')).
+        #expect(Vocabulary.adding("Oberton", to: ", Kubernetes;,") == ", Kubernetes, Oberton")
+    }
 }
 
 @Suite struct UsageLogTests {
+    @Test func readingTimeIsSummedPerDay() {
+        // AnalyticsTenTests: one reading, its time counted in three goes (the last of no time).
+        var log = UsageLog()
+        let now = Date()
+        log.recordReading(words: 120, on: now)
+        log.recordReadingTime(30, on: now)
+        log.recordReadingTime(15.5, on: now)
+        log.recordReadingTime(0, on: now)
+        let d = log.days[UsageLog.key(now)]!
+        #expect(d.readings == 1 && d.wordsRead == 120 && d.secondsRead == 45.5)
+    }
+
+    @Test func appsIgnoreCaseAnUnnamedAppIsCountedAndResetKeepsTheTurnarounds() {
+        var log = UsageLog()
+        let now = Date()
+        log.recordDictation(words: 2, seconds: 1, turnaround: 1, usedAI: false, keptAI: false, app: "Slack", on: now)
+        log.recordDictation(words: 3, seconds: 1, turnaround: 1, usedAI: false, keptAI: false, app: "slack", on: now)
+        log.record(HistoryEntry(transcription: "one two", aiEdit: nil, inserted: "", profileName: "Raw", model: nil, appName: nil,
+                                seconds: 1, turnaroundSeconds: 0, warning: nil))
+        let d = log.days[UsageLog.key(now)]!
+        #expect(d.apps == ["Slack": 2, "Unknown app": 1])
+        // An empty insert counts the words heard (HistoryEntry.Words).
+        #expect(log.totalWords == 7)
+        log.recordTurnaround(TurnaroundSample(speechModel: "a", aiModel: "", seconds: 1, modelLoaded: false))
+        log.clearDays()
+        #expect(log.days.isEmpty && log.totalWords == 0 && log.samples.count == 1)
+    }
+
     @Test func oldUsageFilesStillLoad() throws {
         let old = #"{"days":{"2026-10-01":{"dictations":2,"words":30,"secondsSpoken":12,"wordsRead":0,"secondsRead":0,"aiEdits":1,"aiKept":1,"apps":{"Mail":2}}},"turnarounds":[1.1],"totalWords":30}"#
         let log = try JSONDecoder().decode(UsageLog.self, from: Data(old.utf8))

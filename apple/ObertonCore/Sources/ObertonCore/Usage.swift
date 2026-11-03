@@ -15,7 +15,7 @@ public struct UsageDay: Codable, Sendable, Equatable {
     /// Dictations a profile with AI edited, and how many of those kept the AI's edit (didn't fall back to the raw words).
     public var aiEdits = 0
     public var aiKept = 0
-    /// Dictations per app name.
+    /// Dictations per app name ("Unknown app" when there is none), names told apart ignoring case.
     public var apps: [String: Int] = [:]
     /// Dictations per hour of the day (0–23), for "when you dictate".
     public var hours = [Int](repeating: 0, count: 24)
@@ -64,7 +64,10 @@ public struct UsageLog: Codable, Sendable, Equatable {
     public var days: [String: UsageDay] = [:]
     /// The latest turnarounds with the models that produced them (no text), newest last.
     public var samples: [TurnaroundSample] = []
-    public var totalWords = 0
+    /// Every word dictated, over the days kept (UsageStore.TotalWords: it drops as old days go).
+    public var totalWords: Int { days.values.reduce(0) { $0 + $1.words } }
+
+    enum CodingKeys: String, CodingKey { case days, samples }
 
     public init() {}
 
@@ -78,7 +81,6 @@ public struct UsageLog: Codable, Sendable, Equatable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         days = (try? c.decode([String: UsageDay].self, forKey: .days)) ?? [:]
         samples = (try? c.decode([TurnaroundSample].self, forKey: .samples)) ?? []
-        totalWords = (try? c.decode(Int.self, forKey: .totalWords)) ?? 0
     }
 
     public static func key(_ date: Date) -> String {
@@ -99,9 +101,9 @@ public struct UsageLog: Codable, Sendable, Equatable {
     /// Count a finished dictation, as Windows counts it: the AI worked on it when it has an AI edit or the safety net
     /// stepped in, and kept its edit when nothing was rejected.
     public mutating func record(_ e: HistoryEntry) {
-        let safetyNet = e.safetyNet == true
-        recordDictation(words: e.words, seconds: e.seconds, turnaround: e.turnaroundSeconds, usedAI: e.aiEdit != nil || safetyNet,
-                        keptAI: e.aiEdit != nil && !safetyNet, app: e.appName, on: e.date)
+        let safetyNet = e.isSafetyNet, aiOutput = e.aiOutput
+        recordDictation(words: e.words, seconds: e.seconds, turnaround: e.turnaroundSeconds, usedAI: aiOutput != nil || safetyNet,
+                        keptAI: aiOutput != nil && !safetyNet, app: e.appLabel, on: e.date)
     }
 
     /// Remember how long a dictation took from stop to text in place, and with which models.
@@ -117,10 +119,13 @@ public struct UsageLog: Codable, Sendable, Equatable {
         d.secondsSpoken += seconds
         if turnaround > 0 { d.turnaroundSeconds += turnaround; d.turnaroundCount += 1 }
         if usedAI { d.aiEdits += 1; if keptAI { d.aiKept += 1 } }
-        if let app { d.apps[app, default: 0] += 1 }
+        if let app {
+            // One app however its name is written ("Slack" and "slack"): counted under the spelling seen first.
+            let key = d.apps.keys.first { $0.caseInsensitiveCompare(app) == .orderedSame } ?? app
+            d.apps[key, default: 0] += 1
+        }
         d.hours[min(max(Calendar.current.component(.hour, from: date), 0), 23)] += 1
         days[Self.key(date)] = d
-        totalWords += words
         prune()
     }
 
@@ -144,13 +149,30 @@ public struct UsageLog: Codable, Sendable, Equatable {
     }
 
     public mutating func recordReading(words: Int, seconds: Double, on date: Date = Date()) {
+        recordReading(words: words, on: date)
+        recordReadingTime(seconds, on: date)
+    }
+
+    /// Count a text read aloud, when it starts (UsageStore.RecordReading).
+    public mutating func recordReading(words: Int, on date: Date = Date()) {
         var d = days[Self.key(date)] ?? UsageDay()
         d.readings += 1
         d.wordsRead += words
+        days[Self.key(date)] = d
+        prune()
+    }
+
+    /// Count how long a reading's voice spoke, when it ends (UsageStore.RecordReadingTime); nothing for no time.
+    public mutating func recordReadingTime(_ seconds: Double, on date: Date = Date()) {
+        guard seconds > 0 else { return }
+        var d = days[Self.key(date)] ?? UsageDay()
         d.secondsRead += seconds
         days[Self.key(date)] = d
         prune()
     }
+
+    /// Forget every daily count (Settings › History); the turnaround samples stay (UsageStore.Clear).
+    public mutating func clearDays() { days = [:] }
 
     /// The last `count` days, oldest first, today last (days with nothing are empty).
     public func perDay(_ count: Int, until now: Date = Date()) -> [UsageDay] {

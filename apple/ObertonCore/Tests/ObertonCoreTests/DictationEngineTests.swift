@@ -127,7 +127,8 @@ import Testing
     @Test func oldTurnaroundListsStillLoad() throws {
         let json = #"{"days":{},"turnarounds":[1.5,2.0],"totalWords":12}"#
         let log = try JSONDecoder().decode(UsageLog.self, from: Data(json.utf8))
-        #expect(log.totalWords == 12)
+        // The total is the kept days' words (UsageStore.TotalWords), not a stored counter.
+        #expect(log.totalWords == 0)
         #expect(log.samples.isEmpty)
     }
 }

@@ -139,10 +139,15 @@ public struct WordTally: Codable, Sendable, Equatable {
         return days.filter { $0.day >= key }
     }
 
-    /// The tally of one app, as days of its own (without profiles), so the figures work on it as on the whole.
+    /// The key a dictation's app is counted under: its name, or "Unknown app" (WordTally.AppKey). Lane J: Windows adds
+    /// "app › site" for a browser's site.
+    public static func appKey(_ app: String) -> String { app }
+
+    /// The tally of one app, as days of its own (without profiles), so the figures work on it as on the whole. App keys
+    /// are told apart ignoring case.
     public static func forApp(_ days: [TallyDay], _ app: String) -> [TallyDay] {
         days.compactMap { d in
-            guard let p = d.apps[app] else { return nil }
+            guard let p = d.apps[app] ?? d.apps.first(where: { $0.key.caseInsensitiveCompare(app) == .orderedSame })?.value else { return nil }
             var t = TallyDay(day: d.day)
             t.words = p.words; t.phrases = p.phrases; t.corrections = p.corrections; t.fillers = p.fillers; t.hours = p.hours
             return t
@@ -150,8 +155,11 @@ public struct WordTally: Codable, Sendable, Equatable {
     }
 
     private mutating func count(_ e: HistoryEntry) {
-        let kept = e.aiEdit != nil && e.warning == nil
-        let item = Self.analyze(transcript: e.transcription, aiOutput: kept ? e.aiEdit : nil, final: e.inserted)
+        // As Windows: the AI's output is what is analyzed, also when the safety net kept part of it; the AI worked on a
+        // dictation when it has an output or the safety net stepped in, and its edit was kept when it has one and the
+        // safety net didn't.
+        let safetyNet = e.isSafetyNet, aiOutput = e.aiOutput
+        let item = Self.analyze(transcript: e.transcription, aiOutput: aiOutput, final: e.inserted)
         let key = UsageLog.key(e.date)
         let hour = min(max(Calendar.current.component(.hour, from: e.date), 0), 23)
         var d = days.first { $0.day == key } ?? TallyDay(day: key)
@@ -164,16 +172,17 @@ public struct WordTally: Codable, Sendable, Equatable {
         let name = e.profileName.trimmingCharacters(in: .whitespaces).isEmpty ? "Unknown profile" : e.profileName
         var p = d.profiles[name] ?? ProfileTally()
         p.dictations += 1
-        if e.aiEdit != nil {
+        if aiOutput != nil || safetyNet {
             p.aiEdited += 1
-            if kept { p.aiKept += 1 }
+            if aiOutput != nil && !safetyNet { p.aiKept += 1 }
         }
         p.wordsHeard += item.wordsHeard
         p.wordsChanged += item.wordsChanged
         if e.turnaroundSeconds > 0 { p.turnaroundSeconds += e.turnaroundSeconds; p.turnaroundCount += 1 }
         d.profiles[name] = p
 
-        if let app = e.appName, !app.isEmpty {
+        do {
+            let app = d.apps.keys.first { $0.caseInsensitiveCompare(Self.appKey(e.appLabel)) == .orderedSame } ?? Self.appKey(e.appLabel)
             var a = d.apps[app] ?? TallyPart()
             a.dictations += 1
             for w in item.words { a.words[w, default: 0] += 1 }
@@ -252,7 +261,10 @@ public struct WordTally: Codable, Sendable, Equatable {
     /// heard, the corrections and the fillers taken out.
     public static func analyze(transcript: String, aiOutput: String?, final: String) -> TallyItem {
         let text = final.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? transcript : final
-        let words = tokens(text).filter { $0.count >= 2 && !commonWords.contains($0) && !$0.allSatisfy(\.isNumber) }
+        // .NET: at least two UTF-16 units, and not all decimal digits (char.IsDigit).
+        let words = tokens(text).filter {
+            $0.utf16.count >= 2 && !commonWords.contains($0) && !$0.unicodeScalars.allSatisfy { $0.properties.generalCategory == .decimalNumber }
+        }
 
         var phrases: [String] = []
         for sentence in sentences(text) {
@@ -316,7 +328,16 @@ public struct WordTally: Codable, Sendable, Equatable {
     public static func top(_ days: [TallyDay], _ pick: (TallyDay) -> [String: Int], _ count: Int) -> [(key: String, count: Int)] {
         var sum: [String: Int] = [:]
         for d in days { for (k, v) in pick(d) { sum[k, default: 0] += v } }
-        return sum.sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }.prefix(count).map { ($0.key, $0.value) }
+        return sum.sorted { $0.value != $1.value ? $0.value > $1.value : before($0.key, $1.key) }.prefix(count).map { ($0.key, $0.value) }
+    }
+
+    /// .NET's default string order (culture-aware, as `ThenBy(key)` sorts), with a plain order for ties.
+    static func before(_ a: String, _ b: String) -> Bool {
+        switch a.compare(b, locale: .current) {
+        case .orderedAscending: true
+        case .orderedDescending: false
+        case .orderedSame: a < b
+        }
     }
 
     /// The most repeated phrases, without one that is only part of a longer phrase shown above it ("go ahead" under
@@ -342,10 +363,14 @@ public struct WordTally: Codable, Sendable, Equatable {
         return grid
     }
 
+    /// Profiles summed over the days, busiest first; equal ones in the order they were first met (Windows' stable
+    /// sort), oldest day first and by name within a day.
     public static func byProfile(_ days: [TallyDay]) -> [(profile: String, total: ProfileTally)] {
         var sum: [String: ProfileTally] = [:]
+        var order: [String] = []
         for d in days {
-            for (name, p) in d.profiles {
+            for (name, p) in d.profiles.sorted(by: { before($0.key, $1.key) }) {
+                if sum[name] == nil { order.append(name) }
                 var t = sum[name] ?? ProfileTally()
                 t.dictations += p.dictations; t.aiEdited += p.aiEdited; t.aiKept += p.aiKept
                 t.wordsHeard += p.wordsHeard; t.wordsChanged += p.wordsChanged
@@ -353,7 +378,8 @@ public struct WordTally: Codable, Sendable, Equatable {
                 sum[name] = t
             }
         }
-        return sum.sorted { $0.value.dictations != $1.value.dictations ? $0.value.dictations > $1.value.dictations : $0.key < $1.key }
+        let rank = Dictionary(uniqueKeysWithValues: order.enumerated().map { ($1, $0) })
+        return sum.sorted { $0.value.dictations != $1.value.dictations ? $0.value.dictations > $1.value.dictations : rank[$0.key]! < rank[$1.key]! }
             .map { ($0.key, $0.value) }
     }
 }
@@ -361,15 +387,20 @@ public struct WordTally: Codable, Sendable, Equatable {
 /// The speech vocabulary is the recognizer's hint (Settings › Speech recognition): a comma-separated list of words it
 /// should expect, read at the start of every dictation, so an addition works right away.
 public enum Vocabulary {
+    /// The word anywhere in the hint, as a whole word, ignoring case (AnalyticsPage.InVocabulary): "Oberton" is in
+    /// "Oberton Pro, Kubernetes".
     public static func contains(_ hint: String, _ word: String) -> Bool {
-        hint.split(whereSeparator: { $0 == "," || $0 == ";" || $0 == "\n" })
-            .contains { $0.trimmingCharacters(in: .whitespaces).trimmingCharacters(in: CharacterSet(charactersIn: ".")).caseInsensitiveCompare(word) == .orderedSame }
+        let pattern = "(^|[\\s,;])" + NSRegularExpression.escapedPattern(for: word) + "($|[\\s,;.])"
+        guard let rx = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { return false }
+        return rx.firstMatch(in: hint, range: NSRange(location: 0, length: (hint as NSString).length)) != nil
     }
 
-    /// The hint with the word appended ("Kubernetes, Oberton"); unchanged when it is already there.
+    /// The hint with the word appended ("Kubernetes, Oberton"); unchanged when it is already there. The hint is trimmed,
+    /// then any , or ; at its end (`hint.Trim().TrimEnd(',', ';')`).
     public static func adding(_ word: String, to hint: String) -> String {
         if contains(hint, word) { return hint }
-        let h = hint.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: ",;"))
+        var h = hint.trimmingCharacters(in: .whitespacesAndNewlines)
+        while let last = h.last, last == "," || last == ";" { h.removeLast() }
         return h.isEmpty ? word : h + ", " + word
     }
 }
