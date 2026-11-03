@@ -252,6 +252,10 @@ struct ThreeBoxes: View {
     var transcriptionEditor: Binding<String>? = nil
     /// Draw the hairline box around the three (off when a card around them already does).
     var boxed = true
+    /// The word being said while the recording plays, lit in the accent (UTF-16 ranges in the transcription and in
+    /// what went in; nil: none).
+    var transcriptionLit: NSRange? = nil
+    var insertedLit: NSRange? = nil
     @Environment(\.ob) private var ob
     @Environment(\.horizontalSizeClass) private var sizeClass
 
@@ -263,7 +267,7 @@ struct ThreeBoxes: View {
                     TextEditor(text: transcriptionEditor)
                         .font(Ob.mono(13)).scrollContentBackground(.hidden).frame(minHeight: 72)
                 } else {
-                    Text(transcription).font(Ob.sans(14)).lineSpacing(6)
+                    Text(lit(transcription, transcriptionLit)).font(Ob.sans(14)).lineSpacing(6)
                 }
             }
             separator
@@ -280,10 +284,20 @@ struct ThreeBoxes: View {
             }
             separator
             column("03 // Inserted", copy: inserted) {
-                Text(inserted).font(Ob.sans(14)).lineSpacing(6)
+                Text(lit(inserted, insertedLit)).font(Ob.sans(14)).lineSpacing(6)
             }
         }
         .overlay(Rectangle().strokeBorder(boxed ? ob.divider : .clear, lineWidth: 1))
+    }
+
+    /// The text with `range` in the accent (only the colour, so nothing moves).
+    private func lit(_ text: String, _ range: NSRange?) -> AttributedString {
+        var a = AttributedString(text)
+        if let range, let r = Range(range, in: text), let lo = AttributedString.Index(r.lowerBound, within: a),
+           let hi = AttributedString.Index(r.upperBound, within: a) {
+            a[lo..<hi].foregroundColor = ob.accent
+        }
+        return a
     }
 
     @ViewBuilder private var separator: some View {

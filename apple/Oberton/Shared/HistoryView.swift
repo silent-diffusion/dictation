@@ -177,7 +177,8 @@ struct HistoryDetail: View {
                 Caption("No recording kept for this dictation.", size: 12.5).padding(.top, 10)
             }
             ThreeBoxes(transcription: entry.transcription, aiEdit: shownEdit ?? (safetyNet ? entry.transcription : nil), inserted: entry.inserted,
-                       safetyNet: safetyNet && shownEdit == nil)
+                       safetyNet: safetyNet && shownEdit == nil,
+                       transcriptionLit: player.lit.first ?? nil, insertedLit: player.lit.dropFirst().first ?? nil)
                 .padding(.top, 16)
             if let note = entry.warning ?? (safetyNet ? "The safety net kept some of your original words." : nil) {
                 Caption(note, size: 12.5).padding(.top, 6)
@@ -191,7 +192,12 @@ struct HistoryDetail: View {
             #endif
             if !info.isEmpty { Caption(info, size: 12.5).padding(.top, 8) }
         }
-        .onAppear { player.load(entry.hasAudio ? entry.audioURL : nil) }
+        .onAppear {
+            player.load(entry.hasAudio ? entry.audioURL : nil)
+            player.setWords(entry.spokenWords, texts: [entry.transcription, entry.inserted])
+        }
+        // Run again (or putting the earlier result back) changes the texts: the words are lined up with them again.
+        .onChange(of: entry.transcription + "\u{0}" + entry.inserted) { player.setWords(entry.spokenWords, texts: [entry.transcription, entry.inserted]) }
         .onDisappear { player.stop() }
     }
 
@@ -252,8 +258,24 @@ final class HistoryPlayer: ObservableObject {
     @Published private(set) var position: Double = 0
     @Published private(set) var duration: Double = 0
     @Published var double = false { didSet { player?.rate = double ? 2 : 1 } }
+    /// The word being said, in each text given to `setWords` (nil where none is); empty while not playing.
+    @Published private(set) var lit: [NSRange?] = []
     private var player: AVAudioPlayer?
     private var tick: AnyCancellable?
+    private var wordTick: AnyCancellable?
+    private var spans: [[TimedSpan]] = []
+
+    /// The recording's words and the texts to light them in (lined up once here: a dictation is short).
+    func setWords(_ words: [SpokenWord], texts: [String]) {
+        spans = words.isEmpty ? [] : texts.map { WordTimes.align($0, words) }
+        lit = []
+    }
+
+    private func updateLit() {
+        guard playing, let p = player, !spans.isEmpty else { if !lit.isEmpty { lit = [] }; return }
+        let now = spans.map { WordTimes.current($0, at: p.currentTime)?.range }
+        if now != lit { lit = now }
+    }
 
     var loaded: Bool { player != nil }
     var fraction: Double { duration > 0 ? min(1, max(0, position / duration)) : 0 }
@@ -275,6 +297,8 @@ final class HistoryPlayer: ObservableObject {
             p.pause()
             playing = false
             tick = nil
+            wordTick = nil
+            lit = []
             return
         }
         #if os(iOS)
@@ -287,6 +311,9 @@ final class HistoryPlayer: ObservableObject {
         p.play()
         playing = true
         tick = Timer.publish(every: 0.2, on: .main, in: .common).autoconnect().sink { [weak self] _ in self?.update() }
+        if !spans.isEmpty {
+            wordTick = Timer.publish(every: PlaybackFollow.tick, on: .main, in: .common).autoconnect().sink { [weak self] _ in self?.updateLit() }
+        }
     }
 
     func seek(to fraction: Double) {
@@ -300,6 +327,8 @@ final class HistoryPlayer: ObservableObject {
         player?.currentTime = 0
         playing = false
         tick = nil
+        wordTick = nil
+        lit = []
         position = 0
     }
 

@@ -30,6 +30,8 @@ struct MarkdownEditor {
     var onCaret: ((Int) -> Void)? = nil
     /// The Jump item for a place in the text, or nil for none.
     var jump: ((Int) -> MarkdownJump?)? = nil
+    /// While the recording plays: the word being said is lit in the accent (nil: nothing is lit).
+    var playback: PlaybackWords? = nil
 
     func makeCoordinator() -> MarkdownEditorController { MarkdownEditorController() }
 
@@ -39,6 +41,7 @@ struct MarkdownEditor {
         c.jump = jump
         c.setLook(MarkdownLook(size: size, palette: palette))
         c.setText(text)
+        c.setPlayback(playback)
     }
 }
 
@@ -70,6 +73,17 @@ final class MarkdownEditorController: NSObject {
     /// The rendering follows a change made elsewhere at most every 300 ms (MarkdownPresenter's render timer).
     private var renderSoon: DispatchWorkItem?
     private var followEnd = false
+
+    // The word being said while the recording plays.
+    private var playback: PlaybackWords?
+    private var playTick: Timer?
+    private let spans = SpokenSpans()
+    /// The range lit now (and, on iOS, the colour it had).
+    private var lit: NSRange?
+    #if os(iOS)
+    private var litColor: Any?
+    #endif
+    var userScrolledAt = Date.distantPast
 
     override init() {
         let look = MarkdownLook(size: 14, palette: Palette(dark: false, accentChoice: .cobalt))
@@ -143,6 +157,9 @@ final class MarkdownEditorController: NSObject {
     private func lineIndex(_ offset: Int) -> Int { MarkdownStyler.lineIndex(lines, offset) }
 
     private func restyle() {
+        #if os(iOS)
+        lit = nil // the styler sets every colour again
+        #endif
         styler.apply(storage, open: closed ? nil : open)
         if let o = open, !closed {
             let ls = lines
@@ -239,6 +256,68 @@ final class MarkdownEditorController: NSObject {
         #endif
     }
 
+    // MARK: The word being said
+
+    func setPlayback(_ p: PlaybackWords?) {
+        playback = p
+        if p == nil {
+            playTick?.invalidate(); playTick = nil
+            showLit(nil)
+        } else if playTick == nil {
+            playTick = Timer.scheduledTimer(withTimeInterval: PlaybackFollow.tick, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.onPlayTick() }
+            }
+        }
+    }
+
+    private func onPlayTick() {
+        guard let p = playback, let t = p.time() else { showLit(nil); return }
+        let span = spans.current(text: storage.string, playback: p, at: t)
+        showLit(span.map(\.range))
+        if let span, closed || open == nil, Date().timeIntervalSince(userScrolledAt) >= PlaybackFollow.pause { follow(span.range) }
+    }
+
+    /// Light `range` in the accent (only the colour: nothing moves), and put the last one back.
+    private func showLit(_ range: NSRange?) {
+        let range = range.flatMap { NSMaxRange($0) <= storage.length ? $0 : nil }
+        guard range != lit else { return }
+        #if os(macOS)
+        if let old = lit, NSMaxRange(old) <= storage.length { layout.removeTemporaryAttribute(.foregroundColor, forCharacterRange: old) }
+        if let range { layout.addTemporaryAttribute(.foregroundColor, value: styler.look.accent, forCharacterRange: range) }
+        #else
+        storage.beginEditing()
+        if let old = lit, NSMaxRange(old) <= storage.length {
+            if let c = litColor { storage.addAttribute(.foregroundColor, value: c, range: old) } else { storage.removeAttribute(.foregroundColor, range: old) }
+        }
+        if let range {
+            litColor = storage.attribute(.foregroundColor, at: range.location, effectiveRange: nil)
+            storage.addAttribute(.foregroundColor, value: styler.look.accent, range: range)
+        }
+        storage.endEditing()
+        #endif
+        lit = range
+    }
+
+    /// Keep the lit word in view (the reader's rule).
+    private func follow(_ range: NSRange) {
+        let glyphs = layout.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        var rect = layout.boundingRect(forGlyphRange: glyphs, in: container)
+        #if os(macOS)
+        guard let tv = textView, let scroll = tv.enclosingScrollView else { return }
+        rect.origin.y += tv.textContainerOrigin.y
+        let visible = scroll.contentView.bounds
+        guard let y = PlaybackFollow.offset(rect: rect, visible: visible, content: tv.frame.height) else { return }
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        #else
+        guard let tv = textView else { return }
+        rect.origin.y += tv.textContainerInset.top
+        let visible = CGRect(origin: tv.contentOffset, size: tv.bounds.size)
+        guard let y = PlaybackFollow.offset(rect: rect, visible: visible, content: tv.contentSize.height) else { return }
+        tv.setContentOffset(CGPoint(x: 0, y: y), animated: true)
+        #endif
+    }
+
     // MARK: The menu
 
     /// The right-click (long-press) menu's Jump item at `offset`; the cursor goes there unless that is inside the selection.
@@ -270,7 +349,8 @@ final class MarkdownEditorController: NSObject {
         container.widthTracksTextView = true
         tv.insertionPointColor = .clear
         textView = tv
-        let scroll = NSScrollView()
+        let scroll = MarkdownScrollView()
+        scroll.onUserScroll = { [weak self] in self?.userScrolledAt = Date() }
         scroll.drawsBackground = false
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
@@ -391,6 +471,21 @@ final class MarkdownEditorController: NSObject {
 }
 
 #if os(macOS)
+/// Reports the user's own scrolling (wheel, trackpad, scroll bar), not the playback's follow (ReaderFullText's).
+final class MarkdownScrollView: NSScrollView {
+    var onUserScroll: () -> Void = {}
+    override func scrollWheel(with event: NSEvent) {
+        onUserScroll()
+        super.scrollWheel(with: event)
+    }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        NotificationCenter.default.removeObserver(self)
+        NotificationCenter.default.addObserver(self, selector: #selector(liveScroll), name: NSScrollView.willStartLiveScrollNotification, object: self)
+    }
+    @objc private func liveScroll() { onUserScroll() }
+}
+
 /// A menu item that runs a closure.
 final class MenuAction: NSMenuItem {
     private let run: () -> Void
@@ -468,6 +563,8 @@ extension MarkdownEditor: NSViewRepresentable {
     }
 
     func updateNSView(_ scroll: NSScrollView, context: Context) { update(context.coordinator, palette: context.environment.ob) }
+
+    static func dismantleNSView(_ scroll: NSScrollView, coordinator: MarkdownEditorController) { coordinator.setPlayback(nil) }
 }
 #else
 final class MarkdownUITextView: UITextView {
@@ -484,6 +581,7 @@ final class MarkdownUITextView: UITextView {
 }
 
 extension MarkdownEditorController: UITextViewDelegate {
+    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) { userScrolledAt = Date() }
     func textViewDidBeginEditing(_ textView: UITextView) { didClick() }
     func textViewDidEndEditing(_ textView: UITextView) { lostFocus() }
     func textViewDidChange(_ textView: UITextView) { userEdited() }
@@ -512,6 +610,8 @@ extension MarkdownEditor: UIViewRepresentable {
     }
 
     func updateUIView(_ tv: MarkdownUITextView, context: Context) { update(context.coordinator, palette: context.environment.ob) }
+
+    static func dismantleUIView(_ tv: MarkdownUITextView, coordinator: MarkdownEditorController) { coordinator.setPlayback(nil) }
 }
 #endif
 

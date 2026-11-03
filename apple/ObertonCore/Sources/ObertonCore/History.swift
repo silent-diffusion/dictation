@@ -52,6 +52,14 @@ public struct HistoryEntry: Codable, Identifiable, Sendable, Hashable {
     /// The app's name, or "Unknown app".
     public var appLabel: String { appName.flatMap { $0.isEmpty ? nil : $0 } ?? "Unknown app" }
     public var audioURL: URL? { folder?.appending(path: "audio.wav") }
+    /// The words heard with when each was said, beside the recording (playback lights the word being said).
+    public var wordsURL: URL? { folder?.appending(path: "words.json") }
+
+    /// The recording's words; none for entries from before they were kept, or a file that can't be read.
+    public var spokenWords: [SpokenWord] {
+        guard let url = wordsURL, let data = try? Data(contentsOf: url) else { return [] }
+        return (try? JSONDecoder().decode([SpokenWord].self, from: data)) ?? []
+    }
     public var hasAudio: Bool { audioURL.map { FileManager.default.fileExists(atPath: $0.path(percentEncoded: false)) } ?? false }
 
     /// This entry's text as one version (for keeping it while a rerun's result is shown).
@@ -128,12 +136,13 @@ public final class HistoryStore {
         try? FileManager.default.moveItem(at: file, to: file.appendingPathExtension("moved"))
     }
 
-    /// Keep a finished dictation, with its recording (16 kHz mono 16-bit PCM) if recordings are kept.
-    public func add(_ entry: HistoryEntry, pcm: Data?) {
-        entries.insert(write(entry, pcm: pcm), at: 0)
+    /// Keep a finished dictation, with its recording (16 kHz mono 16-bit PCM) if recordings are kept, and the words
+    /// heard with their times (kept with the recording only).
+    public func add(_ entry: HistoryEntry, pcm: Data?, words: [SpokenWord] = []) {
+        entries.insert(write(entry, pcm: pcm, words: words), at: 0)
     }
 
-    @discardableResult private func write(_ entry: HistoryEntry, pcm: Data?) -> HistoryEntry {
+    @discardableResult private func write(_ entry: HistoryEntry, pcm: Data?, words: [SpokenWord] = []) -> HistoryEntry {
         var entry = entry
         guard let dir else { return entry }
         var folder = dir.appending(path: Self.folderName(entry.date), directoryHint: .isDirectory)
@@ -143,7 +152,10 @@ public final class HistoryStore {
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         entry.folder = folder
         saveJSON(entry)
-        if let pcm, !pcm.isEmpty, let url = entry.audioURL { try? WavFile.data(pcm: pcm).write(to: url, options: .atomic) }
+        if let pcm, !pcm.isEmpty, let url = entry.audioURL {
+            try? WavFile.data(pcm: pcm).write(to: url, options: .atomic)
+            if !words.isEmpty, let w = entry.wordsURL, let data = try? JSONEncoder().encode(words) { try? data.write(to: w, options: .atomic) }
+        }
         return entry
     }
 
@@ -180,7 +192,10 @@ public final class HistoryStore {
         let cutoff = now.addingTimeInterval(-Double(s.audioDays) * 86400)
         for (i, e) in entries.enumerated() {
             let drop = (s.audioLimit > 0 && i >= s.audioLimit) || (s.audioDays > 0 && e.date < cutoff)
-            if drop, e.hasAudio, let url = e.audioURL { try? FileManager.default.removeItem(at: url) }
+            if drop, e.hasAudio, let url = e.audioURL {
+                try? FileManager.default.removeItem(at: url)
+                if let w = e.wordsURL { try? FileManager.default.removeItem(at: w) } // its words go with it
+            }
         }
     }
 

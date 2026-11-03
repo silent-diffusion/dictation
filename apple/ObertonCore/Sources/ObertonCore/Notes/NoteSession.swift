@@ -105,6 +105,9 @@ public final class NoteSession: Codable, Identifiable, @unchecked Sendable {
     public var transcriptAnchors: [NoteAnchor] = []
     public var formattedAnchors: [NoteAnchor] = []
     public var markers: [NoteMarker] = []
+    /// The words heard with when each was said (seconds into the recording), for lighting the word being said in
+    /// playback; nil in sessions from before they were kept (those play unlit).
+    public var words: [SpokenWord]?
 
     /// The session's folder (session.json and audio.wav); not saved.
     public var folder: URL?
@@ -120,7 +123,13 @@ public final class NoteSession: Codable, Identifiable, @unchecked Sendable {
 
     enum CodingKeys: String, CodingKey {
         case title, started, seconds, source, finished, formatVersion, heard, transcript, formatted, summary, formattedThrough,
-             heardFormattedThrough, summarizedThrough, digests, summaryByAi, chunks, transcriptAnchors, formattedAnchors, markers
+             heardFormattedThrough, summarizedThrough, digests, summaryByAi, chunks, transcriptAnchors, formattedAnchors, markers, words
+    }
+
+    /// Words heard, timed in the recording.
+    public func appendWords(_ new: [SpokenWord]) {
+        guard !new.isEmpty else { return }
+        words = (words ?? []) + new
     }
 
     public init() {}

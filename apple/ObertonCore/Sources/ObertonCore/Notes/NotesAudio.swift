@@ -208,10 +208,14 @@ public enum NotesAudio {
         return prepared
     }
 
-    /// Delete prepared copies whose session no longer exists.
+    /// Delete prepared copies whose session no longer exists; not one made in the last 10 minutes (it may be being
+    /// prepared right now, for a session another store has).
     public static func sweep(keeping ids: Set<String>) {
-        guard let files = try? FileManager.default.contentsOfDirectory(at: cacheDir, includingPropertiesForKeys: nil) else { return }
-        for f in files where !ids.contains(String(f.lastPathComponent.prefix { $0 != "." })) { try? FileManager.default.removeItem(at: f) }
+        guard let files = try? FileManager.default.contentsOfDirectory(at: cacheDir, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
+        for f in files where !ids.contains(String(f.lastPathComponent.prefix { $0 != "." })) {
+            let modified = (try? f.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            if Date().timeIntervalSince(modified) > 600 { try? FileManager.default.removeItem(at: f) }
+        }
     }
 
     /// A session was deleted: its prepared copy goes too.

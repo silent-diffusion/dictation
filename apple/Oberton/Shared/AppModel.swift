@@ -879,7 +879,7 @@ final class AppModel: ObservableObject {
         }
         let pcm = historyAudio.finish()
         guard settings.keepHistory else { return }
-        historyStore.add(entry, pcm: settings.saveHistoryAudio ? pcm : nil)
+        historyStore.add(entry, pcm: settings.saveHistoryAudio ? pcm : nil, words: transcriber.lastWords) // words: playback highlighting
         pruneHistory()
     }
 

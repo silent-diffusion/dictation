@@ -445,10 +445,19 @@ struct NoteSessionView: View {
                 .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
         } else {
             // Read as Markdown; a click opens that line as plain text to edit (typing goes on at the end).
-            MarkdownEditor(text: text, size: 14.5, label: tab.rawValue, onEdit: edit, onCaret: { caretOffset = $0 }, jump: jumpItem)
+            MarkdownEditor(text: text, size: 14.5, label: tab.rawValue, onEdit: edit, onCaret: { caretOffset = $0 }, jump: jumpItem,
+                           playback: playback)
                 .id(tab)
                 .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
         }
+    }
+
+    /// While the recording plays, the word being said is lit: in the transcript and the formatted text, and in the
+    /// summary where a phrase of it was said. Sessions from before word times were kept play unlit.
+    private var playback: PlaybackWords? {
+        guard !live, let words = session.words, !words.isEmpty else { return nil }
+        let player = player
+        return PlaybackWords(words: words, minRun: tab == .summary ? 3 : 1, time: { player.currentTime })
     }
 
     /// The tab's text, as the session has it now.
@@ -1188,6 +1197,8 @@ final class NotesPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     private var autoPlay = false
 
     var duration: Double { player?.duration ?? prepared?.seconds ?? 0 }
+    /// Where the playback is, while it plays (nil when paused or stopped): the word being said is lit from it.
+    var currentTime: Double? { playing ? player?.currentTime : nil }
 
     func prepare(_ s: NoteSession) {
         guard prepared == nil, !preparing, !failed, let url = s.audioURL, FileManager.default.fileExists(atPath: url.path) else { return }

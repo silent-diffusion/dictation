@@ -136,6 +136,10 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, N
             WhisperCheck.run(model, id: id)
             return
         }
+        if let engine = ProcessInfo.processInfo.environment["OBERTON_WORDS_CHECK"] {
+            WordsCheck.run(model, engine: engine)
+            return
+        }
         #endif
         // The theme applies to every window, the title bars and menus included (ThemeManager).
         watches.append(model.$settings.map(\.theme).removeDuplicates().sink { theme in

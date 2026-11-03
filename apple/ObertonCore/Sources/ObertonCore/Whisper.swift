@@ -123,7 +123,9 @@ public struct WhisperPiece: Sendable, Equatable {
     public var text: String
     public var start: Double
     public var end: Double
-    public init(text: String, start: Double, end: Double) { self.text = text; self.start = start; self.end = end }
+    /// Its words, timed in the audio it was given (none for a made-up phrase).
+    public var words: [SpokenWord]
+    public init(text: String, start: Double, end: Double, words: [SpokenWord] = []) { self.text = text; self.start = start; self.end = end; self.words = words }
 }
 
 // WhisperKit isn't marked Sendable; Oberton only touches it inside `WhisperEngine`, one call at a time.
@@ -277,7 +279,12 @@ public actor WhisperEngine {
     /// rather than in WhisperKit (whose compression ratio counts token bytes, not text, and which has no no-speech
     /// probability), so the thresholds are faster-whisper's: text compression ratio 2.4, mean log probability −1, and
     /// no fallback for a window that is silence.
-    func decode(_ audio: [Float], model id: String, language: String?, prompt: String, step: Float,
+    ///
+    /// `words`: WhisperKit's word timestamps. Only without a prompt: WhisperKit 1.1.1 lines the words up with the
+    /// decoder's attention as if the prompt weren't there, which pulls every word early. They also move the segments'
+    /// own start and end to the words', so live mode, which commits by segment ends, never asks for them. Without them,
+    /// each segment's words are spread over its time (`WordTimes.spread`).
+    func decode(_ audio: [Float], model id: String, language: String?, prompt: String, step: Float, words: Bool = false,
                 onWindow: (@Sendable (Int) -> Void)? = nil) async throws -> [WhisperText.Segment] {
         let kit = try await kit(for: id)
         guard !audio.isEmpty else { return [] }
@@ -296,7 +303,8 @@ public actor WhisperEngine {
                             // Past one window, WhisperKit falls back window by window (on its own compression ratio).
                             temperatureFallbackCount: long ? 2 : 0,
                             usePrefillPrompt: true, detectLanguage: language == nil, skipSpecialTokens: true,
-                            withoutTimestamps: false, wordTimestamps: false, maxInitialTimestamp: 1.0,
+                            // Word times for highlighting the word being said in playback (WordTimes); the text is the same.
+                            withoutTimestamps: false, wordTimestamps: words, maxInitialTimestamp: 1.0,
                             promptTokens: promptTokens, suppressBlank: true, suppressTokens: nonSpeech,
                             compressionRatioThreshold: long ? 2.4 : nil, logProbThreshold: long ? -1.0 : nil,
                             firstTokenLogProbThreshold: nil, noSpeechThreshold: nil, chunkingStrategy: nil)
@@ -350,7 +358,14 @@ public actor WhisperEngine {
         return found.map { s in
             WhisperText.Segment(text: clean(s.text), start: Double(s.start), end: Double(s.end), noSpeechProb: noSpeech[s.id] ?? 0,
                                 avgLogprob: Double(s.avgLogprob),
-                                compressionRatio: WhisperText.compressionRatio(clean(windowText[s.seek] ?? s.text)))
+                                compressionRatio: WhisperText.compressionRatio(clean(windowText[s.seek] ?? s.text)),
+                                words: s.words.map { ws in
+                                    ws.compactMap { w in
+                                        // Markers and special tokens aren't words.
+                                        let t = clean(w.word)
+                                        return t.isEmpty ? nil : SpokenWord(text: t, start: Double(w.start), end: Double(w.end))
+                                    }
+                                } ?? WordTimes.spread(clean(s.text), start: Double(s.start), end: Double(s.end)))
         }
     }
 
@@ -360,21 +375,37 @@ public actor WhisperEngine {
     /// punctuation. The text is as Whisper wrote it, segments joined with spaces.
     public func transcribe(_ samples: [Float], model id: String, language: String?, prompt: String, final: Bool,
                            dropPhantoms: Bool = false, even: Bool, onWindow: (@Sendable (Int) -> Void)? = nil) async throws -> String {
+        try await transcribeTimed(samples, model: id, language: language, prompt: prompt, final: final, dropPhantoms: dropPhantoms,
+                                  even: even, exactWords: false, onWindow: onWindow).text
+    }
+
+    /// `transcribe`, with the words of the segments kept (left-out segments' words left out too), timed in `samples`.
+    /// `exactWords` (nil: whenever there is no prompt): WhisperKit's word timestamps rather than words spread over
+    /// each segment (see `decode`).
+    public func transcribeTimed(_ samples: [Float], model id: String, language: String?, prompt: String, final: Bool,
+                                dropPhantoms: Bool = false, even: Bool, exactWords: Bool? = nil,
+                                onWindow: (@Sendable (Int) -> Void)? = nil) async throws -> (text: String, words: [SpokenWord]) {
+        let exact = exactWords ?? prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         // No speech: decoding anyway is exactly how Whisper produces "Thank you." on silence.
-        guard let prepared = WhisperPrep.prepare(samples, even: even) else { return "" }
+        guard let prepared = WhisperPrep.prepare(samples, even: even) else { return ("", []) }
+        func kept(_ segments: [WhisperText.Segment]) -> [WhisperText.Segment] { segments.filter { !(dropPhantoms && WhisperText.isPhantom($0)) } }
         func text(_ segments: [WhisperText.Segment]) -> String {
-            OutputSanitizer.collapseDots(segments.filter { !(dropPhantoms && WhisperText.isPhantom($0)) }
-                .map { $0.text.trimmingCharacters(in: .whitespaces) }.joined(separator: " ").trimmingCharacters(in: .whitespaces))
+            OutputSanitizer.collapseDots(kept(segments).map { $0.text.trimmingCharacters(in: .whitespaces) }.joined(separator: " ").trimmingCharacters(in: .whitespaces))
         }
-        var result = text(try await decode(prepared.audio, model: id, language: language, prompt: prompt, step: 0.2, onWindow: onWindow))
+        var segments = try await decode(prepared.audio, model: id, language: language, prompt: prompt, step: 0.2, words: exact, onWindow: onWindow)
+        var result = text(segments)
+        var words = prepared.originalWords(kept(segments).flatMap(\.words))
         if final && !WhisperText.hasContent(result) {
             // Only "..." on long or odd audio: once more, more freely (and without the cut, when it was only the voice
             // detector's); as a last resort nothing rather than junk.
             let again = even ? prepared.audio : samples
-            result = text(try await decode(again, model: id, language: language, prompt: prompt, step: 0.3, onWindow: onWindow))
+            segments = try await decode(again, model: id, language: language, prompt: prompt, step: 0.3, words: exact, onWindow: onWindow)
+            result = text(segments)
+            words = kept(segments).flatMap(\.words)
+            if even { words = prepared.originalWords(words) }
             if !WhisperText.hasContent(result) { NSLog("Whisper: no usable text for %.1f s of audio", Double(samples.count) / 16_000) }
         }
-        return WhisperText.hasContent(result) ? result : ""
+        return WhisperText.hasContent(result) ? (result, words) : ("", [])
     }
 
     /// Live mode (asr_server.py `segments`): each phrase Whisper finds in `samples`, with where it starts and ends in
@@ -383,7 +414,9 @@ public actor WhisperEngine {
         guard let prepared = WhisperPrep.prepare(samples, even: even) else { return [] }
         return try await decode(prepared.audio, model: id, language: language, prompt: prompt, step: 0.2).map { s in
             let t = WhisperText.isPhantom(s) ? "" : OutputSanitizer.collapseDots(s.text.trimmingCharacters(in: .whitespaces))
-            return WhisperPiece(text: WhisperText.hasContent(t) ? t : "", start: prepared.originalTime(s.start), end: prepared.originalTime(s.end))
+            let heard = WhisperText.hasContent(t)
+            return WhisperPiece(text: heard ? t : "", start: prepared.originalTime(s.start), end: prepared.originalTime(s.end),
+                                words: heard ? prepared.originalWords(s.words) : [])
         }
     }
 
@@ -523,6 +556,8 @@ public final class WhisperLiveStream: @unchecked Sendable {
     private var pending: [Float] = []
     private var dropped = 0
     private var committedText = ""
+    /// The committed pieces' words, timed from the stream's start, until `takeWords`.
+    private var committedWords: [SpokenWord] = []
     private var loop: Task<Void, Never>?
     private static let rate = Double(WhisperKit.sampleRate)
 
@@ -556,10 +591,12 @@ public final class WhisperLiveStream: @unchecked Sendable {
         guard let pieces = try? await WhisperEngine.shared.segments(audio, model: model, language: language, prompt: prompt, even: even) else { return nil }
         let duration = Double(audio.count) / Self.rate
         var release = 0, text = "", at = 0.0
+        var words: [SpokenWord] = []
         if let pick = WhisperLive.chooseCommit(pieces, duration: duration) {
             text = lock.withLock { WhisperText.newText(pick.text, after: committedText) }
             at = pieces.first { !$0.text.isEmpty }?.start ?? 0
             release = min(audio.count, Int(pick.end * Self.rate))
+            words = pieces.filter { $0.end <= pick.end }.flatMap(\.words).map { $0.shifted(by: Double(start) / Self.rate) }
         } else if !pieces.contains(where: { !$0.text.isEmpty }), duration >= WhisperLive.forceSeconds {
             // Nothing heard for a while (silence, or only made-up phrases): let go of that audio too, keeping the last
             // moments in case speech is just starting.
@@ -569,10 +606,13 @@ public final class WhisperLiveStream: @unchecked Sendable {
         lock.withLock {
             pending.removeFirst(min(release, pending.count))
             dropped += release
-            if !text.isEmpty { committedText = (committedText + " " + text).trimmingCharacters(in: .whitespaces) }
+            if !text.isEmpty { committedText = (committedText + " " + text).trimmingCharacters(in: .whitespaces); committedWords += words }
         }
         return text.isEmpty ? nil : (text, Double(start) / Self.rate + at)
     }
+
+    /// The words of what was committed since the last call, timed from the stream's start (for playback highlighting).
+    public func takeWords() -> [SpokenWord] { lock.withLock { defer { committedWords = [] }; return committedWords } }
 
     /// Stop listening and transcribe what is left (the speech after the last piece, decoded once, Whisper's made-up
     /// phrases and loops left out): returned (not sent to `onPiece`), so the caller has it at once.
@@ -581,13 +621,16 @@ public final class WhisperLiveStream: @unchecked Sendable {
         await loop?.value
         let (rest, start, prompt) = lock.withLock { (pending, dropped, WhisperText.prompt(vocabulary: vocabulary, committed: committedText)) }
         guard rest.count >= Int(Self.rate * 0.3),
-              let heard = try? await WhisperEngine.shared.transcribe(rest, model: model, language: language, prompt: prompt, final: true,
-                                                                     dropPhantoms: true, even: even) else { return nil }
-        let text = lock.withLock { WhisperText.newText(heard, after: committedText) }
+              let heard = try? await WhisperEngine.shared.transcribeTimed(rest, model: model, language: language, prompt: prompt, final: true,
+                                                                          dropPhantoms: true, even: even) else { return nil }
+        let text = lock.withLock { WhisperText.newText(heard.text, after: committedText) }
         lock.withLock {
             pending = []
             dropped += rest.count
-            if !text.isEmpty { committedText = (committedText + " " + text).trimmingCharacters(in: .whitespaces) }
+            if !text.isEmpty {
+                committedText = (committedText + " " + text).trimmingCharacters(in: .whitespaces)
+                committedWords += heard.words.map { $0.shifted(by: Double(start) / Self.rate) }
+            }
         }
         return text.isEmpty ? nil : (text, Double(start) / Self.rate)
     }
@@ -640,27 +683,36 @@ public enum WhisperAudio {
     /// text with where it starts, and reports the fraction done after each part.
     public static func redo(_ url: URL, model: String, language: String?, vocabulary: String, even: Bool,
                             progress: @escaping @Sendable (Double) async -> Void = { _ in }) async throws -> [(seconds: Double, text: String)] {
+        try await redoTimed(url, model: model, language: language, vocabulary: vocabulary, even: even, progress: progress).pieces
+    }
+
+    /// `redo`, with the words heard, timed in the recording.
+    public static func redoTimed(_ url: URL, model: String, language: String?, vocabulary: String, even: Bool,
+                                 progress: @escaping @Sendable (Double) async -> Void = { _ in }) async throws
+        -> (pieces: [(seconds: Double, text: String)], words: [SpokenWord]) {
         let all = try samples(url)
         let rate = Double(WhisperKit.sampleRate)
         let pauses = (try? NotesAudio.pauses(url)) ?? []
         let parts = NotesRedo.planParts(seconds: Double(all.count) / rate, pauses: pauses)
         try await WhisperEngine.shared.load(model) // first, so the caller's "loading" shows until it is in
         var pieces: [(seconds: Double, text: String)] = []
+        var words: [SpokenWord] = []
         var previous = ""
         for (i, part) in parts.enumerated() {
             try Task.checkCancellation()
             let tail = WhisperText.tail(NotesFormat.collapseRepeats(previous), 200)
             let prompt = [vocabulary, tail].filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.joined(separator: " ")
             let from = min(all.count, Int(part.start * rate)), to = min(all.count, Int(part.end * rate))
-            let heard = try await WhisperEngine.shared.transcribe(Array(all[from..<to]), model: model, language: language, prompt: prompt,
-                                                                  final: true, dropPhantoms: true, even: even)
-            let text = WhisperText.collapseRepeats(heard).trimmingCharacters(in: .whitespaces)
+            let heard = try await WhisperEngine.shared.transcribeTimed(Array(all[from..<to]), model: model, language: language, prompt: prompt,
+                                                                       final: true, dropPhantoms: true, even: even)
+            let text = WhisperText.collapseRepeats(heard.text).trimmingCharacters(in: .whitespaces)
             if !text.isEmpty {
                 pieces.append((part.start, text))
+                words += heard.words.map { $0.shifted(by: Double(from) / rate) }
                 previous = text
             }
             await progress(Double(i + 1) / Double(max(1, parts.count)))
         }
-        return pieces
+        return (pieces, words)
     }
 }

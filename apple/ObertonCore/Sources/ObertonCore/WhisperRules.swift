@@ -56,9 +56,13 @@ public enum WhisperText {
         public var avgLogprob: Double
         /// `compressionRatio` of the window's whole text.
         public var compressionRatio: Double
-        public init(text: String, start: Double, end: Double, noSpeechProb: Double = 0, avgLogprob: Double = 0, compressionRatio: Double = 1) {
+        /// Its words with when each was said (seconds in the audio decoded), when the model can tell.
+        public var words: [SpokenWord]
+        public init(text: String, start: Double, end: Double, noSpeechProb: Double = 0, avgLogprob: Double = 0, compressionRatio: Double = 1,
+                    words: [SpokenWord] = []) {
             self.text = text; self.start = start; self.end = end
             self.noSpeechProb = noSpeechProb; self.avgLogprob = avgLogprob; self.compressionRatio = compressionRatio
+            self.words = words
         }
     }
 
@@ -149,6 +153,11 @@ public enum WhisperPrep {
                 done += Double(r.count)
             }
             return Double(lastRegion.upperBound) / Double(WhisperPrep.rate)
+        }
+
+        /// Words timed in `audio`, timed in the original.
+        public func originalWords(_ words: [SpokenWord]) -> [SpokenWord] {
+            words.map { SpokenWord(text: $0.text, start: originalTime($0.start), end: originalTime($0.end)) }
         }
     }
 

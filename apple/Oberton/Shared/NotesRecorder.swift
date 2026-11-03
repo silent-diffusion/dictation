@@ -212,10 +212,10 @@ final class NotesRecorder: ObservableObject {
             let locale = try await LiveTranscriber.prepare(locale: st.speechLocale)
             let transcriber = SpeechTranscriber(locale: locale, transcriptionOptions: [], reportingOptions: [], attributeOptions: [.audioTimeRange])
             let analyzer = SpeechAnalyzer(modules: [transcriber])
-            let words = st.vocabularyHint.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-            if !words.isEmpty {
+            let vocabulary = st.vocabularyHint.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            if !vocabulary.isEmpty {
                 let context = AnalysisContext()
-                context.contextualStrings[.general] = words
+                context.contextualStrings[.general] = vocabulary
                 try await analyzer.setContext(context)
             }
             guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
@@ -234,7 +234,8 @@ final class NotesRecorder: ObservableObject {
                     for try await result in transcriber.results where result.isFinal {
                         let text = String(result.text.characters)
                         let at = startSeconds + max(0, result.range.start.seconds.isFinite ? result.range.start.seconds : 0)
-                        await MainActor.run { self?.onPiece(text, at: at) }
+                        let words = WordTimes.words(result.text, offset: startSeconds)
+                        await MainActor.run { self?.onPiece(text, at: at, words: words) }
                     }
                 } catch {}
                 await MainActor.run { self?.onSpeechEnded() }
@@ -254,9 +255,15 @@ final class NotesRecorder: ObservableObject {
     private func connectWhisper(_ id: String, _ st: AppSettings) async throws {
         try await WhisperEngine.shared.load(id)
         guard current != nil else { return }
+        var made: WhisperLiveStream?
         let stream = WhisperLiveStream(model: id, language: st.whisperLanguage, vocabulary: st.vocabularyHint, even: st.evenOutVolume) { [weak self] text, at in
-            Task { @MainActor in self?.onPiece(text, at: (self?.whisperStart ?? 0) + at) }
+            let words = made?.takeWords() ?? []
+            Task { @MainActor in
+                let start = self?.whisperStart ?? 0
+                self?.onPiece(text, at: start + at, words: words.map { $0.shifted(by: start) })
+            }
         }
+        made = stream
         let waiting = feed.backlogSeconds
         whisperStart = feed.connect(whisper: stream)
         stream.start()
@@ -275,10 +282,11 @@ final class NotesRecorder: ObservableObject {
         if current != nil && !isFinishing { feed.disconnect() } // audio waits in the backlog until it starts again
     }
 
-    /// A finished piece of speech.
-    private func onPiece(_ text: String, at seconds: Double) {
+    /// A finished piece of speech, with its words timed in the recording.
+    private func onPiece(_ text: String, at seconds: Double, words: [SpokenWord] = []) {
         guard let s = current else { return }
         s.appendHeard(text, seconds: seconds, source: self)
+        s.appendWords(words)
         dirty = true
         revision += 1
     }
@@ -489,7 +497,7 @@ final class NotesRecorder: ObservableObject {
         } else if let stream = feed.whisper {
             feed.finishInput()
             switch await Self.within(Self.lastPieceWait, { await stream.finish() }) {
-            case .some(.some(let last)): onPiece(last.text, at: whisperStart + last.at)
+            case .some(.some(let last)): onPiece(last.text, at: whisperStart + last.at, words: stream.takeWords().map { $0.shifted(by: whisperStart) })
             case .some(.none): break
             case .none:
                 Log.warn("Extended notes: Whisper didn't finish the last piece within a minute; stopping without it")
@@ -629,12 +637,13 @@ final class NotesRecorder: ObservableObject {
         let st = settings()
         if let whisper = Self.whisperModel(st) {
             redoProgress = WhisperEngine.loadedModel == whisper ? "0%" : "loading \(WhisperModels.name(of: whisper))"
-            let pieces = try await WhisperAudio.redo(url, model: whisper, language: st.whisperLanguage, vocabulary: st.vocabularyHint,
-                                                     even: st.evenOutVolume) { fraction in
+            let heard = try await WhisperAudio.redoTimed(url, model: whisper, language: st.whisperLanguage, vocabulary: st.vocabularyHint,
+                                                         even: st.evenOutVolume) { fraction in
                 await MainActor.run { self.redoProgress = "\(Int(min(99, fraction * 100)))%" }
             }
             try Task.checkCancellation()
-            s.replaceTranscript(pieces, source: self)
+            s.replaceTranscript(heard.pieces, source: self)
+            s.words = heard.words
             store.save(s)
             Log.info("Extended notes: transcribed \(s.id) again")
             return
@@ -645,26 +654,29 @@ final class NotesRecorder: ObservableObject {
         let total = max(1, Double(file.length) / file.processingFormat.sampleRate)
         let analyzer = SpeechAnalyzer(modules: [transcriber])
         LiveTranscriber.markInUse()
-        let collect = Task { () -> [(seconds: Double, text: String)] in
+        let collect = Task { () -> (pieces: [(seconds: Double, text: String)], words: [SpokenWord]) in
             var pieces: [(seconds: Double, text: String)] = []
+            var words: [SpokenWord] = []
             for try await r in transcriber.results where r.isFinal {
                 let at = r.range.start.seconds.isFinite ? r.range.start.seconds : 0
                 pieces.append((at, String(r.text.characters)))
+                words += WordTimes.words(r.text)
                 let progress = "\(Int(min(99, at / total * 100)))%"
                 await MainActor.run { self.redoProgress = progress }
             }
-            return pieces
+            return (pieces, words)
         }
         do {
             try await analyzer.start(inputAudioFile: file, finishAfterFile: true)
-            let pieces = try await withTaskCancellationHandler {
+            let heard = try await withTaskCancellationHandler {
                 try await collect.value
             } onCancel: {
                 collect.cancel()
                 Task { await analyzer.cancelAndFinishNow() }
             }
             try Task.checkCancellation()
-            s.replaceTranscript(pieces.filter { !$0.text.trimmed.isEmpty }, source: self)
+            s.replaceTranscript(heard.pieces.filter { !$0.text.trimmed.isEmpty }, source: self)
+            s.words = heard.words
             store.save(s)
             Log.info("Extended notes: transcribed \(s.id) again")
         } catch {

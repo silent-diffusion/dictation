@@ -36,6 +36,11 @@ public final class LiveTranscriber: @unchecked Sendable {
     /// The pieces the recognizer settled, in order, and its running guess at the rest.
     private var pieces: [String] = []
     private var volatile = ""
+    /// The finished pieces' words, timed from the recording's start.
+    private var heardWords: [SpokenWord] = []
+    /// The words of the transcript the last `stop()` returned, timed from its recording's start (History keeps them, so
+    /// playback can light the word being said). Empty when the engine gave none.
+    @MainActor public private(set) var lastWords: [SpokenWord] = []
     /// Audio recorded before the recognizer was ready, fed to it once it is.
     private var waiting: [AVAudioPCMBuffer] = []
     private var streaming = false
@@ -127,7 +132,7 @@ public final class LiveTranscriber: @unchecked Sendable {
         Microphones.use(microphone, on: engine)
         lock.withLock {
             generation += 1
-            pieces = []; volatile = ""; waiting = []; streaming = false
+            pieces = []; volatile = ""; heardWords = []; waiting = []; streaming = false
             peakLevel = 0; silentFrames = 0; sawSignal = false
             self.evenOut = evenOut
         }
@@ -156,8 +161,9 @@ public final class LiveTranscriber: @unchecked Sendable {
         let mine = lock.withLock { generation }
         let locale = try await Self.prepare(locale: locale)
         Self.markInUse()
+        // Audio time ranges: when each word was said, for History's playback.
         let transcriber = SpeechTranscriber(locale: locale, transcriptionOptions: [],
-                                            reportingOptions: [.volatileResults, .fastResults], attributeOptions: [])
+                                            reportingOptions: [.volatileResults, .fastResults], attributeOptions: [.audioTimeRange])
         let analyzer = SpeechAnalyzer(modules: [transcriber])
         if !vocabulary.isEmpty {
             let context = AnalysisContext()
@@ -174,7 +180,8 @@ public final class LiveTranscriber: @unchecked Sendable {
                 guard let self else { return }
                 let text = String(result.text.characters)
                 let full: String = self.lock.withLock {
-                    if result.isFinal { self.pieces.append(text); self.volatile = "" } else { self.volatile = text }
+                    if result.isFinal { self.pieces.append(text); self.volatile = ""; self.heardWords += WordTimes.words(result.text) }
+                    else { self.volatile = text }
                     return FragmentStitcher.join(self.pieces + [self.volatile])
                 }
                 let cb = self.onText
@@ -332,15 +339,17 @@ public final class LiveTranscriber: @unchecked Sendable {
         }
         if let whisper {
             let text = await whisper.finish()
+            lastWords = whisper.words
             lock.withLock { if generation == mine { clear() } }
             return text
         }
         try? await analyzer?.finalizeAndFinishThroughEndOfInput()
         _ = try? await results?.value
-        let parts = lock.withLock {
+        let (parts, words) = lock.withLock {
             defer { if generation == mine { clear() } }
-            return pieces + [volatile]
+            return (pieces + [volatile], heardWords)
         }
+        lastWords = words
         return FragmentStitcher.join(parts)
     }
 
@@ -418,6 +427,9 @@ final class WhisperDictation: @unchecked Sendable {
     private let lock = NSLock()
     private var samples: [Float] = []
     private var latest = ""
+    private var finalWords: [SpokenWord] = []
+    /// The final pass's words, timed from the recording's start (none when it failed).
+    var words: [SpokenWord] { lock.withLock { finalWords } }
     private var partials: Task<Void, Never>?
 
     init(model: String, language: String?, prompt: String, even: Bool, onText: @escaping (String) -> Void) {
@@ -470,8 +482,9 @@ final class WhisperDictation: @unchecked Sendable {
         await partials?.value
         let (all, latest) = lock.withLock { (samples, self.latest) }
         do {
-            let text = FragmentStitcher.join([try await WhisperEngine.shared.transcribe(all, model: model, language: language, prompt: prompt,
-                                                                                         final: true, even: even)])
+            let heard = try await WhisperEngine.shared.transcribeTimed(all, model: model, language: language, prompt: prompt, final: true, even: even)
+            let text = FragmentStitcher.join([heard.text])
+            lock.withLock { finalWords = heard.words }
             onText(text)
             return text
         } catch {
