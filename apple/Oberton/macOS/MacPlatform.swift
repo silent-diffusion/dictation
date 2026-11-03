@@ -196,24 +196,11 @@ final class MacPlatform: PlatformServices {
         pb.setString("", forType: NSPasteboard.PasteboardType("org.nspasteboard.TransientType"))
     }
 
-    /// The selected text, as the Windows `SelectionReader`: asked through Accessibility first (no side effects; only
-    /// outside the sandbox), else copied with Cmd+C and the user's clipboard put back. nil when nothing is selected.
+    /// The selected text, as the Windows `SelectionReader`: asked through Accessibility first (the direct build only; no
+    /// side effects), else copied with Cmd+C and the user's clipboard put back. nil when nothing is selected.
     func selectedText() async -> String? {
-        if let text = accessibilitySelection() { return text.isEmpty ? nil : text }
+        if let text = await SelectionReader.accessibility() { return text.isEmpty ? nil : text }
         return await copySelection()
-    }
-
-    /// nil when the focused control can't be asked (always, in the sandbox); "" when it says nothing is selected.
-    private func accessibilitySelection() -> String? {
-        guard AXIsProcessTrusted() else { return nil }
-        let system = AXUIElementCreateSystemWide()
-        var focused: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &focused) == .success,
-              let element = focused else { return nil }
-        var selected: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element as! AXUIElement, kAXSelectedTextAttribute as CFString, &selected) == .success,
-              let text = selected as? String else { return nil }
-        return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Cmd+C, then the clipboard back. nil if the app copied nothing (nothing selected).

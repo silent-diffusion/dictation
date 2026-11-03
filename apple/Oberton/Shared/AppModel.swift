@@ -1112,10 +1112,11 @@ final class AppModel: ObservableObject {
         if reader.isShowing { reader.stop(); return }
         Task {
             let voice = activeProfile.voice ?? settings.ttsVoice
-            if let text = await platform?.selectedText(), OutputSanitizer.hasContent(text) {
+            // Any selection is read, any clipboard text offered (a punctuation-only one then says there's nothing to read).
+            if let text = await platform?.selectedText(), !text.isEmpty {
                 reader.read(text, voice: voice, speed: settings.ttsBaseSpeed)
             } else if let clipboard = platform?.clipboardText()?.trimmingCharacters(in: .whitespacesAndNewlines),
-                      OutputSanitizer.hasContent(clipboard) {
+                      !clipboard.isEmpty {
                 reader.askToReadClipboard(clipboard, voice: voice, speed: settings.ttsBaseSpeed)
             } else {
                 readerNotice("Select some text, then press \(settings.speakHotkey) to hear it read aloud.")
