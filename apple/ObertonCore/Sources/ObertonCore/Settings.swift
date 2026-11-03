@@ -116,6 +116,18 @@ public struct AppSettings: Codable, Sendable, Equatable {
     /// soon as each dictation or reading is done. It loads again by itself the next time it is needed.
     public var unloadAfterMinutes = 30
     public static let unloadImmediately = -1
+    /// The model unloading setting as an Ollama keep_alive value: "Immediately" keeps it a minute (the app unloads it
+    /// a few seconds after use), "Never" keeps it loaded (a negative duration; Ollama needs a unit).
+    public var ollamaKeepAlive: String {
+        unloadAfterMinutes < 0 ? "1m" : unloadAfterMinutes == 0 ? "-1m" : "\(unloadAfterMinutes)m"
+    }
+    /// A model held in memory beyond what the GPU can work on (`ModelSize.large`) is kept at most this many minutes.
+    public static let fromMemoryKeepMinutes = 5
+    /// How long Ollama keeps a model loaded after a request, never more than `fromMemoryKeepMinutes` for a large one.
+    public func ollamaKeepAlive(large: Bool) -> String {
+        let m = unloadAfterMinutes
+        return large && (m == 0 || m > Self.fromMemoryKeepMinutes) ? "\(Self.fromMemoryKeepMinutes)m" : ollamaKeepAlive
+    }
     public var showOverlay = true
     /// Bottom left at 90% (the Windows defaults since 5.18).
     public var overlayPosition = OverlayPosition.bottomLeft

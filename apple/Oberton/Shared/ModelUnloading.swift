@@ -1,0 +1,83 @@
+import Combine
+import Foundation
+import ObertonCore
+
+/// Settings › Model unloading (App.xaml.cs UnloadIdleModelsAsync / UnloadSoonIfImmediate): every 15 s, let the speech
+/// model and the Read aloud voice go once they have been unused for `unloadAfterMinutes`. Ollama lets the AI model go
+/// by itself, through the keep_alive sent with every request (`AppSettings.ollamaKeepAlive`). "Immediately after use"
+/// frees everything 3 s after a dictation or a reading ends. Never while Extended Notes needs the models
+/// (`AppModel.unloadNow` checks that too). Each model loads again by itself the next time it's needed.
+@MainActor
+final class ModelUnloader {
+    private weak var model: AppModel?
+    private var timer: Timer?
+    private var soon: Task<Void, Never>?
+    private var watches: Set<AnyCancellable> = []
+    /// When the Read aloud voice last stopped reading (Windows' `Tts.LastUsed`).
+    private(set) var voiceLastUsed = Date()
+
+    func start(_ model: AppModel) {
+        self.model = model
+        timer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+            Task { @MainActor in await self?.unloadIdleModels() }
+        }
+        model.$phase.map(\.isBusy).removeDuplicates().dropFirst()
+            .sink { [weak self] busy in if !busy { self?.unloadSoonIfImmediate() } }
+            .store(in: &watches)
+        model.reader.$status.map { $0 == .ended }.removeDuplicates().dropFirst()
+            .sink { [weak self] ended in
+                self?.voiceLastUsed = .now
+                if ended { self?.unloadSoonIfImmediate() }
+            }
+            .store(in: &watches)
+    }
+
+    private func unloadIdleModels() async {
+        guard let model else { return }
+        let minutes = model.settings.unloadAfterMinutes
+        guard minutes > 0, !model.notes.needsModels else { return }
+        let idle = TimeInterval(minutes * 60)
+        if !model.phase.isBusy, model.speechLoaded, Date.now.timeIntervalSince(model.lastActivity) > idle {
+            Log.info("Unloading the idle speech model: " + (await model.unloadNow(speech: true, ai: false, voice: false)))
+        }
+        if !model.reader.isSpeaking, model.reader.isLoaded, Date.now.timeIntervalSince(voiceLastUsed) > idle {
+            Log.info("Unloading the idle Read aloud voice: " + (await model.unloadNow(speech: false, ai: false, voice: true)))
+        }
+    }
+
+    /// "Immediately after use": a few seconds after a dictation or a reading ends, free every model that isn't in use.
+    /// The short wait lets a reading that follows a dictation start first, and keeps a quick second dictation from
+    /// reloading everything.
+    private func unloadSoonIfImmediate() {
+        guard let model, model.settings.unloadAfterMinutes == AppSettings.unloadImmediately, !model.notes.needsModels else { return }
+        soon?.cancel()
+        soon = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled, let model = self?.model, !model.phase.isBusy, !model.reader.isSpeaking else { return }
+            Log.info("Unload immediately: " + (await model.unloadNow(speech: true, ai: true, voice: true)))
+        }
+    }
+}
+
+extension AppModel {
+    /// When the speech model unloads by itself, or nil: unloading right after use, never unloading, or nothing loaded. For the dashboard's unload note and speech dial (counted from the last dictation, as on Windows).
+    var unloadAt: Date? {
+        let minutes = settings.unloadAfterMinutes
+        guard minutes > 0, speechLoaded else { return nil }
+        return lastActivity.addingTimeInterval(TimeInterval(minutes * 60))
+    }
+
+    /// The time left until `unloadAt`, from now (0 once it is due).
+    var unloadCountdown: TimeInterval? { unloadAt.map { max(0, $0.timeIntervalSinceNow) } }
+
+    /// The dashboard's unload line (DashboardPage.xaml.cs): "Models unload right after use", "Models stay loaded",
+    /// "Nothing loaded" or "Unload in 12:34". Read it inside a 1 s TimelineView for a running clock.
+    var unloadNote: String {
+        let minutes = settings.unloadAfterMinutes
+        if minutes < 0 { return "Models unload right after use" }
+        if minutes == 0 { return "Models stay loaded" }
+        guard let left = unloadCountdown else { return "Nothing loaded" }
+        let s = Int(left)
+        return String(format: "Unload in %02d:%02d", s / 60, s % 60)
+    }
+}

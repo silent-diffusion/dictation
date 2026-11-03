@@ -2,16 +2,30 @@ import ObertonCore
 import SwiftUI
 
 /// SETTINGS 設定: a menu of its own at the left, in four foldable groups, and the chosen section at the right
-/// (SettingsPage.xaml). On iPhone the menu is a page and a section opens over it.
+/// (SettingsPage.xaml). Folded groups are remembered (`collapsedSettingsGroups`), and opening a section unfolds its
+/// group. On iPhone the menu is a page and a section opens over it.
 struct SettingsView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var nav: Navigator
     @Environment(\.ob) private var ob
     @Environment(\.horizontalSizeClass) private var sizeClass
-    @State private var folded: Set<String> = []
     @State private var phoneShowsSection = false
 
+    private var folded: Set<String> { Set(model.settings.collapsedSettingsGroups) }
+
+    private func setFolded(_ group: String, _ fold: Bool) {
+        var groups = model.settings.collapsedSettingsGroups.filter { $0 != group }
+        if fold { groups.append(group) }
+        if groups != model.settings.collapsedSettingsGroups { model.settings.collapsedSettingsGroups = groups }
+    }
+
     var body: some View {
+        content
+            .onAppear { setFolded(nav.place.settings.group, false) }
+            .onChange(of: nav.place.settings) { _, s in setFolded(s.group, false) }
+    }
+
+    @ViewBuilder private var content: some View {
         if sizeClass == .compact {
             if phoneShowsSection {
                 PageScroll { section.padding(16) }
@@ -44,7 +58,7 @@ struct SettingsView: View {
             ForEach(SettingsSection.groups, id: \.0) { group, sections in
                 VStack(alignment: .leading, spacing: 2) {
                     Button {
-                        if folded.contains(group) { folded.remove(group) } else { folded.insert(group) }
+                        setFolded(group, !folded.contains(group))
                     } label: {
                         HStack {
                             Text(group.uppercased()).font(Ob.mono(15, .bold))
@@ -86,10 +100,12 @@ struct SettingsView: View {
             case .models: ModelsSection()
             case .speech: SpeechSection()
             case .cloud: CloudSection()
+            case .unloading: UnloadingSection()
             case .appearance: AppearanceSection()
             case .layout: LayoutSection()
             case .advanced: AdvancedSection()
             case .about: AboutSection()
+            case .updates: UpdatesSection()
             }
         }
     }

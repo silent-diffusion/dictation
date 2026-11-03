@@ -19,7 +19,8 @@ public struct TextProcessor: Sendable {
         try checkOffline(id)
         let size = await OllamaBackend.size(endpoint: endpoint, model: id.name)
         return OllamaBackend(endpoint: endpoint, model: id.name,
-                             timeout: ask ? size.askTimeout(setting: settings.aiTimeoutSeconds) : size.dictationTimeout(setting: settings.aiTimeoutSeconds))
+                             timeout: ask ? size.askTimeout(setting: settings.aiTimeoutSeconds) : size.dictationTimeout(setting: settings.aiTimeoutSeconds),
+                             keepAlive: settings.ollamaKeepAlive(large: size.large))
     }
 
     /// "Keep everything offline" also blocks the Ollama models that run on ollama.com.
@@ -40,7 +41,7 @@ public struct TextProcessor: Sendable {
         case .ollama:
             try checkOffline(id)
             return OllamaBackend(endpoint: try OllamaBackend.validated(settings.ollamaEndpoint), model: id.name,
-                                 timeout: max(10, settings.aiTimeoutSeconds))
+                                 timeout: max(10, settings.aiTimeoutSeconds), keepAlive: settings.ollamaKeepAlive)
         case .anthropic, .openai:
             if settings.cloud.keepOffline {
                 throw UserFacingError("\(id.displayName) is a cloud model, but \"Keep everything offline\" is on. " +

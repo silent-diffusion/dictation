@@ -148,11 +148,14 @@ public struct OllamaBackend: LanguageModelBackend {
     public var endpoint: URL
     public var model: String
     public var timeout: TimeInterval
+    /// How long Ollama keeps the model loaded after this request (Settings › Model unloading); nil = Ollama's default.
+    public var keepAlive: String?
 
-    public init(endpoint: URL, model: String, timeout: TimeInterval = 60) {
+    public init(endpoint: URL, model: String, timeout: TimeInterval = 60, keepAlive: String? = nil) {
         self.endpoint = endpoint
         self.model = model
         self.timeout = timeout
+        self.keepAlive = keepAlive
     }
 
     public static func validated(_ s: String) throws -> URL {
@@ -169,10 +172,11 @@ public struct OllamaBackend: LanguageModelBackend {
             messages.append(["role": "assistant", "content": e.output])
         }
         messages.append(["role": "user", "content": user])
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "model": model, "stream": false, "think": false, "messages": messages,
             "options": ["temperature": 0, "num_predict": maxTokens, "num_ctx": 4096],
         ]
+        if let keepAlive { body["keep_alive"] = keepAlive }
         var req = URLRequest(url: endpoint.appending(path: "api/chat"), timeoutInterval: timeout)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -192,13 +196,13 @@ public struct OllamaBackend: LanguageModelBackend {
     /// Load the model into memory without generating anything (an empty chat request), so the first dictation doesn't
     /// wait for it. Returns whether Ollama answered.
     @discardableResult
-    public static func warmUp(endpoint: URL, model: String) async -> Bool {
+    public static func warmUp(endpoint: URL, model: String, keepAlive: String? = nil) async -> Bool {
         var req = URLRequest(url: endpoint.appending(path: "api/chat"), timeoutInterval: 300)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try? JSONSerialization.data(withJSONObject: [
-            "model": model, "messages": [] as [Any], "options": ["num_ctx": 4096],
-        ] as [String: Any])
+        var body: [String: Any] = ["model": model, "messages": [] as [Any], "options": ["num_ctx": 4096]]
+        if let keepAlive { body["keep_alive"] = keepAlive }
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
         guard let (_, resp) = try? await URLSession.shared.data(for: req) else { return false }
         return ((resp as? HTTPURLResponse)?.statusCode ?? 0) / 100 == 2
     }

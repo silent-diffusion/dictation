@@ -57,6 +57,11 @@ public final class LiveTranscriber: @unchecked Sendable {
         retainedLock.withLock { retained = false }
     }
 
+    /// The languages whose speech model is on the device (Settings › Advanced › LOCAL MODELS), as identifiers.
+    public static func installedLanguages() async -> [String] {
+        await SpeechTranscriber.installedLocales.map(\.identifier).sorted()
+    }
+
     /// Make sure the speech model for this language is on the device (downloads it once, through the system).
     public static func prepare(locale: Locale) async throws -> Locale {
         guard SpeechTranscriber.isAvailable else { throw UserFacingError("On-device speech recognition isn't available on this device.") }
@@ -68,6 +73,28 @@ public final class LiveTranscriber: @unchecked Sendable {
             try await request.downloadAndInstall()
         }
         return supported
+    }
+
+    /// The first-run setup: download the speech model for this language if it isn't on the device yet, reporting the
+    /// fraction done (nil while unknown). Returns false when it was already there.
+    public static func download(locale: Locale, progress: @escaping @MainActor (Double?) -> Void) async throws -> Bool {
+        guard SpeechTranscriber.isAvailable else { throw UserFacingError("On-device speech recognition isn't available on this device.") }
+        guard let supported = await SpeechTranscriber.supportedLocale(equivalentTo: locale) else {
+            throw UserFacingError("Speech recognition doesn't support \(locale.identifier) yet.")
+        }
+        let module = SpeechTranscriber(locale: supported, preset: .progressiveTranscription)
+        guard let request = try await AssetInventory.assetInstallationRequest(supporting: [module]) else { return false }
+        let watch = Task { @MainActor in
+            while !Task.isCancelled {
+                let p = request.progress
+                progress(p.totalUnitCount > 0 ? p.fractionCompleted : nil)
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+        }
+        defer { watch.cancel() }
+        try await request.downloadAndInstall()
+        await progress(1)
+        return true
     }
 
     /// Load the speech model ahead of the first dictation (at launch, and when the profile or language changes), so the

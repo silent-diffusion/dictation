@@ -32,14 +32,14 @@ enum Section: String, CaseIterable, Hashable {
 
 /// Settings' own sections, grouped and addressed as on Windows ("A // DICTATION", "SECTION A.1").
 enum SettingsSection: String, CaseIterable, Hashable {
-    case general, hotkeys, microphone, history, models, speech, cloud, appearance, layout, advanced, about
+    case general, hotkeys, microphone, history, models, speech, cloud, unloading, appearance, layout, advanced, about, updates
 
     var group: String {
         switch self {
         case .general, .hotkeys, .microphone, .history: "A // Dictation"
-        case .models, .speech, .cloud: "B // Models & AI"
+        case .models, .speech, .cloud, .unloading: "B // Models & AI"
         case .appearance, .layout: "C // Look & feel"
-        case .advanced, .about: "D // App"
+        case .advanced, .about, .updates: "D // App"
         }
     }
 
@@ -52,10 +52,12 @@ enum SettingsSection: String, CaseIterable, Hashable {
         case .models: "B.1"
         case .speech: "B.2"
         case .cloud: "B.3"
+        case .unloading: "B.4"
         case .appearance: "C.1"
         case .layout: "C.2"
         case .advanced: "D.1"
         case .about: "D.2"
+        case .updates: "D.3"
         }
     }
 
@@ -68,10 +70,12 @@ enum SettingsSection: String, CaseIterable, Hashable {
         case .models: "Models"
         case .speech: "Speech recognition"
         case .cloud: "Cloud AI"
+        case .unloading: "Model unloading"
         case .appearance: "Appearance"
         case .layout: "Layout"
         case .advanced: "Advanced"
         case .about: "About"
+        case .updates: "Updates"
         }
     }
 
@@ -167,6 +171,10 @@ struct RootView: View {
         .background(ob.paper.ignoresSafeArea())
         .environmentObject(nav)
         .animation(.easeOut(duration: 0.22), value: sidebarOpen)
+        // ⌘, and the menu bar's "Check for updates…" open a Settings section (also when they opened this window).
+        .onChange(of: model.requestedSettings, initial: true) { _, s in
+            if let s { nav.goSettings(s); model.requestedSettings = nil }
+        }
         #if os(macOS)
         .background {
             // Back: Cmd+[ (and the mouse's back button through the menu command); the sidebar: Cmd+B.

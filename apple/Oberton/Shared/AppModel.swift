@@ -69,8 +69,13 @@ final class AppModel: ObservableObject {
             notes.setDictating(phase.isBusy)
             // A new dictation state takes the pill from a notice, as on Windows.
             if phase != oldValue, phase.isBusy { overlayNotice = nil }
+            if phase != oldValue { lastActivity = .now }
         }
     }
+    /// When a dictation last changed state (Windows' `LastActivity`): the model unloading timer counts from here.
+    @Published private(set) var lastActivity = Date()
+    /// Settings › Model unloading: unloads idle models (`ModelUnloading.swift`).
+    let unloader = ModelUnloader()
     @Published private(set) var liveText = ""
     @Published private(set) var level: Float = 0
     @Published private(set) var startedAt: Date?
@@ -96,6 +101,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var speechOK = false
     /// The speech engine couldn't start at launch: shown once in the main window, as Windows' message box.
     @Published var startupProblem: String?
+    /// A Settings section to open in the main window (⌘,, the menu bar's "Check for updates…"); the window clears it.
+    @Published var requestedSettings: SettingsSection?
 
     let reader = ReadAloudPlayer()
     /// Extended Notes: the sessions on disk (notes/), and the one recording now.
@@ -197,6 +204,7 @@ final class AppModel: ObservableObject {
             self.usage.recordReading(words: words, seconds: seconds)
             self.usageFile.save(self.usage)
         }
+        if !Self.snapshotMode { unloader.start(self) }
         // Warm both models in the background so the first hotkey press is quick.
         if !Self.snapshotMode { Task { @MainActor [weak self] in self?.warmUp(atLaunch: true) } }
     }
@@ -554,7 +562,9 @@ final class AppModel: ObservableObject {
         case .ollama:
             guard !id.isOllamaCloud, // runs on ollama.com: nothing to load here
                   let url = try? OllamaBackend.validated(settings.ollamaEndpoint) else { return }
-            Task { await OllamaBackend.warmUp(endpoint: url, model: id.name) }
+            let settings = settings
+            Task { await OllamaBackend.warmUp(endpoint: url, model: id.name,
+                                              keepAlive: settings.ollamaKeepAlive(large: await OllamaBackend.size(endpoint: url, model: id.name).large)) }
         case .anthropic, .openai:
             break
         }

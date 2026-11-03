@@ -13,25 +13,52 @@ struct ObertonApp: App {
 
     #if os(macOS)
     var body: some Scene {
-        WindowGroup("Oberton", id: "main") {
+        // One main window, as on Windows: opening it again brings it forward. It opens from the delegate at launch
+        // (not when Oberton started hidden at login, or the first-run setup shows instead).
+        Window("Oberton", id: "main") {
             MainWindowContent().environmentObject(model)
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1200, height: 780)
         .windowResizability(.contentMinSize)
+        .defaultLaunchBehavior(.suppressed)
+        .restorationBehavior(.disabled)
+        .commands {
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings…") { delegate.showMain(settings: .general) }.keyboardShortcut(",")
+            }
+            CommandGroup(replacing: .newItem) {}
+        }
 
-        MenuBarExtra("Oberton", systemImage: "waveform") {
-            MenuBarContent().environmentObject(model)
+        Window("Oberton setup", id: "setup") {
+            OnboardingView { delegate.finishSetup() }
+                .environmentObject(model)
+                .obertonTheme(model.settings)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentSize)
+        .defaultLaunchBehavior(.suppressed)
+        .restorationBehavior(.disabled)
+
+        MenuBarExtra {
+            MenuBarContent(delegate: delegate).environmentObject(model)
+        } label: {
+            MenuBarLabel(delegate: delegate)
         }
     }
     #else
+    @State private var showSetup = !OnboardingView.isDone && !AppModel.snapshotMode
+
     var body: some Scene {
         WindowGroup("Oberton", id: "main") {
             MainWindowContent()
                 .environmentObject(model)
-                .task {
-                    model.platform = platform
-                    await platform.requestPermissions()
+                .task { model.platform = platform }
+                .fullScreenCover(isPresented: $showSetup) {
+                    ScrollView { OnboardingView { showSetup = false } }
+                        .environmentObject(model)
+                        .obertonTheme(model.settings)
+                        .background(Palette(dark: model.settings.theme == .dark, accentChoice: model.settings.accent).paper.ignoresSafeArea())
                 }
         }
     }
@@ -80,9 +107,11 @@ struct PhoneOverlay: View {
 #if os(macOS)
 import AppKit
 import Combine
+import ServiceManagement
 
-/// Owns what lives as long as the app: the hotkeys and the overlay. Closing the window keeps Oberton running in the
-/// menu bar, as the Windows app keeps running in the tray.
+/// Owns what lives as long as the app: the hotkeys, the overlay and the menu bar icon. Closing the window keeps
+/// Oberton running in the menu bar (Settings › General, as Windows keeps running in the tray); the Dock icon shows only
+/// while a window is open, as Windows' taskbar button does.
 @MainActor
 final class MacAppDelegate: NSObject, NSApplicationDelegate {
     let model = AppModel()
@@ -92,12 +121,30 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
     private var reader: ReaderController?
     private var watch: AnyCancellable?
     private var escapeWatch: AnyCancellable?
+    private var loginWatch: AnyCancellable?
+    private var problemWatch: AnyCancellable?
+    private var windowWatches: [NSObjectProtocol] = []
     private var shownHotkeyError: String?
+    /// Opens a window by its scene id; set by the menu bar icon, the first view SwiftUI draws.
+    private var openWindow: ((String) -> Void)?
+    private var startedHidden = false
+    private var launched = false
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // Opened by the login item: start hidden in the menu bar (Windows' --minimized). Asked here, while the launch
+        // event is still the current one.
+        let event = NSAppleEventManager.shared().currentAppleEvent
+        startedHidden = event?.eventID == kAEOpenApplication
+            && event?.paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue == keyAELaunchedAsLogInItem
+        NSApp.setActivationPolicy(.accessory)
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         #if DEBUG
         if ProcessInfo.processInfo.environment["OBERTON_SNAPSHOT"] != nil { Snapshots.write(to: ProcessInfo.processInfo.environment["OBERTON_SNAPSHOT"]!, model: model); return }
         #endif
+        Log.info("=== Oberton \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "") starting" + (startedHidden ? " (at login, hidden)" : "") + " ===")
+        NSSetUncaughtExceptionHandler { e in Log.error("Unhandled exception: \(e.name.rawValue): \(e.reason ?? "")") }
         model.platform = platform
         overlay = OverlayController(model: model)
         reader = ReaderController(model: model)
@@ -113,15 +160,93 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         escapeWatch = model.$phase.map { $0 == .preview || $0 == .placing }.removeDuplicates()
             .sink { [weak self] waiting in
                 guard let self else { return }
-                if let error = hotkeys.holdEscape(waiting ? { [weak self] in self?.model.cancel() } : nil) { NSLog("Oberton: %@", error) }
+                if let error = hotkeys.holdEscape(waiting ? { [weak self] in self?.model.cancel() } : nil) { Log.warn(error) }
             }
-        Task { await platform.requestPermissions() }
+        loginWatch = model.$settings.map(\.startAtLogin).removeDuplicates().sink { Self.applyLoginItem($0) }
+        problemWatch = model.$startupProblem.compactMap { $0 }.sink { Log.warn("Speech init: " + $0) }
+        // The Dock icon follows the windows.
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.willCloseNotification, NSWindow.didMiniaturizeNotification,
+                     NSWindow.didDeminiaturizeNotification] {
+            windowWatches.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in
+                DispatchQueue.main.async { MainActor.assumeIsolated { MacAppDelegate.updateDockIcon() } }
+            })
+        }
+        launched = true
+        showAtLaunch()
+    }
+
+    /// The menu bar icon was drawn: from now on windows can be opened.
+    func windowOpener(_ open: @escaping (String) -> Void) {
+        openWindow = open
+        showAtLaunch()
+    }
+
+    private var shownAtLaunch = false
+
+    /// At launch: the first-run setup, or the main window unless Oberton started hidden at login.
+    private func showAtLaunch() {
+        guard launched, let openWindow, !shownAtLaunch else { return }
+        shownAtLaunch = true
+        if !OnboardingView.isDone {
+            open("setup", with: openWindow)
+        } else if !startedHidden {
+            open("main", with: openWindow)
+        }
+    }
+
+    private func open(_ id: String, with openWindow: (String) -> Void) {
+        NSApp.setActivationPolicy(.regular)
+        openWindow(id)
+        NSApp.activate()
+    }
+
+    /// Open (or bring forward) the main window, optionally at a Settings section.
+    func showMain(settings: SettingsSection? = nil) {
+        if let settings { model.requestedSettings = settings }
+        if let openWindow { open("main", with: openWindow) }
+    }
+
+    /// START USING OBERTON: the main window opens before the setup closes (closing the last window may quit).
+    func finishSetup() {
+        showMain()
+        NSApp.windows.first { $0.identifier?.rawValue.hasPrefix("setup") == true }?.close()
+    }
+
+    /// Opening Oberton again (Finder, Spotlight, the Dock) brings the window forward, as Windows' second launch does.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag { OnboardingView.isDone ? showMain() : openWindow.map { open("setup", with: $0) } }
+        return true
     }
 
     /// Keep a session that is recording, up to now, and the notes draft.
-    func applicationWillTerminate(_ notification: Notification) { model.notes.shutdown() }
+    func applicationWillTerminate(_ notification: Notification) {
+        model.notes.shutdown()
+        Log.info("Oberton quitting")
+    }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+    /// "Keep running in the menu bar when the window is closed" off: closing the window quits.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { !model.settings.minimizeToTray }
+
+    /// A Dock icon while a window (not the overlay or reader panels) is open or minimized; none otherwise.
+    private static func updateDockIcon() {
+        let open = NSApp.windows.contains { w in
+            !(w is NSPanel) && w.styleMask.contains(.titled) && w.canBecomeMain && (w.isVisible || w.isMiniaturized)
+        }
+        let policy: NSApplication.ActivationPolicy = open ? .regular : .accessory
+        if NSApp.activationPolicy() != policy { NSApp.setActivationPolicy(policy) }
+    }
+
+    /// Settings › General › "Start when you log in" (Windows' Autostart.Apply): the app itself as a login item.
+    private static func applyLoginItem(_ on: Bool) {
+        let service = SMAppService.mainApp
+        do {
+            if on, service.status != .enabled { try service.register() }
+            else if !on, service.status == .enabled { try service.unregister() }
+        } catch {
+            Log.warn("Login item (\(on ? "on" : "off")): \(error.localizedDescription)")
+        }
+        if on, service.status == .requiresApproval { Log.warn("Login item waits for approval in System Settings › General › Login Items") }
+    }
 
     private func registerHotkeys(_ keys: [String], paused: Bool, notesRecording: Bool) {
         guard !paused else { hotkeys.register([]); return }
@@ -132,7 +257,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
             (notesRecording ? keys[3] : "", "the Extended Notes marker shortcut", { [weak self] in self?.model.notes.addMarker() }),
         ])
         HotkeyStatus.shared.error = errors.isEmpty ? nil : errors.joined(separator: "\n")
-        if !errors.isEmpty { NSLog("Oberton: %@", errors.joined(separator: " ")) }
+        if !errors.isEmpty { Log.warn(errors.joined(separator: " ")) }
         // Also on the overlay, as an error notice (App.xaml.cs ApplyHotkeys), once per new problem.
         let error = errors.isEmpty ? nil : errors.joined(separator: "\n")
         if let error, error != shownHotkeyError { model.notice(error, kind: .error) }
@@ -140,27 +265,52 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-struct MenuBarContent: View {
-    @EnvironmentObject var model: AppModel
+/// The menu bar icon: the Oberton mark (TrayIcon.cs), as a template image so it follows the menu bar's colour. It is
+/// the first view SwiftUI draws, so it hands the delegate the way to open windows.
+struct MenuBarLabel: View {
+    let delegate: MacAppDelegate
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        Button(model.phase == .recording ? "Stop dictating" : "Dictate") { model.toggleDictation() }
-        Text(model.phase.label)
+        Image(nsImage: Self.mark)
+            .accessibilityLabel("Oberton")
+            .onAppear { delegate.windowOpener { openWindow(id: $0) } }
+    }
+
+    /// A rounded square with the dot cut out of it, 16 pt.
+    static let mark: NSImage = {
+        let image = NSImage(size: NSSize(width: 16, height: 16), flipped: false) { rect in
+            let square = NSBezierPath(roundedRect: rect.insetBy(dx: 1, dy: 1), xRadius: 3.5, yRadius: 3.5)
+            square.append(NSBezierPath(ovalIn: NSRect(x: 5, y: 5, width: 6, height: 6)))
+            square.windingRule = .evenOdd
+            NSColor.black.setFill()
+            square.fill()
+            return true
+        }
+        image.isTemplate = true
+        return image
+    }()
+}
+
+/// The menu bar's menu, as Windows' tray menu: "Oberton · <profile>" (the tray icon's tooltip, which a menu bar icon
+/// can't have), Start / stop dictation, Profile ▸, Open settings, Check for updates… (the D.3 page), Quit.
+struct MenuBarContent: View {
+    @EnvironmentObject var model: AppModel
+    let delegate: MacAppDelegate
+
+    var body: some View {
+        Text("Oberton · \(model.activeProfile.name)")
         Divider()
+        Button("Start / stop dictation") { model.toggleDictation() }
         Picker("Profile", selection: Binding(get: { model.activeProfile.id }, set: { id in
             if let p = model.profiles.first(where: { $0.id == id }) { model.activeProfile = p }
         })) {
             ForEach(model.profiles) { Text($0.name).tag($0.id) }
         }
-        Button("Read selection aloud") { model.readSelection() }
-        if let last = model.lastEntry { Button("Copy last dictation") { Clipboard.copy(last.inserted) } }
         Divider()
-        Button("Open Oberton") {
-            openWindow(id: "main")
-            NSApp.activate()
-        }
-        Button("Quit Oberton") { NSApp.terminate(nil) }.keyboardShortcut("q")
+        Button("Open settings") { delegate.showMain() }
+        Button("Check for updates…") { delegate.showMain(settings: .updates) }
+        Button("Quit") { NSApp.terminate(nil) }.keyboardShortcut("q")
     }
 }
 #endif
@@ -181,7 +331,9 @@ enum Snapshots {
             ("settings-models", Place(section: .settings, settings: .models)), ("settings-layout", Place(section: .settings, settings: .layout)),
             ("settings-about", Place(section: .settings, settings: .about)), ("settings-hotkeys", Place(section: .settings, settings: .hotkeys)),
             ("settings-speech", Place(section: .settings, settings: .speech)), ("settings-microphone", Place(section: .settings, settings: .microphone)),
-            ("settings-general", Place(section: .settings, settings: .general)),
+            ("settings-unloading", Place(section: .settings, settings: .unloading)),
+            ("settings-updates", Place(section: .settings, settings: .updates)),
+            ("settings-advanced", Place(section: .settings, settings: .advanced)),
             ("notes", Place(section: .notes)), ("notes-session", Place(section: .notes, noteSessionID: "20261102-1015")),
             ("notes-edited", Place(section: .notes, noteSessionID: "20261102-1015")),
         ]
@@ -200,7 +352,27 @@ enum Snapshots {
             let narrow = AnalyticsView().environmentObject(model).environmentObject(Navigator()).environment(\.horizontalSizeClass, .compact)
                 .obertonTheme(phone).frame(width: 390, height: 2900).background(Palette(dark: dark, accentChoice: s.accent).paper)
             save(narrow, to: dir, name: "analytics-phone-\(dark ? "dark" : "light")")
+            // The first-run setup: before, while downloading, and done.
+            let setups: [(String, OnboardingView)] = [
+                ("setup", OnboardingView(finish: {})),
+                ("setup-running", OnboardingView(snapshot: .running, step: 3, title: "Step 3 of 4: Speech model", fraction: 0.42,
+                                                 detail: "Downloading the English (United States) speech model  (42%)")),
+                ("setup-done", OnboardingView(snapshot: .done, step: 4, title: "All set!", fraction: 1,
+                                              detail: "Press \(model.settings.hotkey) in any app to start dictating, and press it again to stop.")),
+            ]
+            for (name, view) in setups {
+                save(view.environmentObject(model).obertonTheme(s).fixedSize(horizontal: false, vertical: true), to: dir, name: "\(name)-\(dark ? "dark" : "light")")
+            }
+            // A folded group stays folded; the open section's group unfolds.
+            var folded = s
+            let kept = model.settings.collapsedSettingsGroups
+            folded.collapsedSettingsGroups = ["A // Dictation", "C // Look & feel"]
+            model.settings.collapsedSettingsGroups = folded.collapsedSettingsGroups
+            save(RootView(start: Place(section: .settings, settings: .unloading)).environmentObject(model).obertonTheme(folded).frame(width: 1200, height: 780),
+                 to: dir, name: "settings-folded-\(dark ? "dark" : "light")")
+            model.settings.collapsedSettingsGroups = kept
         }
+        save(MenuBarMarkPreview(), to: dir, name: "menubar-mark")
         // Hotkeys with a combination another app holds, and the dictation box recording.
         HotkeyStatus.shared.error = "Ctrl+Alt+D is already used by another app. Choose a different shortcut under Settings › Hotkeys."
         HotkeyStatus.shared.recording = "Start / stop dictation"
@@ -225,6 +397,22 @@ enum Snapshots {
             try? png.write(to: URL(fileURLWithPath: dir).appending(path: "overlay.png"))
         }
         NSApp.terminate(nil)
+    }
+
+    /// The menu bar mark at 1× and 4×, on light and dark.
+    private struct MenuBarMarkPreview: View {
+        var body: some View {
+            HStack(spacing: 16) {
+                ForEach([false, true], id: \.self) { dark in
+                    HStack(spacing: 12) {
+                        Image(nsImage: MenuBarLabel.mark).renderingMode(.template)
+                        Image(nsImage: MenuBarLabel.mark).renderingMode(.template).resizable().interpolation(.high).frame(width: 64, height: 64)
+                    }
+                    .foregroundStyle(dark ? Color.white : Color.black)
+                    .padding(12).background(dark ? Color(white: 0.15) : Color(white: 0.92))
+                }
+            }
+        }
     }
 
     private static func save(_ view: some View, to dir: String, name: String) {
