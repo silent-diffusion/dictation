@@ -21,3 +21,22 @@ apple/ObertonCore/.build/
 *.xcuserstate
 xcuserdata/
 apple/Local.xcconfig
+apple/build-direct/
+
+# Never committed: macOS litter, Xcode and SwiftPM state, secrets, signing material, recordings and debug output
+# (snapshot PNGs, quirk-check logs). See scripts/privacy-check.sh.
+.DS_Store
+DerivedData/
+.swiftpm/
+.env
+.env.*
+*.p12
+*.p8
+*.cer
+*.mobileprovision
+*.provisionprofile
+*.xcarchive
+*.wav
+*.m4a
+*.jsonl
+snapshots/
