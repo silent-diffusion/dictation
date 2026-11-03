@@ -31,6 +31,25 @@ public struct InsertionContext: Equatable, Sendable {
         return n(inDocument) == n(typed)
     }
 
+    /// Whether a text control is really empty, from what it shows (`shown`, its first characters), its own value
+    /// (`value`, nil when it has none) and its labels (placeholder, title, description, help): empty when it shows only
+    /// blanks or invisible characters, or a short line without a sentence end that its value says isn't there, or
+    /// exactly one of its labels (Windows `InsertionContext.IsEmptyField`).
+    public static func isEmptyField(shown: String, value: String?, labels: [String?]) -> Bool {
+        func clean(_ s: String) -> String { visible(s).trimmingCharacters(in: .whitespacesAndNewlines) }
+        let all = clean(shown)
+        if all.isEmpty { return true }
+        // A short line that the control's own value says isn't there is a placeholder. (Only short text without a
+        // sentence end, in case a rich editor reports an empty value while holding real text.)
+        if all.count <= 60, all.range(of: #"[.!?]\s"#, options: .regularExpression) == nil, let value, clean(value).isEmpty {
+            return true
+        }
+        return labels.contains { label in
+            guard let label, !clean(label).isEmpty else { return false }
+            return clean(label).caseInsensitiveCompare(all) == .orderedSame
+        }
+    }
+
     private static let sentenceStarts = try! NSRegularExpression(pattern: #"(?<=[.!?])\s+|\n"#)
     private static let sentenceEnd = try! NSRegularExpression(pattern: #"[.!?](\s|$)|\n"#)
 

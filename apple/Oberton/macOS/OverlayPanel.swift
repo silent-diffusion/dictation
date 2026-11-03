@@ -204,6 +204,7 @@ enum OverlaySnapshots {
         var failedAI = clean
         failedAI.aiEdit = nil
         failedAI.inserted = failedAI.transcription
+        let around = InsertionContext(before: "Hi all,\n\nQuick update on the launch. ", after: " Let me know if that works.")
         let shots: [(String, CGSize, AnyView)] = [
             ("pill-starting", room, AnyView(PillContent(phase: .starting, profile: "Light Cleanup", opacity: opacity))),
             ("pill-recording", room, AnyView(PillContent(phase: .recording, profile: "Light Cleanup", meter: meter, startedAt: .now - 7, opacity: opacity))),
@@ -248,6 +249,12 @@ enum OverlaySnapshots {
             ("receipt-safety-net-open", room, AnyView(ReceiptPill(entry: rejected, opacity: opacity, open: true))),
             ("receipt-partly-edited", room, AnyView(ReceiptPill(entry: partly, opacity: opacity))),
             ("receipt-note", room, AnyView(ReceiptPill(entry: entry, opacity: opacity))),
+            // The text around the cursor (read in the direct build) either side of the AI edit (DICT-054).
+            ("preview-context", room, AnyView(PreviewPill(entry: clean, profile: "Light Cleanup", hotkey: hotkey, opacity: opacity,
+                                                          context: around))),
+            ("receipt-open-context", room, AnyView(ReceiptPill(entry: clean, opacity: opacity, open: true, context: around))),
+            ("receipt-open-context-long", room, AnyView(ReceiptPill(entry: clean, opacity: opacity, open: true,
+                                                                    context: InsertionContext(before: long, after: long)))),
             ("receipt-open-long-short-screen", CGSize(width: 420, height: 480), AnyView(ReceiptPill(
                 entry: HistoryEntry(transcription: long, aiEdit: nil, inserted: long, profileName: "Raw", model: nil,
                                     appName: "Notes", seconds: 90, turnaroundSeconds: 1, warning: nil), opacity: opacity, open: true))),

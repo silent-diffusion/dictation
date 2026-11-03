@@ -98,7 +98,7 @@ struct AboutSection: View {
          ("02 Transcribe", model.settings.whisperModel != nil ? "Whisper turns speech into text as you speak, on this Mac's graphics and Neural Engine."
                                                               : "Apple Speech turns speech into text as you speak, on this Mac."),
          ("03 Tidy up", "Your profile's AI model edits the text, following its instructions: Apple Intelligence on this Mac, or a local model through Ollama."),
-         ("04 Insert", "The text is pasted or typed at your cursor, and your clipboard is put back.")]
+         ("04 Insert", "Finished sentences can appear while you speak; at the end the final text replaces them at your cursor, and your clipboard is put back.")]
         #else
         [("01 Listen", "Your microphone is recorded while you dictate. The recording is kept in History only if you choose to (Settings › History)."),
          ("02 Transcribe", "Apple Speech turns speech into text as you speak, on this iPhone."),

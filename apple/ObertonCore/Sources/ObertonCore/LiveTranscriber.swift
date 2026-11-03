@@ -283,6 +283,9 @@ public final class LiveTranscriber: @unchecked Sendable {
                 return (piece, "")
             }
         }
+        // An empty running result comes just before the recognizer settles a phrase: no news, so the words already
+        // typed for it stay (an empty guess would take them all back, only for the settled phrase to type them again).
+        if !final, text.trimmingCharacters(in: .whitespaces).isEmpty { return (nil, nil) }
         let guess = [heldText, final ? "" : text].filter { !$0.isEmpty }
         return (nil, guess.isEmpty ? "" : FragmentStitcher.join(guess))
     }

@@ -140,6 +140,11 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, N
             WordsCheck.run(model, engine: engine)
             return
         }
+        if let folder = ProcessInfo.processInfo.environment["OBERTON_LIVE_CHECK"] {
+            model.platform = platform
+            LiveCheck.run(model, folder: folder)
+            return
+        }
         #endif
         // The theme applies to every window, the title bars and menus included (ThemeManager).
         watches.append(model.$settings.map(\.theme).removeDuplicates().sink { theme in

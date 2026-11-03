@@ -132,6 +132,9 @@ final class MacPlatform: PlatformServices {
         }
         do {
             try await insert(text, into: target, spot: await spot.value)
+            // The caret has moved on: History's "insert into the last app" goes to wherever it is now (Windows passes
+            // no spot there).
+            spot = Task { .unknown }
         } catch {
             // Last resort so the dictation isn't lost: leave it on the clipboard.
             keep(text)

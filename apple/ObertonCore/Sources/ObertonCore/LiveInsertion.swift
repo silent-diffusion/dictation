@@ -69,7 +69,7 @@ public extension LiveTarget {
 @MainActor
 public final class LiveInsertion {
     /// How long a slow app may take to show its text through Accessibility (plus 1 ms a character, up to 2.5 s).
-    public static let readTimeout: Duration = .milliseconds(700)
+    public nonisolated static let readTimeout: Duration = .milliseconds(700)
     /// Breathing room between live insertions, so the app has read one paste before the next one starts.
     public var minGap: Duration = .milliseconds(700)
     /// Settle time after the last live paste, Backspace or keystroke: the app handles them a moment after they are
@@ -95,6 +95,8 @@ public final class LiveInsertion {
     /// The newest guess, not typed yet (older ones are skipped).
     private var pendingPartial: String?
     private var partialQueued = false
+    /// The queued guess update that may still type (an older one, overtaken by a piece, does nothing).
+    private var partialJob = 0
     private var clipboardTaken = false
     private var lastInsert: ContinuousClock.Instant?
     private var stopped = false
@@ -124,10 +126,13 @@ public final class LiveInsertion {
         pendingPartial = partial
         if partialQueued { return } // the queued update will pick up this newer guess
         partialQueued = true
-        enqueue { await self.applyPartial() }
+        partialJob += 1
+        let job = partialJob
+        enqueue { await self.applyPartial(job) }
     }
 
-    private func applyPartial() async {
+    private func applyPartial(_ job: Int) async {
+        guard job == partialJob else { return }
         partialQueued = false
         let partial = pendingPartial
         pendingPartial = nil
@@ -144,7 +149,15 @@ public final class LiveInsertion {
     }
 
     /// Queue a finished piece; pieces are cleaned and typed strictly in order.
-    public func add(_ piece: String) { enqueue { await self.addPiece(piece) } }
+    public func add(_ piece: String) {
+        // A guess still waiting is about the speech this piece settles: dropped, so that the guess that follows the
+        // piece (often empty) can't be typed ahead of it and take back the words the piece is about to keep. A newer
+        // guess queues after the piece.
+        pendingPartial = nil
+        partialQueued = false
+        partialJob += 1
+        enqueue { await self.addPiece(piece) }
+    }
 
     /// Wait until every queued piece is typed (or held).
     public func drain() async { await queue?.value }

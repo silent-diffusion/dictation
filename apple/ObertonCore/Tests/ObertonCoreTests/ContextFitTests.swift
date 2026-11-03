@@ -70,4 +70,20 @@ import Testing
         #expect(InsertionContext.sameText("It\u{2019}s \u{201C}ok\u{201D}\r\nyes\u{00A0}no", "It's \"ok\"\nyes no"))
         #expect(!InsertionContext.sameText("a", "b"))
     }
+
+    // Windows InsertionContext.IsEmptyField: placeholders and invisible characters count as an empty field.
+    @Test func blankOrInvisibleTextIsAnEmptyField() {
+        #expect(InsertionContext.isEmptyField(shown: " \u{200B}\u{FEFF}\n", value: nil, labels: []))
+    }
+
+    @Test func aPlaceholderTheValueDoesntHaveIsAnEmptyField() {
+        #expect(InsertionContext.isEmptyField(shown: "Type a message", value: "", labels: []))
+        #expect(!InsertionContext.isEmptyField(shown: "See you then. Bye", value: "", labels: [])) // a sentence: real text
+        #expect(!InsertionContext.isEmptyField(shown: "Type a message", value: "Type a message", labels: []))
+    }
+
+    @Test func textEqualToTheControlsLabelIsAPlaceholder() {
+        #expect(InsertionContext.isEmptyField(shown: "Search", value: nil, labels: [nil, "search"]))
+        #expect(!InsertionContext.isEmptyField(shown: "Search the docs", value: nil, labels: ["Search"]))
+    }
 }

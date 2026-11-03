@@ -170,9 +170,12 @@ enum AXReader {
         return error != .invalidUIElement
     }
 
-    /// Brings the window back in its app: out of the Dock if minimised, raised, made the main window (Windows'
-    /// `IsIconic → ShowWindow(SW_RESTORE)` then `SetForegroundWindow`). The app itself is activated by the caller.
+    /// Brings the window back: its app to the front, the window out of the Dock if minimised, raised and made the main
+    /// window (Windows' `IsIconic → ShowWindow(SW_RESTORE)` then `SetForegroundWindow`).
     static func restore(_ window: AXRef) {
+        var pid: pid_t = 0
+        // Its app to the front too: an app that isn't active itself may not activate another one any more.
+        if AXUIElementGetPid(window.element, &pid) == .success { set(app(pid), kAXFrontmostAttribute, kCFBooleanTrue) }
         if bool(window.element, kAXMinimizedAttribute) == true { set(window.element, kAXMinimizedAttribute, kCFBooleanFalse) }
         set(window.element, kAXMainAttribute, kCFBooleanTrue)
         AXUIElementPerformAction(window.element, kAXRaiseAction as CFString)
@@ -244,20 +247,8 @@ enum AXReader {
     static func isEmptyField(_ e: AXUIElement) -> Bool {
         let count = characterCount(e) ?? 0
         let shown = text(e, in: CFRange(location: 0, length: min(readChars, count))) ?? string(e, kAXValueAttribute) ?? ""
-        let all = InsertionContext.visible(shown).trimmingCharacters(in: .whitespacesAndNewlines)
-        if all.isEmpty { return true }
-        // A short line that the control's own value says isn't there is a placeholder. (Only short text without a
-        // sentence end, in case a rich editor reports an empty value while holding real text.)
-        if all.count <= 60, all.range(of: #"[.!?]\s"#, options: .regularExpression) == nil,
-           let value = string(e, kAXValueAttribute),
-           InsertionContext.visible(value).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return true
-        }
-        return [kAXPlaceholderValueAttribute, kAXTitleAttribute, kAXDescriptionAttribute, kAXHelpAttribute].contains { name in
-            guard let label = string(e, name).map({ InsertionContext.visible($0).trimmingCharacters(in: .whitespacesAndNewlines) }),
-                  !label.isEmpty else { return false }
-            return label.caseInsensitiveCompare(all) == .orderedSame
-        }
+        return InsertionContext.isEmptyField(shown: shown, value: string(e, kAXValueAttribute),
+                                             labels: [kAXPlaceholderValueAttribute, kAXTitleAttribute, kAXDescriptionAttribute, kAXHelpAttribute].map { string(e, $0) })
     }
 
     // MARK: Live typing's checks

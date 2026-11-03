@@ -155,6 +155,20 @@ class FakeDocument: LiveTarget {
         #expect(l.typed == "Hello world.")
     }
 
+    @Test func aGuessAfterAPieceNeverJumpsAheadOfIt() async {
+        let doc = FakeDocument()
+        let l = live(doc, Self.raw)
+        l.setPartial("hello")
+        await l.drain()
+        // The recognizer: a newer guess, then the piece that settles it, then an empty guess, all before typing catches up.
+        l.setPartial("hello wor")
+        l.add("hello world.")
+        l.setPartial("")
+        await l.drain()
+        #expect(doc.text == "hello world.")
+        #expect(!doc.log.contains { $0.hasPrefix("erase") }) // the words typed so far were never taken back
+    }
+
     @Test func liveTypingTypesKeyByKeyInsteadOfPasting() async {
         var profile = Self.raw
         profile.liveTyping = true
