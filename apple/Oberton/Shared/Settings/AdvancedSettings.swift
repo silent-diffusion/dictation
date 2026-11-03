@@ -45,13 +45,14 @@ struct AdvancedSection: View {
         .task { await listModels() }
     }
 
-    /// Windows lists the downloaded Whisper and Ollama models; here: the speech languages installed on the device,
-    /// and Ollama's models.
+    /// The downloaded speech models (Apple Speech's languages and Whisper models) and Ollama's models, as Windows.
     private func listModels() async {
         let speech = await LiveTranscriber.installedLanguages()
         await model.refreshOllama()
         let names = speech.map { Locale.current.localizedString(forIdentifier: $0) ?? $0 }
+        let whisper = WhisperModels.downloaded()
         localModels = "Speech (Apple Speech):  " + (names.isEmpty ? "none yet (downloads on the first dictation)" : names.joined(separator: ", ")) + "\n"
+            + "Speech (Whisper):  " + (whisper.isEmpty ? "none downloaded" : whisper.joined(separator: ", ")) + "\n"
             + "Language models (Ollama):  " + (model.ollamaModels.isEmpty ? "none (or Ollama isn't running)" : model.ollamaModels.joined(separator: ", "))
     }
 }

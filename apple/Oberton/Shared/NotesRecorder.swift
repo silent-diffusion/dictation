@@ -6,7 +6,7 @@ import ObertonCore
 import Speech
 
 /// Runs an Extended Notes session (NotesRecorder.cs): listens (the microphone, the Mac's own audio, or both), writes the
-/// recording, sends it to Apple's speech recognizer on an analyzer of its own, appends each finished piece to the
+/// recording, sends it to Apple's speech recognizer on an analyzer of its own (or to the Whisper model in Settings), appends each finished piece to the
 /// transcript, formats the new text with the AI about every minute, sums it up every 5 to 10 minutes (`NotesSummary`),
 /// and saves as it goes. Only one session records at a time. A dictation pauses it (`setDictating`).
 @MainActor
@@ -57,6 +57,8 @@ final class NotesRecorder: ObservableObject {
     private var tick: Timer?
     private var speechTask: Task<Void, Never>?
     private var connecting = false
+    /// Where in the recording the Whisper stream's time 0 is.
+    private var whisperStart = 0.0
     private var nextConnect = Date.distantPast
     private var connectDelay: TimeInterval = 5
     private var formatRequests = 0, summaryRequests = 0
@@ -170,7 +172,11 @@ final class NotesRecorder: ObservableObject {
         defer { connecting = false }
         do {
             let st = settings()
-            let locale = try await LiveTranscriber.prepare(locale: Locale(identifier: st.language))
+            if let whisper = st.whisperModel {
+                try await connectWhisper(whisper, st)
+                return
+            }
+            let locale = try await LiveTranscriber.prepare(locale: st.speechLocale)
             let transcriber = SpeechTranscriber(locale: locale, transcriptionOptions: [], reportingOptions: [], attributeOptions: [.audioTimeRange])
             let analyzer = SpeechAnalyzer(modules: [transcriber])
             let words = st.vocabularyHint.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
@@ -207,6 +213,19 @@ final class NotesRecorder: ObservableObject {
             nextConnect = Date().addingTimeInterval(connectDelay)
             connectDelay = min(60, connectDelay * 2)
         }
+    }
+
+    /// The Whisper model in Settings: finished sentences come in every few seconds (`WhisperLiveStream`).
+    private func connectWhisper(_ id: String, _ st: AppSettings) async throws {
+        try await WhisperEngine.shared.load(id)
+        guard current != nil else { return }
+        let stream = WhisperLiveStream(model: id, language: st.whisperLanguage, vocabulary: st.vocabulary.joined(separator: ", ")) { [weak self] text, at in
+            Task { @MainActor in self?.onPiece(text, at: (self?.whisperStart ?? 0) + at) }
+        }
+        whisperStart = feed.connect(whisper: stream)
+        stream.start()
+        connectDelay = 5
+        transcribing = true
     }
 
     private func onSpeechEnded() {
@@ -402,6 +421,9 @@ final class NotesRecorder: ObservableObject {
             feed.finishInput()
             try? await analyzer.finalizeAndFinishThroughEndOfInput()
             await speechTask?.value
+        } else if let stream = feed.whisper {
+            feed.finishInput()
+            if let last = await stream.finish() { onPiece(last.text, at: whisperStart + last.at) }
         }
         feed.end()
         s.seconds = feed.seconds
@@ -434,6 +456,7 @@ final class NotesRecorder: ObservableObject {
         guard let s = current else { return }
         stopAudio()
         tick?.invalidate()
+        feed.whisper?.cancel()
         feed.finishInput()
         feed.end()
         s.seconds = feed.seconds
@@ -502,7 +525,17 @@ final class NotesRecorder: ObservableObject {
         }
         redoProgress = "reading the recording"
         let st = settings()
-        let locale = try await LiveTranscriber.prepare(locale: Locale(identifier: st.language))
+        if let whisper = st.whisperModel {
+            let pieces = try await WhisperAudio.transcribe(url, model: whisper, language: st.whisperLanguage,
+                                                           prompt: st.vocabulary.joined(separator: ", ")) { fraction in
+                await MainActor.run { self.redoProgress = "\(Int(min(99, fraction * 100)))%" }
+            }
+            try Task.checkCancellation()
+            s.replaceTranscript(pieces.map { (seconds: $0.start, text: $0.text) }, source: self)
+            store.save(s)
+            return
+        }
+        let locale = try await LiveTranscriber.prepare(locale: st.speechLocale)
         let transcriber = SpeechTranscriber(locale: locale, transcriptionOptions: [], reportingOptions: [], attributeOptions: [.audioTimeRange])
         let file = try AVAudioFile(forReading: url)
         let total = max(1, Double(file.length) / file.processingFormat.sampleRate)
@@ -566,12 +599,16 @@ final class NotesFeed: @unchecked Sendable {
     private var analyzerFormat: AVAudioFormat?
     private var converter: AVAudioConverter?
     private var _analyzer: SpeechAnalyzer?
+    private var _whisper: WhisperLiveStream?
     private let source = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(WavWriter.sampleRate), channels: 1, interleaved: false)!
 
     var analyzer: SpeechAnalyzer? {
         get { lock.withLock { _analyzer } }
         set { lock.withLock { _analyzer = newValue } }
     }
+
+    /// The Whisper stream the audio goes to instead of an analyzer, while one runs.
+    var whisper: WhisperLiveStream? { lock.withLock { _whisper } }
 
     /// Seconds recorded (pauses not counted).
     var seconds: Double { lock.withLock { Double(samples) / Double(WavWriter.sampleRate) } }
@@ -589,7 +626,7 @@ final class NotesFeed: @unchecked Sendable {
             guard !paused, let wav else { return }
             wav.write(chunk)
             samples += chunk.count
-            if let input { send(chunk, to: input) } else {
+            if let _whisper { _whisper.append(chunk) } else if let input { send(chunk, to: input) } else {
                 backlog += chunk
                 if backlog.count > NotesRecorder.maxBacklog { backlog.removeFirst(backlog.count - NotesRecorder.maxBacklog) }
             }
@@ -609,13 +646,25 @@ final class NotesFeed: @unchecked Sendable {
         }
     }
 
-    func disconnect() { lock.withLock { input?.finish(); input = nil; _analyzer = nil } }
+    /// Whisper is running: the backlog goes first. Returns where in the recording its time 0 is.
+    func connect(whisper: WhisperLiveStream) -> Double {
+        lock.withLock {
+            _whisper = whisper
+            let start = Double(samples - backlog.count) / Double(WavWriter.sampleRate)
+            if !backlog.isEmpty { whisper.append(backlog) }
+            backlog = []
+            return start
+        }
+    }
+
+    func disconnect() { lock.withLock { input?.finish(); input = nil; _analyzer = nil; _whisper = nil } }
+    /// No more audio for the recognizer (Whisper's stream stays known, for `stop` to finish it).
     func finishInput() { lock.withLock { input?.finish(); input = nil } }
 
     func flush() { lock.withLock { wav }?.flush() }
 
     func end() {
-        let w = lock.withLock { () -> WavWriter? in let w = wav; wav = nil; _analyzer = nil; return w }
+        let w = lock.withLock { () -> WavWriter? in let w = wav; wav = nil; _analyzer = nil; _whisper = nil; return w }
         w?.close()
     }
 

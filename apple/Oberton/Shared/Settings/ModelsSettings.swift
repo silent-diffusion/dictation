@@ -11,8 +11,7 @@ struct ModelsSection: View {
         VStack(alignment: .leading, spacing: 8) {
             Caption("Download the models you want and choose which one is active. Local models run on this \(Device.noun); downloading is the only time they use the internet.")
             Readout("Speech recognition").padding(.top, 12)
-            ModelRow(name: "Apple Speech", badges: [("Active", .active), ("Installed", .plain)],
-                     detail: "Apple's on-device speech recognizer. Downloads its language once, through the system.")
+            SpeechModelList()
             HStack {
                 Readout("AI cleanup · on this \(Device.noun)")
                 Spacer()
@@ -86,6 +85,8 @@ struct ModelRow: View {
     var badges: [(String, Badge.Kind)]
     var detail: String
     var action: (String, () -> Void)? = nil
+    /// Downloading: the fraction done (nil inside while unknown), as a thin bar under the line.
+    var progress: Double?? = nil
     @Environment(\.ob) private var ob
 
     var body: some View {
@@ -96,6 +97,7 @@ struct ModelRow: View {
                     ForEach(Array(badges.enumerated()), id: \.offset) { _, b in Badge(text: b.0, kind: b.1) }
                 }
                 Text(detail).font(Ob.sans(12)).foregroundStyle(ob.muted).fixedSize(horizontal: false, vertical: true)
+                if let progress { ProgressBar(fraction: progress).frame(height: 4).padding(.top, 6) }
             }
             Spacer()
             if let action { Button(action.0, action: action.1).buttonStyle(.quiet) }

@@ -683,7 +683,7 @@ enum NotesSteps {
     static func live(_ model: AppModel, chosen: NotesSource, idleModel: ModelID?) -> [PipeStep] {
         let n = model.notes
         let source = NoteSessionView.sourceLabel(n.current?.source ?? chosen)
-        let speech = "Apple Speech"
+        let speech = model.speechEngineName
         let listen: PipeStep, speechStep: PipeStep
         if let live = n.current {
             listen = n.isFinishing ? PipeStep(label: "LISTEN", title: source, status: "stopped", state: .ok)
@@ -724,7 +724,7 @@ enum NotesSteps {
         }
         let recorded = s.audioURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
         return [make("LISTEN", NoteSessionView.sourceLabel(s.source), .transcribe, recorded ? "recorded · \(NoteSessionView.length(s.seconds))" : "no recording", "reading again", again),
-                make("SPEECH", "Apple Speech", .transcribe, "click to transcribe again", "transcribing again", again),
+                make("SPEECH", model.speechEngineName, .transcribe, "click to transcribe again", "transcribing again", again),
                 make("FORMAT", ai, .format, "click to format again", "formatting again", "Click to format the whole transcript again (then sum it up again)"),
                 make("SUMMARY", ai, .summary, "click to sum up again", "summing up again", "Click to write the summary again")]
     }

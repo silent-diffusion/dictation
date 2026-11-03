@@ -252,12 +252,12 @@ struct ProfilePage: View {
     private var modelsCard: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("MODELS").font(Ob.mono(12, .bold))
-            Text("What this profile listens, edits and reads with. Speech recognition is Apple's, on this \(Device.noun).")
+            Text("What this profile listens, edits and reads with. Speech recognition is the model in Settings › Speech recognition, on this \(Device.noun).")
                 .font(Ob.sans(12)).foregroundStyle(ob.muted).padding(.top, 4).padding(.bottom, 10)
             Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
                 GridRow {
                     Readout("Speech to text").frame(width: 140, alignment: .leading)
-                    Text("Apple Speech · on-device").font(Ob.sans(13.5)).padding(.vertical, 6)
+                    Text(model.speechEngineName + " · on-device").font(Ob.sans(13.5)).padding(.vertical, 6)
                 }
                 if profile.autoProcess {
                     GridRow {

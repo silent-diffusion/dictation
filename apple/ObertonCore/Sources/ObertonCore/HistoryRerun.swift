@@ -17,10 +17,17 @@ public enum HistoryRerun {
         let profileNote = found == nil ? " (the profile \"\(entry.profileName)\" is gone, so \(active.name) was used)" : ""
         let profile = found ?? active
 
-        // 1. Speech: Apple's on-device recognizer, from the file.
-        await progress("Transcribing again with on-device speech recognition…")
-        let vocabulary = settings.vocabularyHint.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-        let heard = try await transcribe(url, locale: Locale(identifier: settings.language), vocabulary: vocabulary)
+        // 1. Speech: the speech model in Settings (Apple's on-device recognizer or Whisper), from the file.
+        let heard: String
+        if let whisper = settings.whisperModel {
+            await progress("Transcribing again with \(WhisperModels.name(of: whisper))…")
+            let pieces = try await WhisperAudio.transcribe(url, model: whisper, language: settings.whisperLanguage,
+                                                           prompt: settings.vocabulary.joined(separator: ", "))
+            heard = FragmentStitcher.join(pieces.map(\.text))
+        } else {
+            await progress("Transcribing again with on-device speech recognition…")
+            heard = try await transcribe(url, locale: settings.speechLocale, vocabulary: settings.vocabulary)
+        }
         try Task.checkCancellation()
         guard OutputSanitizer.hasContent(heard) else {
             throw UserFacingError("Nothing was heard in the recording this time; the dictation was left as it was.")
@@ -44,7 +51,8 @@ public enum HistoryRerun {
                                      safetyNet: safetyNet, warning: warning, profileName: profile.name, wasInserted: false))
         changed.runAgainAt = Date()
         changed.showingEarlier = false
-        return (changed, "Run again with on-device speech recognition and the \(profile.name) profile\(profileNote). Not inserted anywhere: copy it, or insert it below.")
+        let speech = settings.whisperModel.map(WhisperModels.name(of:)) ?? "on-device speech recognition"
+        return (changed, "Run again with \(speech) and the \(profile.name) profile\(profileNote). Not inserted anywhere: copy it, or insert it below.")
     }
 
     /// Swap the entry's text with what it had before it was run again (so this undoes, and redoes, a rerun).

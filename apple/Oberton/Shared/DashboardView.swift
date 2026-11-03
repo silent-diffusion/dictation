@@ -117,7 +117,7 @@ struct DashboardView: View {
                 FanMeter(fraction: min(max((turn ?? 0) / 10, 0), 1), value: turn.map { String(format: "%.1f s", $0) } ?? "—",
                          label: "Turnaround",
                          sub: count == 0 ? "no runs yet with these models loaded"
-                             : "last \(count) · Apple Speech" + (ai.isEmpty ? ", no AI" : " + " + model.processor.model(for: p).shortName)
+                             : "last \(count) · " + model.speechShortName + (ai.isEmpty ? ", no AI" : " + " + model.processor.model(for: p).shortName)
                                  + ", models already loaded")
             }
         default:
@@ -274,9 +274,9 @@ struct SignalPathCell: View {
             PathNode(label: "MIC", title: model.settings.microphoneName ?? "Default microphone", status: micOn ? "Recording" : "Ready", state: micOn ? .busy : .ok) {
                 nav.goSettings(.microphone)
             },
-            PathNode(label: "SPEECH", title: "Apple Speech",
-                     status: "on-device // " + (phase == .transcribing ? "transcribing" : speechOn ? "listening" : model.speechLoaded ? "loaded" : "not loaded"),
-                     state: speechOn ? .busy : model.speechLoaded ? .ok : .off) { nav.goSettings(.models) },
+            PathNode(label: "SPEECH", title: model.speechShortName,
+                     status: "on-device // " + (phase == .transcribing ? "transcribing" : speechOn ? "listening" : model.speechModelLoaded ? "loaded" : "not loaded"),
+                     state: speechOn ? .busy : model.speechModelLoaded ? .ok : .off) { nav.goSettings(.models) },
             p.isRaw
                 ? PathNode(label: "AI", title: "No AI", status: p.name + " // raw words", state: .off) { nav.goProfile(p.id) }
                 : PathNode(label: cloud ? "AI // CLOUD" : "AI", title: id.shortName,

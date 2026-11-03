@@ -58,7 +58,8 @@ final class AppModel: ObservableObject {
         didSet {
             settingsFile.save(settings)
             // A new profile or language: get its models ready now, so the next dictation doesn't wait (as on Windows).
-            if oldValue.activeProfileID != settings.activeProfileID || oldValue.language != settings.language { warmUp() }
+            if oldValue.activeProfileID != settings.activeProfileID || oldValue.language != settings.language
+                || oldValue.speechModel != settings.speechModel { warmUp() }
         }
     }
     @Published var profiles: [Profile] { didSet { profilesFile.save(profiles) } }
@@ -99,6 +100,11 @@ final class AppModel: ObservableObject {
     /// Settings › Speech recognition's status line ("Speech: Ready · …"), and whether it is a good one.
     @Published private(set) var speechStatus = "Speech: starting…"
     @Published private(set) var speechOK = false
+    /// The Whisper model downloading now (Settings › Speech recognition and Models), how far it got (nil while
+    /// unknown), and the last download's problem.
+    @Published private(set) var whisperDownload: (id: String, fraction: Double?)?
+    @Published var whisperDownloadError: String?
+    private var whisperDownloadTask: Task<Void, Never>?
     /// The speech engine couldn't start at launch: shown once in the main window, as Windows' message box.
     @Published var startupProblem: String?
     /// A Settings section to open in the main window (⌘,, the menu bar's "Check for updates…"); the window clears it.
@@ -265,7 +271,7 @@ final class AppModel: ObservableObject {
         let profile = activeProfile
         // Were the models already loaded? A turnaround that includes loading one isn't a fair turnaround.
         speechModelUsed = speechModelName
-        speechWarm = LiveTranscriber.modelRetained
+        speechWarm = speechModelLoaded
         aiModelUsed = aiModelName(profile)
         let aiID = processor.model(for: profile), endpoint = settings.ollamaEndpoint
         aiWarm = profile.isRaw ? nil : Task { await Self.aiLoaded(aiID, endpoint: endpoint) }
@@ -276,9 +282,15 @@ final class AppModel: ObservableObject {
         startedAt = Date()
         phase = .recording
         speechLoading = !speechWarm
-        let vocabulary = settings.vocabularyHint.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-        let locale = Locale(identifier: settings.language)
-        let engine = Task { [transcriber] in try await transcriber.startRecognizer(locale: locale, vocabulary: vocabulary) }
+        let vocabulary = settings.vocabulary, locale = settings.speechLocale
+        let whisper = settings.whisperModel, language = settings.whisperLanguage
+        let engine = Task { [transcriber] in
+            if let whisper {
+                try await transcriber.startWhisper(model: whisper, language: language, vocabulary: vocabulary)
+            } else {
+                try await transcriber.startRecognizer(locale: locale, vocabulary: vocabulary)
+            }
+        }
         engineTask = engine
         Task { [weak self] in
             // The engine failed to start while the user was still speaking: say so now, not at the end.
@@ -527,8 +539,14 @@ final class AppModel: ObservableObject {
 
     // MARK: Warming up
 
-    /// The speech model's name for the turnaround samples: Apple's recognizer and the language.
-    var speechModelName: String { "apple-speech:" + settings.language }
+    /// The speech model's name for the turnaround samples: Apple's recognizer and the language, or the Whisper model.
+    var speechModelName: String { settings.whisperModel.map { "whisper:" + $0 } ?? "apple-speech:" + settings.language }
+
+    /// The speech model for display: "Apple Speech" or the Whisper model's name.
+    var speechEngineName: String { settings.whisperModel.map(WhisperModels.name(of:)) ?? "Apple Speech" }
+
+    /// The speech model in a few characters, as Windows' dashboard shows it: "Apple Speech" or the Whisper id ("base.en").
+    var speechShortName: String { settings.whisperModel ?? "Apple Speech" }
 
     /// The AI model a profile uses, or "" without AI.
     func aiModelName(_ profile: Profile) -> String { profile.isRaw ? "" : processor.model(for: profile).description }
@@ -542,13 +560,20 @@ final class AppModel: ObservableObject {
     /// changes), as Windows does. A speech model that can't start at launch is reported once (`startupProblem`).
     func warmUp(atLaunch: Bool = false) {
         guard !Self.snapshotMode else { return }
-        let locale = Locale(identifier: settings.language)
+        let locale = settings.speechLocale, whisper = settings.whisperModel
         warmTask?.cancel()
         warmTask = Task {
-            speechStatus = "Speech: loading the speech model (\(languageName))…"
+            speechStatus = "Speech: loading the speech model (\(whisper.map(WhisperModels.name(of:)) ?? languageName))…"
             speechOK = false
             do {
-                try await LiveTranscriber.warmUp(locale: locale)
+                if let whisper {
+                    try await WhisperEngine.shared.load(whisper)
+                } else {
+                    // Back on Apple Speech: a Whisper model left in memory isn't needed any more (unless Extended
+                    // Notes is still transcribing with it; it loads it again by itself).
+                    if WhisperEngine.loadedModel != nil, !notes.needsModels { await WhisperEngine.shared.unload() }
+                    try await LiveTranscriber.warmUp(locale: locale)
+                }
                 if Task.isCancelled { return }
                 speechReady()
             } catch {
@@ -560,10 +585,16 @@ final class AppModel: ObservableObject {
         warmUpAI(activeProfile)
     }
 
-    private var languageName: String { Locale.current.localizedString(forIdentifier: settings.language) ?? settings.language }
+    private var languageName: String {
+        if let whisper = settings.whisperModel {
+            if WhisperModels.model(whisper)?.englishOnly == true { return "English" }
+            if settings.language.isEmpty { return "auto-detect" }
+        }
+        return Locale.current.localizedString(forIdentifier: settings.speechLocale.identifier) ?? settings.language
+    }
 
     private func speechReady() {
-        speechStatus = "Speech: Ready · Apple Speech · \(languageName)"
+        speechStatus = "Speech: Ready · \(speechEngineName) · \(languageName)"
         speechOK = true
         objectWillChange.send() // the dashboard's speech dial
     }
@@ -739,6 +770,7 @@ final class AppModel: ObservableObject {
         usage = log
         words = tally
         speechReady() // the Speech recognition page's status line
+        whisperDownload = ("small.en", 0.42) // the speech model lists show a download under way
         seedSnapshotNotes()
         seedSnapshotHistory()
     }
@@ -855,8 +887,14 @@ final class AppModel: ObservableObject {
 
     // MARK: Unloading
 
-    /// The speech model is in memory: used since it was last let go (the system keeps it a while after each use).
-    var speechLoaded: Bool { LiveTranscriber.modelRetained }
+    /// A speech model is in memory: Apple's, used since it was last let go (the system keeps it a while after each
+    /// use), or a Whisper model.
+    var speechLoaded: Bool { LiveTranscriber.modelRetained || WhisperEngine.loadedModel != nil }
+
+    /// The speech model in Settings is the one in memory (a dictation started now doesn't wait for it to load).
+    var speechModelLoaded: Bool {
+        settings.whisperModel.map { WhisperEngine.loadedModel == $0 } ?? LiveTranscriber.modelRetained
+    }
 
     /// Unload models right now, on request (the dashboard's speech dial), as App.UnloadNowAsync does on Windows. Never
     /// while a dictation or a reading is using them. Returns what happened, for display.
@@ -867,6 +905,7 @@ final class AppModel: ObservableObject {
             else if phase.isBusy { skipped.append("the speech model (dictating)") }
             else if speechLoaded {
                 await LiveTranscriber.unloadModel()
+                await WhisperEngine.shared.unload()
                 done.append("speech model")
                 speechStatus = "Speech: Unloaded · loads again when you dictate"
                 speechOK = false
@@ -890,6 +929,39 @@ final class AppModel: ObservableObject {
         objectWillChange.send() // the speech dial now reads "off"
         return msg
     }
+
+    // MARK: Speech models
+
+    /// Make a speech model the one dictation and Extended Notes use ("" = Apple Speech); it loads now (`warmUp`).
+    func useSpeechModel(_ id: String) {
+        guard id.isEmpty || WhisperModels.isDownloaded(id) else { return }
+        settings.speechModel = id
+    }
+
+    /// Download a Whisper model (one at a time, as on Windows), showing its progress in the model lists.
+    func downloadWhisper(_ id: String) {
+        guard whisperDownload == nil else { return }
+        whisperDownloadError = nil
+        whisperDownload = (id, nil)
+        whisperDownloadTask = Task {
+            do {
+                try await WhisperModels.download(id) { fraction in
+                    Task { @MainActor [weak self] in
+                        if self?.whisperDownload?.id == id { self?.whisperDownload = (id, fraction) }
+                    }
+                }
+                Log.info("Downloaded the speech model \(id)")
+            } catch is CancellationError {
+            } catch {
+                Log.info("Speech model download failed: \(error.localizedDescription)")
+                whisperDownloadError = error.localizedDescription
+            }
+            whisperDownload = nil
+            whisperDownloadTask = nil
+        }
+    }
+
+    func cancelWhisperDownload() { whisperDownloadTask?.cancel() }
 
     func refreshOllama() async {
         guard let url = try? OllamaBackend.validated(settings.ollamaEndpoint) else { ollamaModels = []; return }

@@ -2,9 +2,9 @@ import AVFoundation
 import Foundation
 import Speech
 
-/// Microphone → Apple's on-device speech recognizer (SpeechAnalyzer + SpeechTranscriber). Recording starts at once
-/// (`startRecording`); the recognizer gets ready meanwhile (`startRecognizer`) and catches up on what was said, as on
-/// Windows. The words recognized so far come back while the user speaks, for the overlay; `stop()` returns the whole
+/// Microphone → Apple's on-device speech recognizer (SpeechAnalyzer + SpeechTranscriber), or a downloaded Whisper
+/// model (`startWhisper`). Recording starts at once (`startRecording`); the recognizer gets ready meanwhile
+/// (`startRecognizer` / `startWhisper`) and catches up on what was said, as on Windows. The words recognized so far come back while the user speaks, for the overlay; `stop()` returns the whole
 /// transcript once the recognizer has finished with the last of the audio. Nothing leaves the device.
 ///
 /// The engine is started and stopped on the main actor only, in the order the calls come: a stop or cancel running on
@@ -27,6 +27,8 @@ public final class LiveTranscriber: @unchecked Sendable {
     private var converter: AVAudioConverter?
     private var analyzerFormat: AVAudioFormat?
     private var leveller: VolumeLeveller?
+    /// Set instead of `analyzer` when this recording goes to Whisper.
+    private var whisper: WhisperDictation?
     private let lock = NSLock()
     /// The pieces the recognizer settled, in order, and its running guess at the rest.
     private var pieces: [String] = []
@@ -125,6 +127,9 @@ public final class LiveTranscriber: @unchecked Sendable {
             pieces = []; volatile = ""; waiting = []; streaming = false
             peakLevel = 0; silentFrames = 0; sawSignal = false
         }
+        #if DEBUG
+        if let url = Self.fakeAudio { try playFake(url, evenOut: evenOut); return }
+        #endif
         let node = engine.inputNode
         let micFormat = node.outputFormat(forBus: 0)
         guard micFormat.sampleRate > 0, micFormat.channelCount > 0 else {
@@ -187,6 +192,28 @@ public final class LiveTranscriber: @unchecked Sendable {
         if !current { results.cancel(); await analyzer.cancelAndFinishNow() }
     }
 
+    /// Get the Whisper model ready (loading it if needed), then hand it everything recorded so far. While the user
+    /// speaks, the running transcript of the last 28 s comes back about once a second (asr_server.py's partials).
+    public func startWhisper(model: String, language: String?, vocabulary: [String]) async throws {
+        let mine = lock.withLock { generation }
+        try await WhisperEngine.shared.load(model)
+        guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false) else { return }
+        let dictation = WhisperDictation(model: model, language: language, prompt: vocabulary.joined(separator: ", ")) { [weak self] text in
+            let cb = self?.onText
+            DispatchQueue.main.async { cb?(text) }
+        }
+        let current = lock.withLock {
+            guard generation == mine else { return false }
+            whisper = dictation
+            analyzerFormat = format
+            for buffer in waiting { feed(buffer) }
+            waiting = []
+            streaming = true
+            return true
+        }
+        if current { dictation.startPartials() }
+    }
+
     /// The level on Windows' meter scale (`sqrt(rms) · 1.8`), used for the speech guard's peak.
     static func speechLevel(rms: Float) -> Float { min(1, rms.squareRoot() * 1.8) }
 
@@ -243,7 +270,7 @@ public final class LiveTranscriber: @unchecked Sendable {
 
     /// Hand one buffer to the recognizer (called with the lock held).
     private func feed(_ buffer: AVAudioPCMBuffer) {
-        guard let format = analyzerFormat, buffer.format != format else { input?.yield(AnalyzerInput(buffer: buffer)); return }
+        guard let format = analyzerFormat, buffer.format != format else { deliver(buffer); return }
         if converter?.inputFormat != buffer.format { converter = AVAudioConverter(from: buffer.format, to: format) }
         guard let converter else { return }
         let capacity = AVAudioFrameCount(Double(buffer.frameLength) * format.sampleRate / buffer.format.sampleRate) + 1
@@ -256,7 +283,12 @@ public final class LiveTranscriber: @unchecked Sendable {
             status.pointee = .haveData
             return buffer
         }
-        if error == nil, out.frameLength > 0 { input?.yield(AnalyzerInput(buffer: out)) }
+        if error == nil, out.frameLength > 0 { deliver(out) }
+    }
+
+    /// A buffer in the recognizer's format, to Apple's analyzer or to Whisper (called with the lock held).
+    private func deliver(_ buffer: AVAudioPCMBuffer) {
+        if let whisper { whisper.append(buffer) } else { input?.yield(AnalyzerInput(buffer: buffer)) }
     }
 
     /// Stop listening now (the recognizer may still be getting ready; `stop()` then collects the transcript).
@@ -267,9 +299,14 @@ public final class LiveTranscriber: @unchecked Sendable {
     /// this waits (after a `cancel`) is left alone.
     @MainActor public func stop() async -> String {
         stopAudio()
-        let (mine, analyzer, results) = lock.withLock {
+        let (mine, analyzer, results, whisper) = lock.withLock {
             input?.finish()
-            return (generation, self.analyzer, resultsTask)
+            return (generation, self.analyzer, resultsTask, self.whisper)
+        }
+        if let whisper {
+            let text = await whisper.finish()
+            lock.withLock { if generation == mine { clear() } }
+            return text
         }
         try? await analyzer?.finalizeAndFinishThroughEndOfInput()
         _ = try? await results?.value
@@ -283,16 +320,41 @@ public final class LiveTranscriber: @unchecked Sendable {
     /// Throw the recording away, at once: a recording started right after it is not touched.
     @MainActor public func cancel() {
         stopAudio()
-        let (analyzer, results) = lock.withLock {
+        let (analyzer, results, whisper) = lock.withLock {
             input?.finish()
             defer { clear() }
-            return (self.analyzer, resultsTask)
+            return (self.analyzer, resultsTask, self.whisper)
         }
+        whisper?.cancel()
         results?.cancel()
         if let analyzer { Task { await analyzer.cancelAndFinishNow() } }
     }
 
+    #if DEBUG
+    /// Debug: a recording played in place of the microphone, in real time (Windows' DICTATION_FAKE_AUDIO).
+    nonisolated(unsafe) public static var fakeAudio: URL?
+    private var fakeTask: Task<Void, Never>?
+
+    @MainActor private func playFake(_ url: URL, evenOut: Bool) throws {
+        let file = try AVAudioFile(forReading: url, commonFormat: .pcmFormatFloat32, interleaved: false)
+        let leveller = evenOut ? VolumeLeveller(sampleRate: file.processingFormat.sampleRate) : nil
+        lock.withLock { self.leveller = leveller }
+        fakeTask = Task.detached { [weak self] in
+            while !Task.isCancelled {
+                guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 4096),
+                      (try? file.read(into: buffer, frameCount: 4096)) != nil, buffer.frameLength > 0 else { return }
+                self?.capture(buffer)
+                try? await Task.sleep(for: .seconds(Double(buffer.frameLength) / file.processingFormat.sampleRate))
+            }
+        }
+    }
+    #endif
+
     @MainActor private func stopAudio() {
+        #if DEBUG
+        fakeTask?.cancel()
+        fakeTask = nil
+        #endif
         if engine.isRunning { engine.stop() }
         engine.inputNode.removeTap(onBus: 0)
         #if os(iOS)
@@ -308,6 +370,7 @@ public final class LiveTranscriber: @unchecked Sendable {
     private func clear() {
         generation += 1
         analyzer = nil
+        whisper = nil
         input = nil
         resultsTask = nil
         converter = nil
@@ -315,4 +378,63 @@ public final class LiveTranscriber: @unchecked Sendable {
         streaming = false
         leveller = nil
     }
+}
+
+/// One dictation's audio for Whisper: kept whole for the final pass at the end, with the running transcript of the last
+/// 28 s refreshed about once a second meanwhile.
+final class WhisperDictation: @unchecked Sendable {
+    static let partialEvery = 1.0
+    static let partialWindow = 28 * 16_000
+
+    private let model: String, language: String?, prompt: String
+    private let onText: (String) -> Void
+    private let lock = NSLock()
+    private var samples: [Float] = []
+    private var latest = ""
+    private var partials: Task<Void, Never>?
+
+    init(model: String, language: String?, prompt: String, onText: @escaping (String) -> Void) {
+        self.model = model; self.language = language; self.prompt = prompt; self.onText = onText
+    }
+
+    /// 16 kHz mono float audio (the audio thread).
+    func append(_ buffer: AVAudioPCMBuffer) {
+        guard let data = buffer.floatChannelData?[0] else { return }
+        let chunk = UnsafeBufferPointer(start: data, count: Int(buffer.frameLength))
+        lock.withLock { samples.append(contentsOf: chunk) }
+    }
+
+    func startPartials() {
+        partials = Task { [weak self] in
+            var last = 0
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(250))
+                guard let self, !Task.isCancelled else { return }
+                let (count, tail) = self.lock.withLock { (self.samples.count, Array(self.samples.suffix(Self.partialWindow))) }
+                guard count - last >= Int(16_000 * Self.partialEvery), count >= 16_000 * 6 / 10 else { continue }
+                last = count
+                guard let text = try? await WhisperEngine.shared.text(tail, model: self.model, language: self.language, prompt: self.prompt, quick: true),
+                      !Task.isCancelled else { continue }
+                self.lock.withLock { self.latest = text }
+                self.onText(text)
+            }
+        }
+    }
+
+    /// The whole recording's transcript (a full pass; the running transcript if that fails).
+    func finish() async -> String {
+        partials?.cancel()
+        await partials?.value
+        let (all, latest) = lock.withLock { (samples, self.latest) }
+        do {
+            let text = try await WhisperEngine.shared.text(all, model: model, language: language, prompt: prompt)
+            onText(text)
+            return text
+        } catch {
+            NSLog("Whisper: the final pass failed (%@); keeping the running transcript", error.localizedDescription)
+            return latest
+        }
+    }
+
+    func cancel() { partials?.cancel() }
 }

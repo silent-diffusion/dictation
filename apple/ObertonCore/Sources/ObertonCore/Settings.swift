@@ -94,8 +94,11 @@ public struct AppSettings: Codable, Sendable, Equatable {
     /// A local Ollama server, optional (Ollama's own default port; the Windows app's private 11435 is its bundled copy).
     public var ollamaEndpoint = "http://127.0.0.1:11434"
     public var aiTimeoutSeconds = 60.0
-    /// Speech recognition language (BCP 47, e.g. "en-US").
+    /// Speech recognition language (BCP 47, e.g. "en-US"). Empty: Whisper detects it (Apple Speech then uses the
+    /// system's language).
     public var language = "en-US"
+    /// The speech model: "" for Apple Speech, otherwise a Whisper model's id (`WhisperModels`, Windows' `Asr.Model`).
+    public var speechModel = ""
     /// Names and jargon to bias recognition, e.g. "Kubernetes, Dr. Nguyen".
     public var vocabularyHint = ""
     public var activeProfileID: String?
@@ -195,7 +198,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
         take(.hotkey, &hotkey); take(.cycleProfileHotkey, &cycleProfileHotkey); take(.speakHotkey, &speakHotkey)
         take(.notesMarkerHotkey, &notesMarkerHotkey); take(.notesSource, &notesSource); take(.notesModel, &notesModel)
         take(.defaultModel, &defaultModel); take(.ollamaEndpoint, &ollamaEndpoint); take(.aiTimeoutSeconds, &aiTimeoutSeconds)
-        take(.language, &language); take(.vocabularyHint, &vocabularyHint); take(.activeProfileID, &activeProfileID)
+        take(.language, &language); take(.speechModel, &speechModel); take(.vocabularyHint, &vocabularyHint); take(.activeProfileID, &activeProfileID)
         take(.showOverlay, &showOverlay); take(.overlayPosition, &overlayPosition); take(.overlayOpacity, &overlayOpacity)
         take(.ttsVoice, &ttsVoice); take(.ttsBaseSpeed, &ttsBaseSpeed); take(.restoreClipboard, &restoreClipboard)
         take(.keepHistory, &keepHistory); take(.historyLimit, &historyLimit); take(.historyByApp, &historyByApp); take(.keepWordTally, &keepWordTally); take(.maxRecordingSeconds, &maxRecordingSeconds)
@@ -214,6 +217,19 @@ public struct AppSettings: Codable, Sendable, Equatable {
         if let raw = try? c.decode([String: String].self, forKey: .appOverrides) {
             appOverrides = raw.compactMapValues(InsertionMode.init(rawValue:))
         }
+    }
+}
+
+extension AppSettings {
+    /// The Whisper model dictation and Extended Notes use, or nil for Apple Speech.
+    public var whisperModel: String? { speechModel.isEmpty ? nil : speechModel }
+    /// The language for Apple Speech: the setting, or the system's when it is empty (auto-detect is Whisper's).
+    public var speechLocale: Locale { Locale(identifier: language.isEmpty ? Locale.current.identifier : language) }
+    /// The language to tell Whisper (nil = detect it).
+    public var whisperLanguage: String? { WhisperModels.language(for: language, model: speechModel) }
+    /// The vocabulary hint's words.
+    public var vocabulary: [String] {
+        vocabularyHint.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     }
 }
 

@@ -152,6 +152,10 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
             StressTest.run(model, rounds: Int(rounds) ?? 30)
             return
         }
+        if let id = ProcessInfo.processInfo.environment["OBERTON_WHISPER_CHECK"] {
+            WhisperCheck.run(model, id: id)
+            return
+        }
         #endif
         model.platform = platform
         overlay = OverlayController(model: model)

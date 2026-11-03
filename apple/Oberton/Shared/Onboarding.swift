@@ -164,7 +164,7 @@ struct OnboardingView: View {
 
     @State private var speechReady = false
 
-    private var languageName: String { Locale.current.localizedString(forIdentifier: model.settings.language) ?? model.settings.language }
+    private var languageName: String { Locale.current.localizedString(forIdentifier: model.settings.speechLocale.identifier) ?? model.settings.language }
 
     private func begin(_ n: Int, _ title: String, _ text: String = "") {
         step = n
@@ -189,7 +189,7 @@ struct OnboardingView: View {
         n += 1
         begin(n, "Speech model", "Checking \(languageName)…")
         do {
-            let downloaded = try await LiveTranscriber.download(locale: Locale(identifier: model.settings.language)) { f in
+            let downloaded = try await LiveTranscriber.download(locale: model.settings.speechLocale) { f in
                 fraction = f
                 if let f, f < 1 { detail = "Downloading the \(languageName) speech model  (\(Int(f * 100))%)" }
             }
@@ -274,7 +274,8 @@ private struct StepMark: View {
 }
 
 /// A flat bar: ink fill on a hairline track; nil = still waiting (a short slice that slides).
-private struct ProgressBar: View {
+/// A thin bar: the fraction done, or a sliding piece while it is unknown (setup, model downloads).
+struct ProgressBar: View {
     var fraction: Double?
     @Environment(\.ob) private var ob
     var body: some View {
