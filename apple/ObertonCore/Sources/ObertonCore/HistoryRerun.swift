@@ -40,7 +40,7 @@ public enum HistoryRerun {
             final = result.text
             if result.modified { aiEdit = result.text }
             safetyNet = result.safetyNet
-            warning = result.warning.map { result.safetyNet ? $0 : $0.replacingOccurrences(of: " Your original words were inserted.", with: "") + " The transcription was kept as heard." }
+            warning = result.error.map { $0 + " The transcription was kept as heard." } ?? result.warning
         }
         try Task.checkCancellation()
 

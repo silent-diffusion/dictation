@@ -27,7 +27,7 @@ public struct TextProcessor: Sendable {
     func checkOffline(_ id: ModelID) throws {
         if settings.cloud.keepOffline && id.isOllamaCloud {
             throw UserFacingError("\(id.name) runs on ollama.com, but \"Keep everything offline\" is on. " +
-                                  "Turn it off in Settings › Cloud AI, or pick a model that runs on this device.")
+                                  "Turn it off under Settings › Cloud AI, or pick a model that runs on this Mac.")
         }
     }
 
@@ -44,59 +44,66 @@ public struct TextProcessor: Sendable {
                                  timeout: max(10, settings.aiTimeoutSeconds), keepAlive: settings.ollamaKeepAlive)
         case .anthropic, .openai:
             if settings.cloud.keepOffline {
-                throw UserFacingError("\(id.displayName) is a cloud model, but \"Keep everything offline\" is on. " +
-                                      "Turn it off in Settings › Cloud AI, or pick a model that runs on this device.")
+                throw UserFacingError("This profile uses a cloud model, but \"Keep everything offline\" is on. " +
+                                      "Turn it off under Settings › Cloud AI, or pick a local model.")
             }
             guard let key = KeyStore.get(id.provider) else {
-                throw UserFacingError("No API key is set for \(id.provider == .anthropic ? "Anthropic" : "OpenAI"). Add one in Settings › Cloud AI.")
+                throw UserFacingError("No API key is set for \(id.provider == .anthropic ? "Anthropic" : "OpenAI"). Add one under Settings › Cloud AI.")
             }
-            return CloudBackend(id: id, apiKey: key, openAIBaseURL: settings.cloud.openAIBaseURL, timeout: settings.aiTimeoutSeconds)
+            return CloudBackend(id: id, apiKey: key, openAIBaseURL: settings.cloud.openAIBaseURL, timeout: max(10, settings.aiTimeoutSeconds))
         }
     }
 
+    /// A dictation's AI edit. The AI failing (not running, no key, offline, …) never loses the words: they go in as
+    /// spoken, with the reason in `error` and the notice in `warning` (Windows' DictationController catch).
     public func process(_ raw: String, profile: Profile) async -> ProcessResult {
         let raw = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if raw.isEmpty || profile.isRaw { return ProcessResult(text: raw, modified: false) }
-        let backend: LanguageModelBackend
-        do { backend = try await self.backend(for: model(for: profile), ask: false) } catch {
-            return ProcessResult(text: raw, modified: false, warning: error.localizedDescription + " Your original words were inserted.")
+        let id = model(for: profile)
+        do {
+            return try await edit(raw, profile: profile, backend: try await backend(for: id, ask: false), cloud: id.isCloud)
+        } catch {
+            return Self.failed(raw, error)
         }
-        return await process(raw, profile: profile, backend: backend)
     }
 
-    /// The work itself, with the back end given (tests pass a fake).
-    public func process(_ raw: String, profile: Profile, backend: LanguageModelBackend) async -> ProcessResult {
+    /// The work itself, with the back end given (tests pass a fake). Errors come back as in `process(_:profile:)`.
+    public func process(_ raw: String, profile: Profile, backend: LanguageModelBackend, cloud: Bool = false) async -> ProcessResult {
+        do { return try await edit(raw, profile: profile, backend: backend, cloud: cloud) } catch { return Self.failed(raw, error) }
+    }
+
+    static func failed(_ raw: String, _ error: Error) -> ProcessResult {
+        if error is CancellationError { return ProcessResult(text: raw, modified: false) }
+        let message = error.localizedDescription
+        return ProcessResult(text: raw, modified: false, warning: message + " Inserting your original words.", error: message)
+    }
+
+    /// Windows' OllamaTextProcessor.ProcessAsync: an AI error anywhere throws, so the whole dictation falls back.
+    /// Token budgets as Windows: a local model gets min(4096, n/2 + 256), a cloud one min(8192, n/2 + 512).
+    func edit(_ raw: String, profile: Profile, backend: LanguageModelBackend, cloud: Bool) async throws -> ProcessResult {
+        func budget(_ text: String) -> Int { cloud ? min(8192, text.count / 2 + 512) : min(4096, text.count / 2 + 256) }
         let system = PromptBuilder.systemPrompt(for: profile)
         if profile.rewriteWhole {
             // No conservative-edit examples: they would pull the model towards keeping the wording.
-            do {
-                let text = OutputSanitizer.clean(try await backend.complete(system: system, examples: [], user: PromptBuilder.wrap(raw),
-                                                                            maxTokens: min(4096, raw.count / 2 + 512)), input: raw)
-                if OutputSanitizer.rewriteImplausibility(input: raw, output: text) == nil { return ProcessResult(text: text, modified: true) }
-                return ProcessResult(text: raw, modified: false,
-                                     warning: "The AI's rewrite failed the safety net, so your original words were inserted unchanged.", safetyNet: true)
-            } catch {
-                return ProcessResult(text: raw, modified: false, warning: error.localizedDescription + " Your original words were inserted.")
-            }
+            let text = OutputSanitizer.clean(try await backend.complete(system: system, examples: [], user: PromptBuilder.wrap(raw),
+                                                                        maxTokens: budget(raw)), input: raw)
+            if OutputSanitizer.rewriteImplausibility(input: raw, output: text) == nil { return ProcessResult(text: text, modified: true) }
+            return ProcessResult(text: raw, modified: false,
+                                 warning: "The AI's rewrite failed the safety net, so your original words were inserted unchanged.", safetyNet: true)
         }
 
         let examples = PromptBuilder.examples.map { (input: PromptBuilder.wrap($0.input), output: $0.output) }
         let segments = TextChunker.segment(raw)
         var output: [String] = []
         var rejected = 0
-        var lastError: Error?
         for segment in segments {
-            do {
-                let reply = try await backend.complete(system: system, examples: examples, user: PromptBuilder.wrap(segment.text),
-                                                       maxTokens: min(4096, segment.text.count / 2 + 256))
-                let cleaned = OutputSanitizer.clean(reply, input: segment.text)
-                if OutputSanitizer.implausibility(input: segment.text, output: cleaned, maxChange: profile.maxChangeRatio) == nil {
-                    output.append(cleaned)
-                    continue
-                }
-            } catch {
-                if error is CancellationError { return ProcessResult(text: raw, modified: false) }
-                lastError = error
+            try Task.checkCancellation()
+            let reply = try await backend.complete(system: system, examples: examples, user: PromptBuilder.wrap(segment.text),
+                                                   maxTokens: budget(segment.text))
+            let cleaned = OutputSanitizer.clean(reply, input: segment.text)
+            if OutputSanitizer.implausibility(input: segment.text, output: cleaned, maxChange: profile.maxChangeRatio) == nil {
+                output.append(cleaned)
+                continue
             }
             // The safety net works per segment: only the piece the model mangled falls back to the raw words.
             output.append(segment.text)
@@ -105,7 +112,6 @@ public struct TextProcessor: Sendable {
         let text = TextChunker.join(segments, output)
         if rejected == 0 { return ProcessResult(text: text, modified: true) }
         if rejected == segments.count {
-            if let lastError { return ProcessResult(text: raw, modified: false, warning: lastError.localizedDescription + " Your original words were inserted.") }
             return ProcessResult(text: raw, modified: false,
                                  warning: "The AI's edit failed the safety net, so your original words were inserted unchanged.", safetyNet: true)
         }

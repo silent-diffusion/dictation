@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Security
 
 /// Where the dictation overlay sits. Row by row, left to right, as on Windows.
@@ -271,10 +272,21 @@ public enum AppPaths {
 public struct JSONFile<T: Codable> {
     public let url: URL
     public init(_ name: String) { url = AppPaths.dataDir.appending(path: name) }
+    public init(url: URL) { self.url = url }
 
+    /// The value, or nil when the file is missing or can't be read. An unreadable file is kept as "<name>.bad" and
+    /// logged (as Windows' JsonStore), so the defaults that replace it never cost the user what was in it.
     public func load() -> T? {
         guard let data = try? Data(contentsOf: url) else { return nil }
-        return try? JSONDecoder().decode(T.self, from: data)
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .iso8601 // as `save` writes them
+        do { return try dec.decode(T.self, from: data) } catch {
+            let bad = url.appendingPathExtension("bad")
+            try? FileManager.default.removeItem(at: bad)
+            try? FileManager.default.copyItem(at: url, to: bad)
+            CoreLog.error("Could not read \(url.lastPathComponent); keeping a .bad copy (\(error))")
+            return nil
+        }
     }
 
     public func save(_ value: T) {
@@ -302,9 +314,10 @@ public enum KeyStore {
         let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
                                 kSecAttrAccount as String: provider.rawValue]
         SecItemDelete(q as CFDictionary)
-        guard let key, !key.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        // As Windows' SecretStore.Protect: trimmed of spaces and line breaks (a pasted key often ends in one), blank = none.
+        guard let key = key?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty else { return }
         var add = q
-        add[kSecValueData as String] = Data(key.trimmingCharacters(in: .whitespaces).utf8)
+        add[kSecValueData as String] = Data(key.utf8)
         add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         SecItemAdd(add as CFDictionary, nil)
     }

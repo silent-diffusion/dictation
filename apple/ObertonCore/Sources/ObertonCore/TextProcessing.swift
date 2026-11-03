@@ -7,12 +7,15 @@ public struct ProcessResult: Sendable, Equatable {
     public var warning: String?
     /// True when the model's output was rejected as implausible and the raw text was kept.
     public var safetyNet: Bool
+    /// The AI couldn't run or failed (Windows' UserFacingException), in words for the user; the text is the raw one.
+    public var error: String?
 
-    public init(text: String, modified: Bool, warning: String? = nil, safetyNet: Bool = false) {
+    public init(text: String, modified: Bool, warning: String? = nil, safetyNet: Bool = false, error: String? = nil) {
         self.text = text
         self.modified = modified
         self.warning = warning
         self.safetyNet = safetyNet
+        self.error = error
     }
 }
 

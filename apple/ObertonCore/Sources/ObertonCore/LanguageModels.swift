@@ -29,11 +29,15 @@ public struct ModelID: Hashable, Sendable, Codable, CustomStringConvertible {
     }
 
     public init?(_ raw: String) {
-        guard let colon = raw.firstIndex(of: ":"), let p = Provider(rawValue: String(raw[..<colon])) else { return nil }
+        // The provider in any case, as Windows' CloudModels.Split ("OpenAI:gpt-4.1-mini").
+        guard let colon = raw.firstIndex(of: ":"), let p = Provider(rawValue: String(raw[..<colon]).lowercased()) else { return nil }
         self.init(provider: p, name: String(raw[raw.index(after: colon)...]))
     }
 
     public var description: String { "\(provider.rawValue):\(name)" }
+
+    /// Anthropic or OpenAI(-compatible): the text goes to that service with the user's key.
+    public var isCloud: Bool { provider == .anthropic || provider == .openai }
 
     /// Runs on this device (or on this Mac, for Ollama), so it is allowed while "Keep everything offline" is on.
     public var isLocal: Bool { provider == .apple || (provider == .ollama && !isOllamaCloud) }
@@ -159,10 +163,18 @@ public struct OllamaBackend: LanguageModelBackend {
     }
 
     public static func validated(_ s: String) throws -> URL {
-        guard let url = URL(string: s), let host = url.host(), ["127.0.0.1", "localhost", "::1"].contains(host) else {
+        guard let url = URL(string: s), isLoopback(url) else {
             throw UserFacingError("The Ollama address must be on this Mac (http://127.0.0.1:11434).")
         }
         return url
+    }
+
+    /// An address on this device (Windows' `Uri.IsLoopback`): localhost, 127.x.x.x or ::1.
+    public static func isLoopback(_ url: URL) -> Bool {
+        guard let host = url.host(percentEncoded: false)?.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]")) else { return false }
+        if host == "localhost" || host == "::1" { return true }
+        let parts = host.split(separator: ".", omittingEmptySubsequences: false)
+        return parts.count == 4 && parts[0] == "127" && parts.allSatisfy { UInt8($0) != nil }
     }
 
     public func complete(system: String, examples: [(input: String, output: String)], user: String, maxTokens: Int) async throws -> String {
@@ -183,15 +195,23 @@ public struct OllamaBackend: LanguageModelBackend {
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, resp): (Data, URLResponse)
         do { (data, resp) = try await URLSession.shared.data(for: req) } catch let e as URLError {
-            throw UserFacingError(e.code == .timedOut ? "The AI model took too long to respond."
-                : "Couldn't reach Ollama. Is it running? Get it from ollama.com, then: ollama pull \(model)")
+            switch e.code {
+            case .timedOut: throw UserFacingError("The AI model took too long to respond.")
+            // Windows checks first that the runtime answers at all.
+            case .cannotConnectToHost: throw UserFacingError(Self.notRunning)
+            default: throw UserFacingError("Couldn't reach the local AI runtime.")
+            }
         }
         let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
         if status == 404 { throw UserFacingError("The AI model '\(model)' isn't installed. Install it with:  ollama pull \(model)") }
-        guard (200..<300).contains(status) else { throw UserFacingError("Ollama returned an error (\(status)).") }
+        guard (200..<300).contains(status) else { throw UserFacingError("Couldn't reach the local AI runtime.") }
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         return (json?["message"] as? [String: Any])?["content"] as? String ?? ""
     }
+
+    /// Windows' "The local AI runtime (Ollama) isn't running. Run scripts\\setup.ps1, or start Ollama and check the
+    /// endpoint under Settings > AI Models.", with the Mac's way to get it.
+    public static let notRunning = "The local AI runtime (Ollama) isn't running. Start Ollama (or install it under Settings › Models), and check the endpoint under Settings › Models."
 
     /// Load the model into memory without generating anything (an empty chat request), so the first dictation doesn't
     /// wait for it. Returns whether Ollama answered.
@@ -412,8 +432,9 @@ public struct CloudBackend: LanguageModelBackend {
         case .openai:
             label = "OpenAI"
             // The key and the text go to this address: over TLS, unless it is a server on this Mac.
-            guard let base = URL(string: openAIBaseURL), base.scheme == "https" || ["127.0.0.1", "localhost"].contains(base.host() ?? "") else {
-                throw UserFacingError("The OpenAI-compatible address must start with https:// (http:// only for a server on this Mac).")
+            guard let base = URL(string: openAIBaseURL), base.scheme == "https" || OllamaBackend.isLoopback(base) else {
+                throw UserFacingError("The OpenAI-compatible address must start with https:// (http:// only for a server on this Mac). " +
+                                      "Check it under Settings › Cloud AI.")
             }
             req = URLRequest(url: base.appending(path: "chat/completions"), timeoutInterval: timeout)
             req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
@@ -436,11 +457,12 @@ public struct CloudBackend: LanguageModelBackend {
         let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
         let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         guard (200..<300).contains(status) else {
-            if status == 401 || status == 403 { throw UserFacingError("\(label) rejected the API key. Check it in Settings › Cloud AI.") }
+            if status == 401 || status == 403 { throw UserFacingError("\(label) rejected the API key. Check it under Settings › Cloud AI.") }
             var detail = ((json?["error"] as? [String: Any])?["message"] as? String) ?? String(decoding: data, as: UTF8.self)
             if detail.count > 200 { detail = String(detail.prefix(200)) + "…" }
             throw UserFacingError("\(label) returned an error: \(detail)")
         }
+        guard json != nil else { throw UserFacingError("\(label) sent an empty reply.") }
         if id.provider == .anthropic {
             let blocks = json?["content"] as? [[String: Any]] ?? []
             return blocks.filter { $0["type"] as? String == "text" }.compactMap { $0["text"] as? String }.joined()
