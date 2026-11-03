@@ -526,6 +526,7 @@ final class NotesRecorder: ObservableObject {
         redoProgress = "reading the recording"
         let st = settings()
         if let whisper = st.whisperModel {
+            redoProgress = WhisperEngine.loadedModel == whisper ? "0%" : "loading \(WhisperModels.name(of: whisper))"
             let pieces = try await WhisperAudio.transcribe(url, model: whisper, language: st.whisperLanguage,
                                                            prompt: st.vocabulary.joined(separator: ", ")) { fraction in
                 await MainActor.run { self.redoProgress = "\(Int(min(99, fraction * 100)))%" }

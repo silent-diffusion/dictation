@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreML
 import Foundation
 import WhisperKit
 
@@ -14,6 +15,12 @@ public struct WhisperModel: Identifiable, Sendable, Equatable {
     /// The tokenizer it uses (downloaded with it, so loading never needs the internet).
     let tokenizer: ModelVariant
 
+    /// Where its audio encoder runs. The Neural Engine is quickest for the small models, but CoreML has to compile a
+    /// model for it once, and for a large encoder that took more than 50 minutes on an M-series Mac (with the model running on
+    /// the CPU meanwhile, minutes per sentence). The large encoders run on the GPU instead; every decoder runs on the
+    /// Neural Engine. Measured on Apple M6 (24 s of speech): base.en 0.8 s, small.en 1.2 s, large-v3 turbo 4.3 s.
+    let encoderCompute: MLComputeUnits
+
     /// Hears only English: the language setting doesn't apply.
     public var englishOnly: Bool { id.hasSuffix(".en") || id.hasPrefix("distil") }
 }
@@ -23,18 +30,18 @@ public enum WhisperModels {
     /// Windows' list and wording; the GPU notes are for Apple's chips (CoreML runs these on the Neural Engine and GPU).
     public static let all: [WhisperModel] = [
         WhisperModel(id: "large-v3-turbo", name: "Whisper large-v3 turbo",
-                     description: "The best balance: nearly the accuracy of large-v3, several times faster.", size: "1.6 GB",
-                     variant: "openai_whisper-large-v3-v20240930_turbo", tokenizer: .largev3),
-        WhisperModel(id: "large-v3", name: "Whisper large-v3", description: "The most accurate, and the slowest.", size: "3 GB",
-                     variant: "openai_whisper-large-v3", tokenizer: .largev3),
-        WhisperModel(id: "distil-large-v3", name: "Distil-Whisper large-v3", description: "English only. Fast and accurate.", size: "1.5 GB",
-                     variant: "distil-whisper_distil-large-v3", tokenizer: .largev3),
+                     description: "Nearly the accuracy of large-v3, several times faster, in any language. A few seconds after you stop.", size: "1.6 GB",
+                     variant: "openai_whisper-large-v3-v20240930_turbo", tokenizer: .largev3, encoderCompute: .cpuAndGPU),
+        WhisperModel(id: "large-v3", name: "Whisper large-v3", description: "The most accurate, and the slowest; any language.", size: "3 GB",
+                     variant: "openai_whisper-large-v3", tokenizer: .largev3, encoderCompute: .cpuAndGPU),
+        WhisperModel(id: "distil-large-v3", name: "Distil-Whisper large-v3", description: "English only. Fast and accurate: the quickest pick on a Mac, near-instant.", size: "1.5 GB",
+                     variant: "distil-whisper_distil-large-v3", tokenizer: .largev3, encoderCompute: .cpuAndGPU),
         WhisperModel(id: "medium.en", name: "Whisper medium (English)", description: "Good accuracy; slower to load and to run.", size: "1.5 GB",
-                     variant: "openai_whisper-medium.en", tokenizer: .mediumEn),
-        WhisperModel(id: "small.en", name: "Whisper small (English)", description: "The pick for an iPhone or an older Mac.", size: "470 MB",
-                     variant: "openai_whisper-small.en", tokenizer: .smallEn),
+                     variant: "openai_whisper-medium.en", tokenizer: .mediumEn, encoderCompute: .cpuAndGPU),
+        WhisperModel(id: "small.en", name: "Whisper small (English)", description: "Quick everywhere; the pick for an iPhone.", size: "470 MB",
+                     variant: "openai_whisper-small.en", tokenizer: .smallEn, encoderCompute: .cpuAndNeuralEngine),
         WhisperModel(id: "base.en", name: "Whisper base (English)", description: "Tiny and quick; makes more mistakes.", size: "145 MB",
-                     variant: "openai_whisper-base.en", tokenizer: .baseEn),
+                     variant: "openai_whisper-base.en", tokenizer: .baseEn, encoderCompute: .cpuAndNeuralEngine),
     ]
 
     public static func model(_ id: String) -> WhisperModel? { all.first { $0.id.caseInsensitiveCompare(id) == .orderedSame } }
@@ -48,6 +55,12 @@ public enum WhisperModels {
     static func folder(_ m: WhisperModel) -> URL { baseDir.appending(path: "models/\(repo)/\(m.variant)", directoryHint: .isDirectory) }
     /// Written once the model and its tokenizer are both down, so a cancelled download doesn't count.
     private static func marker(_ m: WhisperModel) -> URL { folder(m).appending(path: ".oberton-complete") }
+
+    /// Loaded once on this device: CoreML has prepared it, so the next load is quick.
+    public static func isPrepared(_ id: String) -> Bool { model(id).map(isPrepared) ?? false }
+    static func isPrepared(_ m: WhisperModel) -> Bool { FileManager.default.fileExists(atPath: prepared(m).path) }
+    static func markPrepared(_ m: WhisperModel) { FileManager.default.createFile(atPath: prepared(m).path, contents: Data()) }
+    private static func prepared(_ m: WhisperModel) -> URL { folder(m).appending(path: ".oberton-prepared") }
 
     public static func isDownloaded(_ id: String) -> Bool {
         guard let m = model(id) else { return false }
@@ -121,6 +134,22 @@ extension WhisperKit: @retroactive @unchecked Sendable {}
 public actor WhisperEngine {
     public static let shared = WhisperEngine()
 
+    /// A model being loaded: since when, and whether it is the first time on this device (CoreML then prepares it for
+    /// the Neural Engine, which takes from a few seconds to minutes for the large models, with nothing to report).
+    public struct Loading: Sendable, Equatable {
+        public let model: String
+        public let since: Date
+        public let firstTime: Bool
+        public init(model: String, since: Date, firstTime: Bool) { self.model = model; self.since = since; self.firstTime = firstTime }
+    }
+
+    nonisolated(unsafe) private static var loadingNow: Loading?
+    /// The load under way, or nil (for the status line, the badges and the pill).
+    public nonisolated static var loadingModel: Loading? { lock.withLock { loadingNow } }
+    /// Called (on any thread) when a load starts or ends, or the model in memory changes.
+    nonisolated(unsafe) public static var onChange: (@Sendable () -> Void)?
+    private static func changed() { onChange?() }
+
     private var kit: WhisperKit?
     private var kitID: String?
     private var loading: Task<WhisperKit, Error>?
@@ -151,20 +180,28 @@ public actor WhisperEngine {
         kit = nil
         kitID = nil
         Self.lock.withLock { Self.loadedID = nil }
-        let folder = WhisperModels.folder(m).path, tokenizers = WhisperModels.baseDir
         let task = Task<WhisperKit, Error> {
             if let old { await old.unloadModels() }
-            let config = WhisperKitConfig(modelFolder: folder, tokenizerFolder: tokenizers, verbose: false, logLevel: .none,
-                                          prewarm: false, load: true, download: false)
-            return try await WhisperKit(config)
+            return try await WhisperKit(Self.config(m, prewarm: false))
         }
         loading = task
         loadingID = id
-        defer { if loadingID == id { loading = nil; loadingID = nil } }
+        Self.lock.withLock { Self.loadingNow = Loading(model: id, since: Date(), firstTime: !WhisperModels.isPrepared(m)) }
+        Self.changed()
+        defer {
+            if loadingID == id {
+                loading = nil; loadingID = nil
+                Self.lock.withLock { Self.loadingNow = nil }
+                Self.changed()
+            }
+        }
         let loaded: WhisperKit
+        let started = Date()
         do { loaded = try await task.value } catch {
             throw UserFacingError("\(m.name) couldn't be loaded (\(error.localizedDescription)).")
         }
+        WhisperModels.markPrepared(m)
+        NSLog("Whisper: loaded %@ in %.1f s", id, Date().timeIntervalSince(started))
         kit = loaded
         kitID = id
         Self.lock.withLock { Self.loadedID = id }
@@ -179,13 +216,40 @@ public actor WhisperEngine {
         if let kit { await kit.unloadModels() }
         kit = nil
         kitID = nil
-        Self.lock.withLock { Self.loadedID = nil }
+        Self.lock.withLock { Self.loadedID = nil; Self.loadingNow = nil }
+        Self.changed()
+    }
+
+    static func config(_ m: WhisperModel, prewarm: Bool) -> WhisperKitConfig {
+        WhisperKitConfig(modelFolder: WhisperModels.folder(m).path, tokenizerFolder: WhisperModels.baseDir,
+                         computeOptions: ModelComputeOptions(audioEncoderCompute: m.encoderCompute, textDecoderCompute: .cpuAndNeuralEngine),
+                         verbose: false, logLevel: .none, prewarm: prewarm, load: !prewarm, download: false)
+    }
+
+    /// Prepare a model for this device without keeping it (right after its download), so choosing it later loads
+    /// in a second or two. Runs beside the model in memory; nothing is let go.
+    public nonisolated static func prepare(_ id: String) async {
+        guard let m = WhisperModels.model(id), WhisperModels.isDownloaded(id), !WhisperModels.isPrepared(m) else { return }
+        lock.withLock { if loadingNow == nil { loadingNow = Loading(model: id, since: Date(), firstTime: true) } }
+        changed()
+        let started = Date()
+        do {
+            let kit = try await WhisperKit(config(m, prewarm: true))
+            await kit.unloadModels()
+            WhisperModels.markPrepared(m)
+            NSLog("Whisper: prepared %@ in %.1f s", id, Date().timeIntervalSince(started))
+        } catch {
+            NSLog("Whisper: preparing %@ failed (%@)", id, error.localizedDescription)
+        }
+        lock.withLock { if loadingNow?.model == id { loadingNow = nil } }
+        changed()
     }
 
     /// Transcribe 16 kHz mono samples. `language` nil = detect it. `prompt`: the vocabulary hint (and, for a piece of
     /// a longer session, the words just before it), so names come out as written there. `quick`: one decoding pass,
     /// for the running transcript while the user speaks.
-    public func transcribe(_ samples: [Float], model id: String, language: String?, prompt: String, quick: Bool = false) async throws -> [WhisperPiece] {
+    public func transcribe(_ samples: [Float], model id: String, language: String?, prompt: String, quick: Bool = false,
+                           onWindow: (@Sendable (Int) -> Void)? = nil) async throws -> [WhisperPiece] {
         let kit = try await kit(for: id)
         guard samples.count >= WhisperKit.sampleRate / 4 else { return [] }
         var promptTokens: [Int]?
@@ -197,7 +261,12 @@ public actor WhisperEngine {
         let options = DecodingOptions(language: language, temperatureFallbackCount: quick ? 0 : 3, usePrefillPrompt: true,
                                       detectLanguage: language == nil, skipSpecialTokens: true, promptTokens: promptTokens,
                                       chunkingStrategy: samples.count > WhisperKit.sampleRate * 30 ? .vad : nil)
-        let results = try await kit.transcribe(audioArray: samples, decodeOptions: options)
+        // A cancelled caller (a running transcript the user stopped speaking over) stops at the next token.
+        let results = try await kit.transcribe(audioArray: samples, decodeOptions: options) { progress in
+            onWindow?(progress.windowId)
+            return Task.isCancelled ? false : nil
+        }
+        try Task.checkCancellation()
         return results.flatMap(\.segments).map {
             WhisperPiece(text: Self.clean($0.text), start: Double($0.start), end: Double($0.end))
         }
@@ -350,8 +419,9 @@ public enum WhisperAudio {
     /// A whole recording transcribed in 5-minute parts (each part's pieces timed from the recording's start), with the
     /// fraction done after each part.
     public static func transcribe(_ url: URL, model: String, language: String?, prompt: String,
-                                  progress: @Sendable (Double) async -> Void = { _ in }) async throws -> [WhisperPiece] {
+                                  progress: @escaping @Sendable (Double) async -> Void = { _ in }) async throws -> [WhisperPiece] {
         let all = try samples(url)
+        try await WhisperEngine.shared.load(model) // first, so the caller's "loading" shows until it is in
         let part = WhisperKit.sampleRate * 300
         var pieces: [WhisperPiece] = []
         var from = 0
@@ -360,7 +430,13 @@ public enum WhisperAudio {
             let to = min(all.count, from + part)
             let offset = Double(from) / Double(WhisperKit.sampleRate)
             let context = pieces.suffix(8).map(\.text).joined(separator: " ")
-            pieces += try await WhisperEngine.shared.transcribe(Array(all[from..<to]), model: model, language: language, prompt: prompt + " " + context)
+            let total = Double(max(1, all.count)), start = Double(from), window = Double(WhisperKit.sampleRate * 30)
+            let report: @Sendable (Int) -> Void = { id in
+                let f = min(Double(to), start + Double(id) * window) / total
+                Task { await progress(f) }
+            }
+            pieces += try await WhisperEngine.shared.transcribe(Array(all[from..<to]), model: model, language: language, prompt: prompt + " " + context,
+                                                               onWindow: report)
                 .map { WhisperPiece(text: $0.text, start: $0.start + offset, end: $0.end + offset) }
             from = to
             await progress(Double(to) / Double(max(1, all.count)))

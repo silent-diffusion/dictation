@@ -104,6 +104,8 @@ final class AppModel: ObservableObject {
     /// unknown), and the last download's problem.
     @Published private(set) var whisperDownload: (id: String, fraction: Double?)?
     @Published var whisperDownloadError: String?
+    /// A Whisper model loading or being prepared now (`WhisperEngine.loadingModel`), for the status line and badges.
+    @Published private(set) var whisperLoad: WhisperEngine.Loading?
     private var whisperDownloadTask: Task<Void, Never>?
     /// The speech engine couldn't start at launch: shown once in the main window, as Windows' message box.
     @Published var startupProblem: String?
@@ -191,6 +193,7 @@ final class AppModel: ObservableObject {
         startProfiles()
         notes.settingsSource = { [weak self] in self?.settings ?? loadedSettings }
         notesChange = notes.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        WhisperEngine.onChange = { [weak self] in Task { @MainActor in self?.whisperChanged() } }
         transcriber.onText = { [weak self] in self?.liveText = $0 }
         transcriber.onLevel = { [weak self] in self?.level = $0 }
         transcriber.onSilence = { [weak self] in
@@ -563,7 +566,7 @@ final class AppModel: ObservableObject {
         let locale = settings.speechLocale, whisper = settings.whisperModel
         warmTask?.cancel()
         warmTask = Task {
-            speechStatus = "Speech: loading the speech model (\(whisper.map(WhisperModels.name(of:)) ?? languageName))…"
+            speechStatus = whisper.map(loadingStatus) ?? "Speech: loading the speech model (\(languageName))…"
             speechOK = false
             do {
                 if let whisper {
@@ -583,6 +586,23 @@ final class AppModel: ObservableObject {
             }
         }
         warmUpAI(activeProfile)
+    }
+
+    /// "Speech: preparing Whisper large-v3 turbo for this Mac…" (first time) or "Speech: loading …".
+    private func loadingStatus(_ id: String) -> String {
+        WhisperModels.isPrepared(id)
+            ? "Speech: loading \(WhisperModels.name(of: id))…"
+            : "Speech: preparing \(WhisperModels.name(of: id)) for this \(Device.noun) (first time only; a large model takes a few minutes)…"
+    }
+
+    /// A Whisper load started or ended: the status line and badges follow it.
+    private func whisperChanged() {
+        whisperLoad = WhisperEngine.loadingModel
+        if let load = whisperLoad, load.model == settings.whisperModel, !phase.isBusy {
+            speechStatus = loadingStatus(load.model)
+            speechOK = false
+        }
+        objectWillChange.send()
     }
 
     private var languageName: String {
@@ -771,6 +791,9 @@ final class AppModel: ObservableObject {
         words = tally
         speechReady() // the Speech recognition page's status line
         whisperDownload = ("small.en", 0.42) // the speech model lists show a download under way
+        whisperLoad = WhisperEngine.Loading(model: "base.en", since: Date().addingTimeInterval(-42), firstTime: true)
+        speechStatus = loadingStatus("base.en")
+        speechOK = false
         seedSnapshotNotes()
         seedSnapshotHistory()
     }
@@ -951,6 +974,8 @@ final class AppModel: ObservableObject {
                     }
                 }
                 Log.info("Downloaded the speech model \(id)")
+                // Prepared for this device now, so choosing it doesn't sit through that.
+                Task.detached { await WhisperEngine.prepare(id) }
             } catch is CancellationError {
             } catch {
                 Log.info("Speech model download failed: \(error.localizedDescription)")

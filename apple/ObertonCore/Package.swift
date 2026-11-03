@@ -11,7 +11,7 @@ let package = Package(
     ],
     targets: [
         .target(name: "ObertonCore", dependencies: [.product(name: "WhisperKit", package: "WhisperKit")]),
-        .testTarget(name: "ObertonCoreTests", dependencies: ["ObertonCore"]),
+        .testTarget(name: "ObertonCoreTests", dependencies: ["ObertonCore", .product(name: "WhisperKit", package: "WhisperKit")]),
     ],
     swiftLanguageModes: [.v5]
 )

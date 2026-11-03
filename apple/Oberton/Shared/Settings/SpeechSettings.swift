@@ -10,6 +10,7 @@ struct SpeechSection: View {
             Caption("Speech is transcribed on this \(Device.noun): by Apple's speech recognizer, which downloads each language once through the system, or by a Whisper model you download here. A change applies at once.")
             Text(model.speechStatus).font(Ob.sans(13.5, .semibold)).foregroundStyle(model.speechOK ? ob.ink : ob.accent)
                 .padding(.top, 8)
+            if let load = model.whisperLoad { LoadClock(load: load).padding(.top, 4) }
             FieldLabel("Model")
             SpeechModelList().frame(maxWidth: 640)
             FieldLabel("Language")
@@ -67,6 +68,7 @@ struct SpeechModelList: View {
         var badges: [(String, Badge.Kind)] = []
         if active { badges.append(("Active", .active)) }
         if active && WhisperEngine.loadedModel == m.id { badges.append(("Loaded", .ok)) }
+        if model.whisperLoad?.model == m.id { badges.append((model.whisperLoad!.firstTime ? "Preparing…" : "Loading…", .cloud)) }
         badges.append(downloaded ? ("Downloaded", .plain) : ("Not downloaded", .outline))
         if !runs && !downloaded { badges.append(("Too big for this \(Device.noun)", .outline)) }
         let action: (String, () -> Void)? =
@@ -75,5 +77,22 @@ struct SpeechModelList: View {
             : active ? nil : ("Use this", { model.useSpeechModel(m.id) })
         return ModelRow(name: m.name, badges: badges, detail: "\(m.description) · \(m.size)", action: action,
                         progress: fetching ? .some(model.whisperDownload?.fraction) : nil)
+    }
+}
+
+/// How long a Whisper model has been loading, so a slow first preparation never looks like nothing is happening.
+struct LoadClock: View {
+    var load: WhisperEngine.Loading
+    @Environment(\.ob) private var ob
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { t in
+            let s = max(0, Int(t.date.timeIntervalSince(load.since)))
+            Text(String(format: "%d:%02d so far", s / 60, s % 60) + (load.firstTime
+                    ? ". CoreML is preparing the model for this \(Device.noun)'s chips; this happens once per model. Dictation records meanwhile and catches up."
+                    : ". Dictation records meanwhile and catches up."))
+                .font(Ob.sans(12.5)).foregroundStyle(ob.muted).fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: 560, alignment: .leading)
     }
 }

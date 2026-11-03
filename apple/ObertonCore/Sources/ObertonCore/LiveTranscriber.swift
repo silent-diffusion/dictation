@@ -407,21 +407,32 @@ final class WhisperDictation: @unchecked Sendable {
     func startPartials() {
         partials = Task { [weak self] in
             var last = 0
+            // A slow model (a large one, or one still being prepared) refreshes less often, and stops refreshing when
+            // a refresh takes longer than the user is likely to wait: the final pass then has the model to itself.
+            var every = Self.partialEvery
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(250))
                 guard let self, !Task.isCancelled else { return }
                 let (count, tail) = self.lock.withLock { (self.samples.count, Array(self.samples.suffix(Self.partialWindow))) }
-                guard count - last >= Int(16_000 * Self.partialEvery), count >= 16_000 * 6 / 10 else { continue }
+                guard count - last >= Int(16_000 * every), count >= 16_000 * 6 / 10 else { continue }
                 last = count
+                let started = Date()
                 guard let text = try? await WhisperEngine.shared.text(tail, model: self.model, language: self.language, prompt: self.prompt, quick: true),
                       !Task.isCancelled else { continue }
+                let took = Date().timeIntervalSince(started)
                 self.lock.withLock { self.latest = text }
                 self.onText(text)
+                if took > Self.slowPartial { NSLog("Whisper: a running transcript took %.1f s; no more until the end", took); return }
+                every = max(Self.partialEvery, took * 2)
             }
         }
     }
 
-    /// The whole recording's transcript (a full pass; the running transcript if that fails).
+    /// A running transcript slower than this ends the running transcripts for this dictation.
+    static let slowPartial = 4.0
+
+    /// The whole recording's transcript (a full pass; the running transcript if that fails). A running transcript
+    /// still being worked out is stopped first, so the final pass doesn't wait for it.
     func finish() async -> String {
         partials?.cancel()
         await partials?.value
