@@ -17,6 +17,25 @@ protocol PlatformServices: AnyObject {
     func clipboardText() -> String?
     /// Ask once for the permissions dictation needs (microphone; on the Mac, Accessibility to paste).
     func requestPermissions() async
+    /// Nothing to type into had the cursor when the dictation started: the text waits for a click (Windows: Placing).
+    var nowhereToPaste: Bool { get }
+    /// Wait for the user to pick somewhere to type, up to `timeout`; true when there is a target now.
+    func waitForPlace(timeout: Duration) async -> Bool
+    /// Put the text on the clipboard (no restore).
+    func copy(_ text: String)
+}
+
+extension PlatformServices {
+    var nowhereToPaste: Bool { false }
+    func waitForPlace(timeout: Duration) async -> Bool { false }
+    func copy(_ text: String) {
+        #if os(macOS)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        #else
+        UIPasteboard.general.string = text
+        #endif
+    }
 }
 
 /// The dictation state machine, shared by the Mac and iPhone apps: Idle → Recording → Transcribing → Processing →
@@ -25,6 +44,8 @@ protocol PlatformServices: AnyObject {
 final class AppModel: ObservableObject {
     enum Phase: Equatable {
         case idle, starting, recording, transcribing, processing, preview, inserting
+        /// Nothing to type into had the cursor: waiting for a click into another app, or COPY TO CLIPBOARD.
+        case placing
         case done(String)
         case failed(String)
 
@@ -43,6 +64,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var startedAt: Date?
     /// The dictation waiting in the preview (profiles with "preview before inserting").
     @Published private(set) var pending: HistoryEntry?
+    /// The text waiting for a place to go while `phase == .placing`.
+    @Published private(set) var placingText: String?
     @Published var ollamaModels: [String] = []
     @Published private(set) var usage: UsageLog
     /// The Analytics word tally (words.json): counts only, never sentences.
@@ -66,6 +89,8 @@ final class AppModel: ObservableObject {
     private var work: Task<Void, Never>?
     private var idleTask: Task<Void, Never>?
     private var noticeTask: Task<Void, Never>?
+    private var placeTask: Task<Void, Never>?
+    private var placingEntry: HistoryEntry?
     private var limitTimer: Timer?
     private var stoppedAt: Date?
     private var notesChange: AnyCancellable?
@@ -135,6 +160,7 @@ final class AppModel: ObservableObject {
         case .idle, .done, .failed: start()
         case .recording: stop()
         case .preview: confirmPreview()
+        case .placing: copyPlacingToClipboard()
         default: break // already working on it; Cancel stops it
         }
     }
@@ -178,6 +204,10 @@ final class AppModel: ObservableObject {
     }
 
     func cancel() {
+        if phase == .placing, let entry = placingEntry {
+            endPlacing()
+            record(entry) // discarded, but kept in History in case
+        }
         limitTimer?.invalidate()
         work?.cancel()
         pending = nil
@@ -216,6 +246,11 @@ final class AppModel: ObservableObject {
     }
 
     private func insert(_ entry: HistoryEntry, readBack voice: String?, readBackRequested: Bool) async {
+        // Nothing had the cursor when the dictation started: ask where it should go instead of pasting into nowhere.
+        if platform?.nowhereToPaste == true {
+            waitForPlace(entry, readBack: voice, readBackRequested: readBackRequested)
+            return
+        }
         phase = .inserting
         do {
             let receipt = try await platform?.insert(entry.inserted) ?? "Done"
@@ -230,6 +265,45 @@ final class AppModel: ObservableObject {
         }
         // The receipt stays 3 s, or 6 s when it has a warning to read (as on Windows).
         scheduleIdle(after: entry.warning == nil ? 3 : 6)
+    }
+
+    // MARK: Nowhere to type: wait for a click, or copy
+
+    private func waitForPlace(_ entry: HistoryEntry, readBack voice: String?, readBackRequested: Bool) {
+        placingEntry = entry
+        placingText = entry.inserted
+        phase = .placing
+        placeTask?.cancel()
+        placeTask = Task {
+            // How long the text waits for a click before it is copied to the clipboard instead (as on Windows).
+            let found = await platform?.waitForPlace(timeout: .seconds(120)) ?? false
+            guard !Task.isCancelled, phase == .placing else { return }
+            if found {
+                endPlacing()
+                await insert(entry, readBack: voice, readBackRequested: readBackRequested)
+            } else {
+                copyPlacingToClipboard(timedOut: true)
+            }
+        }
+    }
+
+    /// Placing: the overlay's Copy button or the hotkey (or the wait ran out): the text goes to the clipboard.
+    func copyPlacingToClipboard(timedOut: Bool = false) {
+        guard phase == .placing, let entry = placingEntry else { return }
+        endPlacing()
+        platform?.copy(entry.inserted)
+        record(entry)
+        receipt = nil
+        phase = .done(timedOut ? "No place to paste was chosen, so the text was copied to your clipboard."
+                                : "Copied to your clipboard. Paste it wherever you like.")
+        scheduleIdle(after: 6)
+    }
+
+    private func endPlacing() {
+        placeTask?.cancel()
+        placeTask = nil
+        placingEntry = nil
+        placingText = nil
     }
 
     private func fail(_ error: Error) {
@@ -491,6 +565,7 @@ extension AppModel.Phase {
         case .processing: "Tidying up…"
         case .preview: "Preview"
         case .inserting: "Inserting…"
+        case .placing: "No place to paste"
         case .done(let s): s
         case .failed(let s): s
         }

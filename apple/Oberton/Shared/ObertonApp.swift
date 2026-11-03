@@ -159,7 +159,8 @@ enum Snapshots {
         let pages: [(String, Place)] = [
             ("dashboard", Place()), ("profiles", Place(section: .speechToText)), ("readaloud", Place(section: .readAloud)),
             ("history", Place(section: .history)), ("analytics", Place(section: .analytics)),
-            ("settings-appearance", Place(section: .settings, settings: .appearance)), ("settings-history", Place(section: .settings, settings: .history)),
+            ("settings-general", Place(section: .settings, settings: .general)),
+            ("settings-appearance", Place(section: .settings, settings: .appearance)),("settings-history", Place(section: .settings, settings: .history)),
             ("settings-models", Place(section: .settings, settings: .models)), ("settings-layout", Place(section: .settings, settings: .layout)),
             ("settings-about", Place(section: .settings, settings: .about)), ("settings-hotkeys", Place(section: .settings, settings: .hotkeys)),
             ("notes", Place(section: .notes)), ("notes-session", Place(section: .notes, noteSessionID: "20261102-1015")),
