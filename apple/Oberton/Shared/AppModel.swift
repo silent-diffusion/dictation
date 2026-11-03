@@ -47,6 +47,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var words: WordTally
     /// The last dictation that went in, for the overlay's receipt (shown when the pill is clicked).
     @Published var receipt: HistoryEntry?
+    /// The cycle-profile hotkey was just pressed: the overlay shows which profile is on now, for 1.5 s.
+    @Published private(set) var profileNotice = false
 
     let reader = ReadAloudPlayer()
     weak var platform: PlatformServices?
@@ -58,6 +60,8 @@ final class AppModel: ObservableObject {
     private let wordsFile = JSONFile<WordTally>("words.json")
     private let transcriber = LiveTranscriber()
     private var work: Task<Void, Never>?
+    private var idleTask: Task<Void, Never>?
+    private var noticeTask: Task<Void, Never>?
     private var limitTimer: Timer?
     private var stoppedAt: Date?
 
@@ -220,15 +224,26 @@ final class AppModel: ObservableObject {
 
     private func scheduleIdle(after seconds: Double = 2.5) {
         let current = phase
-        Task {
+        idleTask?.cancel()
+        idleTask = Task {
             try? await Task.sleep(for: .seconds(seconds))
-            if phase == current { phase = .idle }
+            if !Task.isCancelled, phase == current { phase = .idle }
         }
     }
 
     func cycleProfile() {
         guard let i = profiles.firstIndex(where: { $0.id == activeProfile.id }), !profiles.isEmpty else { return }
         activeProfile = profiles[(i + 1) % profiles.count]
+        // Mid-dictation the pill's chip already shows the profile; otherwise the notice takes the pill's place.
+        guard !phase.isBusy else { return }
+        idleTask?.cancel()
+        phase = .idle
+        profileNotice = true
+        noticeTask?.cancel()
+        noticeTask = Task {
+            try? await Task.sleep(for: .seconds(1.5))
+            if !Task.isCancelled { profileNotice = false }
+        }
     }
 
     // MARK: History

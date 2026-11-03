@@ -40,9 +40,11 @@ final class OverlayController {
         host.sizingOptions = []
         panel.contentView = host
 
-        model.$phase.combineLatest(model.reader.$isSpeaking, model.$settings)
+        model.$phase.combineLatest(model.reader.$isSpeaking, model.$settings, model.$profileNotice)
             .receive(on: RunLoop.main)
-            .sink { [weak self] phase, speaking, settings in self?.update(visible: settings.showOverlay && (phase != .idle || speaking), settings: settings) }
+            .sink { [weak self] phase, speaking, settings, notice in
+                self?.update(visible: settings.showOverlay && (phase != .idle || speaking || notice), settings: settings)
+            }
             .store(in: &bag)
         NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
             .sink { [weak self] _ in if self?.panel.isVisible == true { self?.layout(fresh: false) } }
@@ -137,6 +139,9 @@ enum OverlaySnapshots {
             ("pill-live-transcribing", room, AnyView(PillContent(phase: .transcribing, profile: "", live: long, opacity: opacity))),
             ("pill-live-narrow", CGSize(width: 340, height: 600), AnyView(PillContent(phase: .recording, profile: "Light Cleanup", startedAt: .now,
                                                                                       live: long, opacity: opacity))),
+            ("profile-notice", room, AnyView(ProfilePill(name: "Light Cleanup", index: 1, count: 4, opacity: opacity))),
+            ("profile-notice-long", room, AnyView(ProfilePill(name: "Formal email to the leadership team, with British spelling and no contractions",
+                                                              index: 3, count: 6, opacity: opacity))),
             ("receipt-done", room, AnyView(VStack(spacing: 10) {
                 ReceiptCard(entry: entry) {}
                 PillContent(phase: .done("Inserted into Microsoft Outlook (Work Account)"), profile: "", opacity: opacity)

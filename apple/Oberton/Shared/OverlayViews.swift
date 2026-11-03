@@ -7,6 +7,7 @@ import SwiftUI
 private let darkInk = Color(hex: 0x0D0D0C)
 private let lightText = Color(hex: 0xE8E7E3)
 private let dimText = Color(hex: 0xE8E7E3, alpha: 0.6)
+private let mutedText = Color(hex: 0xE8E7E3, alpha: 0.7)
 private let darkLine = Color(hex: 0xE8E7E3, alpha: 0.22)
 private let recordRed = Color(hex: 0xFF4636)
 
@@ -44,16 +45,76 @@ private struct HeightCap: Layout {
     }
 }
 
-/// The pill: ● 00:14 ▮▮▮ LIGHT CLEANUP 録音 ✕ CANCEL. Clicking it after a dictation shows the receipt.
+/// The pill: ● 00:14 ▮▮▮ LIGHT CLEANUP 録音 ✕ CANCEL. Clicking it after a dictation shows the receipt. For a moment
+/// after the cycle-profile hotkey, it shows which profile is on now.
 struct OverlayPill: View {
     @EnvironmentObject var model: AppModel
     var onTap: () -> Void = {}
 
     var body: some View {
-        let live = [.recording, .transcribing, .processing].contains(model.phase) ? model.liveText : ""
-        PillContent(phase: model.phase, profile: model.activeProfile.name, level: model.level, startedAt: model.startedAt,
-                    live: live, opacity: model.settings.overlayOpacity, onCancel: { model.cancel() })
-            .onTapGesture(perform: onTap)
+        if model.profileNotice, !model.phase.isBusy {
+            let i = model.profiles.firstIndex { $0.id == model.activeProfile.id } ?? 0
+            ProfilePill(name: model.activeProfile.name, index: i, count: model.profiles.count, opacity: model.settings.overlayOpacity)
+        } else if model.phase != .idle, model.phase != .preview {
+            let live = [.recording, .transcribing, .processing].contains(model.phase) ? model.liveText : ""
+            PillContent(phase: model.phase, profile: model.activeProfile.name, level: model.level, startedAt: model.startedAt,
+                        live: live, opacity: model.settings.overlayOpacity, onCancel: { model.cancel() })
+                .onTapGesture(perform: onTap)
+        }
+    }
+}
+
+/// The overlay's box: ink at the chosen opacity, a faint paper edge, a soft shadow. A 20 pt corner radius on a box at
+/// least 40 pt tall is a capsule on one line and a rounded rectangle on more.
+private struct PillBox: ViewModifier {
+    var opacity: Double
+    static let shape = RoundedRectangle(cornerRadius: 20, style: .circular)
+
+    func body(content: Content) -> some View {
+        content
+            .foregroundStyle(lightText)
+            .padding(EdgeInsets(top: 8, leading: 18, bottom: 8, trailing: 8))
+            .frame(minHeight: 40)
+            .background(Self.shape.fill(darkInk.opacity(opacity)))
+            .overlay(Self.shape.strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
+            .shadow(color: .black.opacity(0.25), radius: 15, y: 8)
+            .contentShape(Self.shape)
+    }
+}
+
+/// PROFILE   Formal email  ▬ • • •  (the cycle-profile hotkey): the profile's name, and a dot for each profile with the
+/// current one drawn long. 360 pt wide, as on Windows.
+struct ProfilePill: View {
+    var name: String
+    var index: Int
+    var count: Int
+    var opacity: Double
+    @Environment(\.overlayRoom) private var room
+
+    var body: some View {
+        // At least 360 pt wide with the dots at the right end; a long name widens it up to 520 pt, then wraps.
+        let dots: CGFloat = count > 1 ? CGFloat(count) * 11 + 5 + 12 : 0
+        WidthCap(width: min(520, room.width)) {
+            HStack(spacing: 12) {
+                (Text("PROFILE   ").foregroundStyle(mutedText) + Text(name).fontWeight(.semibold))
+                    .font(Ob.mono(11))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(minWidth: min(360, room.width) - 26 - dots - (count > 1 ? 12 : 0), alignment: .leading)
+                    .layoutPriority(1)
+                if count > 1 {
+                    HStack(spacing: 5) {
+                        ForEach(0..<count, id: \.self) { i in
+                            Capsule().fill(i == index ? lightText : lightText.opacity(0.3)).frame(width: i == index ? 16 : 6, height: 6)
+                        }
+                    }
+                    .padding(.trailing, 12)
+                    .accessibilityHidden(true)
+                }
+            }
+            .frame(minHeight: 24)
+            .modifier(PillBox(opacity: opacity))
+            .accessibilityElement(children: .combine)
+        }
     }
 }
 
@@ -71,22 +132,14 @@ struct PillContent: View {
     @Environment(\.ob) private var ob
     @Environment(\.overlayRoom) private var room
 
-    private static let shape = RoundedRectangle(cornerRadius: 20, style: .circular)
-
     var body: some View {
         WidthCap(width: min(520, room.width)) {
             VStack(alignment: .leading, spacing: 0) {
                 if !live.isEmpty { LiveWords(text: live) }
                 row
             }
-            .foregroundStyle(lightText)
-            .padding(EdgeInsets(top: 8, leading: 18, bottom: 8, trailing: 8))
-            .frame(minHeight: 40)
-            .background(Self.shape.fill(darkInk.opacity(opacity)))
-            .overlay(Self.shape.strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
-            .shadow(color: .black.opacity(0.25), radius: 15, y: 8)
+            .modifier(PillBox(opacity: opacity))
             .opacity(isDone ? 0.75 : 1)
-            .contentShape(Self.shape)
         }
     }
 
@@ -170,7 +223,7 @@ private struct Wave: View {
 
 /// The words recognized so far, at the top of the pill's box: 14 pt text on 21 pt lines, at most 430 pt wide and three
 /// lines tall. The newest words stay in view; older lines move up and out, as on Windows.
-private struct LiveWords: View {
+struct LiveWords: View {
     var text: String
     @Environment(\.overlayRoom) private var room
 
