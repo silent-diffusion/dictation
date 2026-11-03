@@ -130,7 +130,13 @@ enum OverlaySnapshots {
                 .font(Ob.mono(11, .medium)).foregroundStyle(Color(hex: 0xE8E7E3))
                 .padding(EdgeInsets(top: 8, leading: 18, bottom: 8, trailing: 8)).frame(minHeight: 40)
                 .background(Capsule().fill(Color(hex: 0x0D0D0C).opacity(opacity))))),
-            ("live-words", room, AnyView(LiveWords(text: long))),
+            ("pill-live-short", room, AnyView(PillContent(phase: .recording, profile: "Light Cleanup", startedAt: .now,
+                                                          live: "so the plan for friday is", opacity: opacity))),
+            ("pill-live-long", room, AnyView(PillContent(phase: .recording, profile: "Light Cleanup", startedAt: .now,
+                                                         live: "um so the plan for friday is we ship the beta to the uh first ten testers " + long, opacity: opacity))),
+            ("pill-live-transcribing", room, AnyView(PillContent(phase: .transcribing, profile: "", live: long, opacity: opacity))),
+            ("pill-live-narrow", CGSize(width: 340, height: 600), AnyView(PillContent(phase: .recording, profile: "Light Cleanup", startedAt: .now,
+                                                                                      live: long, opacity: opacity))),
             ("receipt-done", room, AnyView(VStack(spacing: 10) {
                 ReceiptCard(entry: entry) {}
                 PillContent(phase: .done("Inserted into Microsoft Outlook (Work Account)"), profile: "", opacity: opacity)
@@ -184,9 +190,6 @@ struct OverlayView: View {
                 ReceiptCard(entry: pending, preview: true) { model.cancel() }
             } else if showReceipt, let receipt = model.receipt {
                 ReceiptCard(entry: receipt) { showReceipt = false }
-            }
-            if !model.liveText.isEmpty, [.recording, .transcribing, .processing].contains(model.phase) {
-                LiveWords(text: model.liveText)
             }
             if model.phase != .idle && model.phase != .preview {
                 OverlayPill { if case .done = model.phase { showReceipt = true } }

@@ -65,7 +65,6 @@ struct PhoneOverlay: View {
             } else if showReceipt, let r = model.receipt {
                 ReceiptCard(entry: r) { showReceipt = false }.frame(maxWidth: 360)
             }
-            if !model.liveText.isEmpty, [.recording, .transcribing, .processing].contains(model.phase) { LiveWords(text: model.liveText) }
             if model.phase != .idle && model.phase != .preview {
                 OverlayPill { if case .done = model.phase { showReceipt = true } }
             }
@@ -173,7 +172,8 @@ enum Snapshots {
                                             aiEdit: "The plan for Friday is to ship the beta to the first ten testers, and then collect feedback.",
                                             inserted: "The plan for Friday is to ship the beta to the first ten testers, and then collect feedback.",
                                             profileName: "Light Cleanup", model: nil, appName: "Mail", seconds: 14, turnaroundSeconds: 1.2, warning: nil)) {}
-            LiveWords(text: "so the plan for friday is we ship the beta to the first ten testers and")
+            PillContent(phase: .recording, profile: "Light Cleanup", startedAt: .now,
+                        live: "so the plan for friday is we ship the beta to the first ten testers and", opacity: model.settings.overlayOpacity)
         }
         .padding(30).background(Color(hex: 0xC9C7C1)).environmentObject(model).obertonTheme(model.settings)
         let r = ImageRenderer(content: overlay)

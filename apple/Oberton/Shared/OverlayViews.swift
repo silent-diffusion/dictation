@@ -50,19 +50,22 @@ struct OverlayPill: View {
     var onTap: () -> Void = {}
 
     var body: some View {
+        let live = [.recording, .transcribing, .processing].contains(model.phase) ? model.liveText : ""
         PillContent(phase: model.phase, profile: model.activeProfile.name, level: model.level, startedAt: model.startedAt,
-                    opacity: model.settings.overlayOpacity, onCancel: { model.cancel() })
+                    live: live, opacity: model.settings.overlayOpacity, onCancel: { model.cancel() })
             .onTapGesture(perform: onTap)
     }
 }
 
 /// The pill itself, drawn from plain values. It grows with its text up to 520 pt (or the room there is), then wraps;
 /// a 20 pt corner radius on a pill at least 40 pt tall is a capsule on one line and a rounded rectangle on more.
+/// While dictating, the words recognized so far sit in the same box, above the row, as on Windows.
 struct PillContent: View {
     var phase: AppModel.Phase
     var profile: String
     var level: Float = 0
     var startedAt: Date?
+    var live = ""
     var opacity: Double
     var onCancel: () -> Void = {}
     @Environment(\.ob) private var ob
@@ -72,34 +75,9 @@ struct PillContent: View {
 
     var body: some View {
         WidthCap(width: min(520, room.width)) {
-            HStack(spacing: 14) {
-                switch phase {
-                case .recording:
-                    Circle().fill(recordRed).frame(width: 10, height: 10)
-                    TimelineView(.periodic(from: .now, by: 1)) { _ in
-                        Text(elapsed).font(Ob.mono(11, .medium)).monospacedDigit()
-                    }
-                    .fixedSize()
-                    Wave(level: level)
-                case .starting, .transcribing, .processing, .inserting:
-                    ProgressView().controlSize(.small).tint(lightText)
-                case .failed:
-                    Image(systemName: "exclamationmark.triangle").font(.system(size: 11)).foregroundStyle(Color(hex: ob.accentChoice.hex.dark))
-                default:
-                    Text("✓").font(Ob.mono(11, .semibold)).fixedSize()
-                }
-                Group {
-                    switch phase {
-                    case .recording, .starting: chipLabel(profile)
-                    default: Text(phase.label.uppercased()).font(Ob.mono(11, .medium)).lineSpacing(3)
-                    }
-                }
-                .fixedSize(horizontal: false, vertical: true)
-                .layoutPriority(1)
-                if let jp { Decor(jp, size: 10, color: lightText.opacity(0.55)).fixedSize() }
-                if phase.isBusy {
-                    Button(action: onCancel) { chipLabel("✕  Cancel") }.buttonStyle(.plain).fixedSize()
-                }
+            VStack(alignment: .leading, spacing: 0) {
+                if !live.isEmpty { LiveWords(text: live) }
+                row
             }
             .foregroundStyle(lightText)
             .padding(EdgeInsets(top: 8, leading: 18, bottom: 8, trailing: 8))
@@ -110,6 +88,40 @@ struct PillContent: View {
             .opacity(isDone ? 0.75 : 1)
             .contentShape(Self.shape)
         }
+    }
+
+    /// ● 00:14 ▮▮▮ LIGHT CLEANUP 録音 ✕ CANCEL
+    private var row: some View {
+        HStack(spacing: 14) {
+            switch phase {
+            case .recording:
+                Circle().fill(recordRed).frame(width: 10, height: 10)
+                TimelineView(.periodic(from: .now, by: 1)) { _ in
+                    Text(elapsed).font(Ob.mono(11, .medium)).monospacedDigit()
+                }
+                .fixedSize()
+                Wave(level: level)
+            case .starting, .transcribing, .processing, .inserting:
+                ProgressView().controlSize(.small).tint(lightText)
+            case .failed:
+                Image(systemName: "exclamationmark.triangle").font(.system(size: 11)).foregroundStyle(Color(hex: ob.accentChoice.hex.dark))
+            default:
+                Text("✓").font(Ob.mono(11, .semibold)).fixedSize()
+            }
+            Group {
+                switch phase {
+                case .recording, .starting: chipLabel(profile)
+                default: Text(phase.label.uppercased()).font(Ob.mono(11, .medium)).lineSpacing(3)
+                }
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            .layoutPriority(1)
+            if let jp { Decor(jp, size: 10, color: lightText.opacity(0.55)).fixedSize() }
+            if phase.isBusy {
+                Button(action: onCancel) { chipLabel("✕  Cancel") }.buttonStyle(.plain).fixedSize()
+            }
+        }
+        .frame(minHeight: 24)
     }
 
     private var jp: String? {
@@ -156,23 +168,44 @@ private struct Wave: View {
     }
 }
 
-/// The words recognized so far, above the pill: the earlier ones dimmed, the newest bright.
-struct LiveWords: View {
+/// The words recognized so far, at the top of the pill's box: 14 pt text on 21 pt lines, at most 430 pt wide and three
+/// lines tall. The newest words stay in view; older lines move up and out, as on Windows.
+private struct LiveWords: View {
     var text: String
     @Environment(\.overlayRoom) private var room
 
+    private static let lineHeight: CGFloat = 21
+    #if os(macOS)
+    private static let fontHeight = NSLayoutManager().defaultLineHeight(for: .systemFont(ofSize: 14))
+    #else
+    private static let fontHeight = UIFont.systemFont(ofSize: 14).lineHeight
+    #endif
+    private static let spacing = max(0, lineHeight - fontHeight)
+    /// Three lines (spacing goes between lines only), plus half a gap so rounding never cuts the last line.
+    private static let maxHeight = 3 * lineHeight - spacing / 2
+
     var body: some View {
-        let shown = String(text.suffix(220))
-        let cut = shown.count > 60 ? shown.index(shown.endIndex, offsetBy: -60) : shown.startIndex
-        WidthCap(width: min(440, room.width)) {
-            (Text(shown[..<cut].uppercased()).foregroundStyle(dimText) + Text(shown[cut...].uppercased()).foregroundStyle(lightText))
-                .font(Ob.mono(12))
-                .lineSpacing(5)
+        WidthCap(width: min(430, room.width)) {
+            Text(Self.tail(text, 180))
+                .font(Ob.sans(14))
+                .foregroundStyle(lightText.opacity(0.85))
+                .lineSpacing(Self.spacing)
                 .lineLimit(nil)
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 16).padding(.vertical, 10)
-                .background(RoundedRectangle(cornerRadius: 14).fill(darkInk.opacity(0.88)))
+                .frame(maxHeight: Self.maxHeight, alignment: .bottomLeading)
+                .clipped()
         }
+        .padding(EdgeInsets(top: 6, leading: 0, bottom: 4, trailing: 10))
+    }
+
+    /// The last `max` characters, starting at a word when one starts soon enough, with "…" in front if cut.
+    static func tail(_ text: String, _ max: Int) -> String {
+        guard text.count > max else { return text }
+        let tail = text.suffix(max)
+        if let sp = tail.firstIndex(of: " "), (1..<40).contains(tail.distance(from: tail.startIndex, to: sp)) {
+            return "…" + tail[tail.index(after: sp)...]
+        }
+        return "…" + tail
     }
 }
 
