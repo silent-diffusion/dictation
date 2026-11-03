@@ -182,6 +182,7 @@ final class AppModel: ObservableObject {
                 : profiles.first { $0.name == BuiltInProfiles.defaultName }?.id
         }
         if movesNotepad { settings.notepad = "" }
+        startProfiles()
         notes.settingsSource = { [weak self] in self?.settings ?? loadedSettings }
         notesChange = notes.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         transcriber.onText = { [weak self] in self?.liveText = $0 }
@@ -207,6 +208,19 @@ final class AppModel: ObservableObject {
         if !Self.snapshotMode { unloader.start(self) }
         // Warm both models in the background so the first hotkey press is quick.
         if !Self.snapshotMode { Task { @MainActor [weak self] in self?.warmUp(atLaunch: true) } }
+    }
+
+    /// At start, as Windows' ProfileService and SettingsService: built-ins added in later versions show up once, the
+    /// default profile (on an update, the profile that was active) is the one active, and the Ollama address must be
+    /// local. (Property observers don't run in init, so this saves itself.)
+    private func startProfiles() {
+        let added = BuiltInProfiles.addMissing(to: &profiles, added: &settings.builtInProfilesAdded)
+        if added && !Self.snapshotMode { profilesFile.save(profiles) }
+        func find(_ id: String?) -> String? { profiles.first { $0.id == id }?.id }
+        settings.defaultProfileID = find(settings.defaultProfileID) ?? find(settings.activeProfileID) ?? profiles.first?.id
+        settings.activeProfileID = settings.defaultProfileID
+        settings.enforceLocalEndpoint()
+        if !Self.snapshotMode { settingsFile.save(settings) }
     }
 
     /// Whether the active profile's AI can run right now (for the status dots).

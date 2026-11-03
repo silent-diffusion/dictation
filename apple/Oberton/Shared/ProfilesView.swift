@@ -65,8 +65,7 @@ struct SpeechToTextView: View {
                 }
             }
             Button {
-                var p = Profile(name: "New Profile", prompt: BuiltInProfiles.customPrompt, maxChangeRatio: 0.6)
-                p.description = "Your own instructions."
+                let p = BuiltInProfiles.newProfile()
                 model.profiles.append(p)
                 nav.goProfile(p.id)
             } label: {
@@ -143,14 +142,19 @@ struct ProfilePage: View {
         }
         .confirmationDialog("Delete \(profile.name)?", isPresented: $confirmDelete) {
             Button("Delete profile", role: .destructive) {
-                let id = profile.id
+                // As ProfileService.Delete: the default moves to the first profile, and if this one was active, the
+                // default becomes active.
+                let id = profile.id, wasActive = isActive
                 nav.goProfile(nil)
                 model.profiles.removeAll { $0.id == id }
+                if model.settings.defaultProfileID == id { model.settings.defaultProfileID = model.profiles.first?.id }
+                if wasActive { model.settings.activeProfileID = model.settings.defaultProfileID }
             }
         }
     }
 
     private var isActive: Bool { profile.id == model.activeProfile.id }
+    private var isDefault: Bool { profile.id == model.settings.defaultProfileID }
 
     private var header: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -159,12 +163,18 @@ struct ProfilePage: View {
                 TextField("Description", text: $profile.description).textFieldStyle(.plain).font(Ob.sans(14)).foregroundStyle(ob.muted)
             }
             Spacer()
-            if isActive {
-                Badge(text: "Active", kind: .active)
-            } else {
+            if isActive { Badge(text: "Active", kind: .active) }
+            // The profile active at every start.
+            if isDefault {
+                Text("DEFAULT").font(Ob.mono(11)).padding(.horizontal, 8).padding(.vertical, 1)
+                    .overlay(Capsule().strokeBorder(ob.ink, lineWidth: 1))
+                    .help("Oberton starts with this profile")
+            }
+            if !isActive {
                 Button("Use this profile") { model.activeProfile = profile }.buttonStyle(.primary)
             }
             Menu {
+                Button(isDefault ? "Default profile" : "Make default") { model.settings.defaultProfileID = profile.id }.disabled(isDefault)
                 Button("Delete profile…", role: .destructive) { confirmDelete = true }.disabled(model.profiles.count < 2)
             } label: {
                 HStack(spacing: 3) { ForEach(0..<3, id: \.self) { _ in Circle().frame(width: 3.5, height: 3.5) } }
@@ -227,8 +237,16 @@ struct ProfilePage: View {
                      : "Your words are inserted as the speech recognizer heard them. Nothing goes to the AI model.",
                      isOn: $profile.autoProcess)
             ObSwitch("Preview before inserting", isOn: $profile.showPreview)
-            ObSwitch("Read aloud after inserting", detail: "Read aloud reads what went in, with this profile's voice.", isOn: $profile.readAloudAfterInsert)
+            ObSwitch("Read aloud after inserting", detail: "Once the text is in place, Read aloud reads it to you with the voice chosen under Models. \(stopHint)", isOn: $profile.readAloudAfterInsert)
         }
+    }
+
+    private var stopHint: String {
+        #if os(macOS)
+        "Press the Read aloud hotkey to stop it."
+        #else
+        "Tap Stop in the player to stop it."
+        #endif
     }
 
     private var modelsCard: some View {
@@ -301,7 +319,7 @@ struct ProfilePage: View {
             FieldLabel("Behaviour")
             VStack(spacing: 0) {
                 ObSwitch("Rewrite the whole dictation",
-                         detail: "For instructions that reshape what you say (“turn my thoughts into an email”): the AI gets the whole dictation at once.",
+                         detail: "For instructions that reshape what you say, like turning your thoughts into an email. The AI gets everything at once when you stop. Off: long dictation is edited a few sentences at a time, which keeps the wording closer to yours.",
                          isOn: $profile.rewriteWhole).padding(.horizontal, 14)
                 Hairline()
                 ObSwitch("Keep paragraph breaks", isOn: $profile.preserveParagraphs).padding(.horizontal, 14)

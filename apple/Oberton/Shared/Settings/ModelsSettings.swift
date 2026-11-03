@@ -57,6 +57,9 @@ struct ModelsSection: View {
             #if os(macOS)
             FieldLabel("Ollama address")
             ObField("http://127.0.0.1:11434", text: $model.settings.ollamaEndpoint, mono: true, width: 300)
+                // Checked when the address is done, not on every keystroke (a half-typed address isn't local yet).
+                .onSubmit { model.settings.enforceLocalEndpoint() }
+                .onDisappear { model.settings.enforceLocalEndpoint() }
             Caption("Must be a local address (127.0.0.1 / localhost); other addresses are rejected.", size: 12.5).padding(.top, 6)
             #endif
         }

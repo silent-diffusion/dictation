@@ -62,6 +62,8 @@ public struct Profile: Codable, Identifiable, Hashable, Sendable {
 
 public enum BuiltInProfiles {
     public static let rawID = "builtin-raw"
+    /// Built-ins with a fixed id: one added in a later version shows up once for existing users too.
+    public static let fixedIDs: Set<String> = [rawID]
     /// The profile a new install starts with (Windows 5.18).
     public static let defaultName = "Grammar & Clarity"
 
@@ -69,6 +71,23 @@ public enum BuiltInProfiles {
         "You are a dictation editor. Clean up this speech transcript: remove filler words and false starts, " +
         "and fix punctuation and capitalization, while keeping the speaker's meaning and wording.\n" +
         "Do not summarize or add information.\nReturn only the processed text."
+
+    /// Adds the fixed-id built-ins not offered before (`added` remembers which were), as Windows' ProfileService does at
+    /// start: one the user deleted after it was offered stays deleted. True when anything changed.
+    public static func addMissing(to profiles: inout [Profile], added: inout [String]) -> Bool {
+        var changed = false
+        for p in create() where fixedIDs.contains(p.id) && !added.contains(p.id) {
+            if !profiles.contains(where: { $0.id == p.id }) { profiles.append(p) }
+            added.append(p.id)
+            changed = true
+        }
+        return changed
+    }
+
+    /// A new profile, as Windows' ProfileService.Create makes it.
+    public static func newProfile(name: String = "New Profile") -> Profile {
+        Profile(name: name, description: "Custom editing profile.", prompt: customPrompt, maxChangeRatio: 0.5)
+    }
 
     /// Word for word the Windows built-ins (5.18). None picks a model, so each uses the install's own default.
     public static func create() -> [Profile] {
