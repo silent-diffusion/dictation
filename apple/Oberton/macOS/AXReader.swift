@@ -22,7 +22,7 @@ struct PasteSpot: @unchecked Sendable {
 
 /// Other apps' text and windows through Accessibility, as Windows reads them through UI Automation: the text around the
 /// caret (`InsertionContext`), the focused control and its caret (`PasteSpot`), the dictation's window and its title,
-/// the selection for Read aloud, and live typing's checks and selections. Only the direct build may (outside the App
+/// and live typing's checks and selections (Read aloud's selection: `SelectionReader`). Only the direct build may (outside the App
 /// Store sandbox, once Oberton is allowed in Privacy & Security › Accessibility): every call answers nil, false or
 /// `.unreadable` otherwise, and callers fall back to what the sandbox can do. Nothing read here is stored, logged or
 /// sent anywhere.
@@ -34,8 +34,6 @@ enum AXReader {
 
     /// How much text is read on each side of the caret (Windows `InsertionContext.ReadChars`).
     static let readChars = 240
-    /// Read aloud reads at most this much of a selection (Windows `SelectionReader.MaxChars`).
-    static let maxSelection = 100_000
 
     // MARK: Running the calls
 
@@ -316,22 +314,6 @@ enum AXReader {
         if isSelected(focused, first) { return true }
         select(focused, CFRange(location: caret, length: 0))
         return false
-    }
-
-    // MARK: Read aloud
-
-    /// The selected text in the frontmost app (Windows `SelectionReader.ReadViaAutomation`): nil when the focused
-    /// control can't be asked, "" when it says nothing is selected.
-    static func selectedText() -> String? {
-        guard let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier,
-              let focused = focusedElement(pid) else { return nil }
-        if let range = selectedRange(focused) {
-            if range.length == 0 { return "" }
-            let text = self.text(focused, in: CFRange(location: range.location, length: min(range.length, maxSelection)))
-            if let text { return text.trimmingCharacters(in: .whitespacesAndNewlines) }
-        }
-        guard let text = string(focused, kAXSelectedTextAttribute) else { return nil }
-        return String(text.prefix(maxSelection)).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
