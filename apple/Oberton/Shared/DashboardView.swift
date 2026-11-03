@@ -648,15 +648,21 @@ struct HistoryCell: View {
                     .textSelection(.enabled)
             }
 
-            if let done { Text(done).font(Ob.mono(11)).foregroundStyle(ob.accent).lineLimit(1) }
+            // Where the text went, for 5 s, fading in and out (DashboardPage.History.ShowHistoryDone).
+            if let done {
+                Text(done).font(Ob.mono(11)).foregroundStyle(ob.accent).lineLimit(1).truncationMode(.tail).help(done)
+                    .padding(.bottom, 6)
+                    .transition(.opacity)
+            }
             HStack(spacing: 8) {
                 #if os(macOS)
                 Button {
                     guard let last else { return }
                     Task {
-                        done = await model.insertIntoLastApp(last.transcription)
-                        try? await Task.sleep(for: .seconds(3))
-                        done = nil
+                        let note = await model.insertIntoLastApp(last.transcription).banner
+                        withAnimation(.easeInOut(duration: 0.15)) { done = note }
+                        try? await Task.sleep(for: .seconds(5))
+                        if done == note { withAnimation(.easeInOut(duration: 0.4)) { done = nil } }
                     }
                 } label: {
                     ViewThatFits {

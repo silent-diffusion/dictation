@@ -62,19 +62,19 @@ final class MacPlatform: PlatformServices {
         // History's insert: whatever was in front when asked (Oberton, usually) comes back afterwards.
         let returnToOberton = NSApp.isActive
         guard let target else {
-            copy(text)
+            keep(text)
             return "Copied to the clipboard" // nothing to go back to
         }
         guard CGPreflightPostEventAccess() else {
             CGRequestPostEventAccess()
-            copy(text)
+            keep(text)
             throw UserFacingError("Copied to the clipboard. To paste at the cursor, allow Oberton in System Settings › Privacy & Security › Accessibility.")
         }
         do {
             try await insert(text, into: target)
         } catch {
             // Last resort so the dictation isn't lost: leave it on the clipboard.
-            copy(text)
+            keep(text)
             throw UserFacingError(error.localizedDescription + " The text was copied to your clipboard.")
         }
         if returnToOberton {
@@ -180,6 +180,13 @@ final class MacPlatform: PlatformServices {
 
     func copy(_ text: String) {
         put(text, on: NSPasteboard.general)
+    }
+
+    /// The text left on the clipboard as a last resort, when it couldn't go in: an ordinary copy, so clipboard managers
+    /// keep it too (Windows' Clipboard.SetText in DictationController.InsertPendingAsync).
+    private func keep(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 
     private func put(_ text: String, on pb: NSPasteboard) {

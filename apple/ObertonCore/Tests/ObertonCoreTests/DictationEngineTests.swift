@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import Testing
 @testable import ObertonCore
@@ -198,5 +199,32 @@ import Testing
         var audio = (0..<8000).map { _ in Float.random(in: -0.0004...0.0004) } + Self.tone(0.99, seconds: 2)
         leveller.process(&audio)
         #expect(audio.allSatisfy { abs($0) <= 1 })
+    }
+}
+
+/// The overlay's level meter, as MicCapture feeds it: one level per 50 ms of audio, `min(1, √rms · 1.8)`, silence 0.
+@Suite struct MeterLevelTests {
+    static func buffer(_ samples: [Float], rate: Double = 48_000) -> AVAudioPCMBuffer {
+        let format = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 1)!
+        let b = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count))!
+        b.frameLength = AVAudioFrameCount(samples.count)
+        for (i, s) in samples.enumerated() { b.floatChannelData![0][i] = s }
+        return b
+    }
+
+    @Test func oneLevelPer50Milliseconds() {
+        // A 4096-frame tap at 48 kHz (85 ms) gives two levels, as Windows' 50 ms buffers would.
+        #expect(LiveTranscriber.meterLevels(Self.buffer([Float](repeating: 0.01, count: 4096))).count == 2)
+        #expect(LiveTranscriber.meterLevels(Self.buffer([Float](repeating: 0.01, count: 800), rate: 16_000)).count == 1)
+    }
+
+    @Test func windowsScale() {
+        let quiet: Float = LiveTranscriber.meterLevels(Self.buffer([Float](repeating: 0.04, count: 2400)))[0]
+        let expected: Float = 0.36 // √0.04 · 1.8
+        #expect(abs(quiet - expected) < 0.0001)
+        let loud: Float = LiveTranscriber.meterLevels(Self.buffer([Float](repeating: 0.5, count: 2400)))[0]
+        #expect(loud == 1)
+        let silent: Float = LiveTranscriber.meterLevels(Self.buffer([Float](repeating: 0, count: 2400)))[0]
+        #expect(silent == 0)
     }
 }

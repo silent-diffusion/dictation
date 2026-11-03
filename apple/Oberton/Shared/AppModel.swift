@@ -57,9 +57,17 @@ final class AppModel: ObservableObject {
     @Published var settings: AppSettings {
         didSet {
             settingsFile.save(settings)
-            // A new profile or language: get its models ready now, so the next dictation doesn't wait (as on Windows).
-            if oldValue.activeProfileID != settings.activeProfileID || oldValue.language != settings.language
-                || oldValue.speechModel != settings.speechModel { warmUp() }
+            // A new language or speech model: get it ready now, so the next dictation doesn't wait (as on Windows).
+            if oldValue.language != settings.language || oldValue.speechModel != settings.speechModel {
+                warmUp()
+            } else if oldValue.activeProfileID != settings.activeProfileID {
+                // Another profile (App.xaml.cs ActiveChanged): warm its AI model, and swap to its speech model only if
+                // one is loaded and nothing is dictating (an unloaded engine stays unloaded).
+                warmUpAI(activeProfile)
+                swapSpeechModel()
+            } else if oldValue.defaultModel != settings.defaultModel {
+                warmUpAI(activeProfile) // Settings › Models' USE THIS
+            }
         }
     }
     @Published var profiles: [Profile] { didSet { profilesFile.save(profiles) } }
@@ -68,8 +76,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var phase: Phase = .idle {
         didSet {
             notes.setDictating(phase.isBusy)
-            // A new dictation state takes the pill from a notice, as on Windows.
-            if phase != oldValue, phase.isBusy { overlayNotice = nil }
+            // A new dictation state takes the pill from a notice, as on Windows: from any notice when the overlay shows
+            // that state, and from one held by the state before it (`overlayPinned`).
+            if phase != oldValue, (overlayPinned && phase.isBusy) || overlayNotice?.pinned == true { overlayNotice = nil }
             if phase != oldValue { lastActivity = .now }
         }
     }
@@ -79,6 +88,9 @@ final class AppModel: ObservableObject {
     let unloader = ModelUnloader()
     @Published private(set) var liveText = ""
     @Published private(set) var level: Float = 0
+    /// The overlay's level meter: the last 22 levels, oldest first, already √-scaled. Every level event moves it one
+    /// column, also in silence (OverlayWindow.SetLevel).
+    @Published private(set) var meter = [Double](repeating: 0, count: 22)
     @Published private(set) var startedAt: Date?
     /// The dictation waiting in the preview (profiles with "preview before inserting").
     @Published private(set) var pending: HistoryEntry?
@@ -107,6 +119,28 @@ final class AppModel: ObservableObject {
     /// A Whisper model loading or being prepared now (`WhisperEngine.loadingModel`), for the status line and badges.
     @Published private(set) var whisperLoad: WhisperEngine.Loading?
     private var whisperDownloadTask: Task<Void, Never>?
+    /// The Whisper model a new install picked for this device (Windows' RuntimeInstaller.ChooseModels), while it
+    /// downloads: until it is in, dictation uses Apple Speech, then it switches over by itself. Kept across launches.
+    /// In the data folder (speech-setup.json), next to the settings it belongs with.
+    @Published private(set) var pendingSpeechModel: String? = AppModel.speechSetupFile.load()?.model {
+        didSet {
+            if let model = pendingSpeechModel { Self.speechSetupFile.save(SpeechSetup(model: model)) }
+            else { try? FileManager.default.removeItem(at: Self.speechSetupFile.url) }
+        }
+    }
+    private struct SpeechSetup: Codable { var model: String }
+    private static let speechSetupFile = JSONFile<SpeechSetup>("speech-setup.json")
+    /// The AI status line (Windows' LlmService status: "Starting AI runtime…", "Loading qwen3:8b…", "Ready · …", "AI
+    /// model 'x' not installed"), set by the warm-up; `aiStatusOK` is false while loading or when it failed.
+    @Published private(set) var aiStatus = "AI: starting…"
+    @Published private(set) var aiStatusOK = false
+    /// The AI model being loaded by the warm-up right now ("loading, then editing" on the dashboard).
+    @Published private(set) var aiLoading: String?
+    /// The Ollama models in memory now (`/api/ps`), refreshed every 3 s while someone watches (`watchLoadedAI`).
+    @Published private(set) var loadedAIModels: Set<String> = []
+    private var loadedAIWatchers = 0
+    private var loadedAITimer: Timer?
+    private var aiWarmTask: Task<Void, Never>?
     /// The speech engine couldn't start at launch: shown once in the main window, as Windows' message box.
     @Published var startupProblem: String?
     /// A Settings section to open in the main window (⌘,, the menu bar's "Check for updates…"); the window clears it.
@@ -188,6 +222,9 @@ final class AppModel: ObservableObject {
             settings.activeProfileID = AppleIntelligenceBackend.unavailableReason != nil && settings.defaultModel == .appleOnDevice
                 ? BuiltInProfiles.rawID
                 : profiles.first { $0.name == BuiltInProfiles.defaultName }?.id
+            // The speech model for this device, as Windows' setup picks it: downloaded during setup
+            // (`startDefaultSpeechDownload`); Apple Speech until it is in.
+            if !Self.snapshotMode { pendingSpeechModel = Self.recommendedSpeechModel(language: settings.language) }
         }
         if movesNotepad { settings.notepad = "" }
         startProfiles()
@@ -195,7 +232,13 @@ final class AppModel: ObservableObject {
         notesChange = notes.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         WhisperEngine.onChange = { [weak self] in Task { @MainActor in self?.whisperChanged() } }
         transcriber.onText = { [weak self] in self?.liveText = $0 }
-        transcriber.onLevel = { [weak self] in self?.level = $0 }
+        transcriber.onLevel = { [weak self] level in
+            guard let self else { return }
+            self.level = level
+            guard phase == .recording else { return }
+            meter.removeFirst()
+            meter.append(Double(min(max(level, 0), 1)).squareRoot()) // perceptual: quiet speech still moves the dots
+        }
         transcriber.onSilence = { [weak self] in
             guard self?.phase == .recording else { return }
             #if os(macOS)
@@ -217,6 +260,13 @@ final class AppModel: ObservableObject {
         if !Self.snapshotMode { unloader.start(self) }
         // Warm both models in the background so the first hotkey press is quick.
         if !Self.snapshotMode { Task { @MainActor [weak self] in self?.warmUp(atLaunch: true) } }
+        // A first-run speech model download that didn't finish (Oberton quit meanwhile) carries on once setup is done.
+        if !Self.snapshotMode, OnboardingView.isDone, pendingSpeechModel != nil {
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(5)) // after launch's own work
+                self?.startDefaultSpeechDownload()
+            }
+        }
     }
 
     /// At start, as Windows' ProfileService and SettingsService: built-ins added in later versions show up once, the
@@ -262,10 +312,11 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Starting a dictation leaves Read aloud reading, as on Windows (DictationController.StartAsync never touches it).
     func start() {
-        reader.stop()
         platform?.captureTarget()
         liveText = ""
+        meter = [Double](repeating: 0, count: meter.count)
         pending = nil
         receipt = nil
         historyAudio.begin()
@@ -286,7 +337,8 @@ final class AppModel: ObservableObject {
         phase = .recording
         speechLoading = !speechWarm
         let vocabulary = settings.vocabulary, hint = settings.vocabularyHint, locale = settings.speechLocale
-        let whisper = settings.whisperModel, language = settings.whisperLanguage
+        let speech = speechSettings(for: profile)
+        let whisper = speech.whisperModel, language = speech.whisperLanguage
         let engine = Task { [transcriber] in
             if let whisper {
                 try await transcriber.startWhisper(model: whisper, language: language, prompt: hint)
@@ -303,7 +355,7 @@ final class AppModel: ObservableObject {
             if self?.engineTask == engine { self?.speechLoading = false }
         }
         // The AI model too, so the cleanup at the end doesn't wait for it to load.
-        warmUpAI(profile)
+        warmUpAI(profile, forDictation: true)
         limitTimer = Timer.scheduledTimer(withTimeInterval: max(10, settings.maxRecordingSeconds), repeats: false) { [weak self] _ in
             Task { @MainActor in
                 guard let self, self.phase == .recording else { return }
@@ -346,8 +398,9 @@ final class AppModel: ObservableObject {
     }
 
     func cancel() {
-        if phase == .placing, let entry = placingEntry {
+        if phase == .placing, var entry = placingEntry {
             endPlacing()
+            entry.wasInserted = false
             record(entry) // discarded, but kept in History in case
         }
         limitTimer?.invalidate()
@@ -362,11 +415,19 @@ final class AppModel: ObservableObject {
 
     private func finish(raw: String, seconds: Double, profile: Profile) async {
         var result = ProcessResult(text: raw, modified: false)
+        aiNotice = nil
         if !profile.isRaw {
             liveText = raw // the overlay shows what is being tidied
             phase = .processing
             result = await processor.process(raw, profile: profile)
             if Task.isCancelled { return }
+            // A safety-net rejection is reported on the receipt; any other AI problem is a HEADS UP notice of its own,
+            // and the original words go in (DictationController.StopAsync).
+            if let warning = result.warning, !result.safetyNet {
+                Log.warn("AI step failed: " + warning)
+                aiNotice = Self.aiFailureNotice(warning)
+                result.warning = nil
+            }
         }
         // An AI edit only when the AI really changed the text: not when it failed, nor when the safety net kept it all.
         var entry = HistoryEntry(transcription: raw, aiEdit: result.modified ? result.text : nil, inserted: result.text,
@@ -378,9 +439,29 @@ final class AppModel: ObservableObject {
             previewTurnaround = Date().timeIntervalSince(stoppedAt ?? Date()) // time spent reading the preview isn't processing time
             pending = entry
             phase = .preview
+            showAINotice()
             return
         }
         await insert(entry, readBack: profile.readAloudAfterInsert ? profile.voice : nil, readBackRequested: profile.readAloudAfterInsert)
+    }
+
+    /// The AI step's problem, said when the text goes in (or the preview shows), so it isn't covered at once by the next
+    /// state.
+    private var aiNotice: String?
+
+    private func showAINotice() {
+        guard let text = aiNotice else { return }
+        aiNotice = nil
+        // Over the preview it goes after its time and gives the preview back (Windows would leave it covering it).
+        notice(text, kind: .warning, hold: false)
+    }
+
+    /// TextProcessor reports a failed AI step as "{problem} Your original words were inserted."; Windows says it as the
+    /// words go in: "{problem} Inserting your original words."
+    static func aiFailureNotice(_ warning: String) -> String {
+        let suffix = " Your original words were inserted."
+        let problem = warning.hasSuffix(suffix) ? String(warning.dropLast(suffix.count)) : warning
+        return problem + " Inserting your original words."
     }
 
     /// Insert the previewed text (`useOriginal`: the raw transcription instead).
@@ -409,14 +490,26 @@ final class AppModel: ObservableObject {
             entry.turnaroundSeconds = previewTurnaround ?? Date().timeIntervalSince(stoppedAt ?? Date())
             await recordTurnaround(entry)
             record(entry)
-            self.receipt = entry
+            // A profile can read what went in aloud. The player then takes the receipt's place, unless the receipt has
+            // a warning to show; decided once, here (App.xaml.cs Inserted).
+            let text = entry.inserted.trimmingCharacters(in: .whitespacesAndNewlines)
+            let readIt = readBackRequested && !text.isEmpty
+            self.receipt = !readIt || entry.safetyNet == true || entry.warning != nil ? entry : nil
             phase = .done(entry.warning ?? receipt)
-            if readBackRequested { reader.read(entry.inserted, voice: voice ?? settings.ttsVoice, speed: settings.ttsBaseSpeed) }
+            showAINotice()
+            if readIt { reader.read(text, voice: voice ?? settings.ttsVoice, speed: settings.ttsBaseSpeed) }
         } catch {
+            // The text is on the clipboard now (the platform put it there): a HEADS UP, not a failure; History keeps
+            // it as not inserted, and there is no receipt.
             entry.turnaroundSeconds = previewTurnaround ?? Date().timeIntervalSince(stoppedAt ?? Date())
             entry.wasInserted = false
             record(entry)
-            fail(error)
+            aiNotice = nil
+            level = 0
+            phase = .idle
+            let message = (error as? UserFacingError)?.message ?? error.localizedDescription
+            Log.warn("Insert failed: " + message)
+            notice(message, kind: .warning)
             return
         }
         // The receipt stays 3 s, or 6 s when it has a warning to read (as on Windows).
@@ -450,9 +543,10 @@ final class AppModel: ObservableObject {
 
     /// Placing: the overlay's Copy button or the hotkey (or the wait ran out): the text goes to the clipboard.
     func copyPlacingToClipboard(timedOut: Bool = false) {
-        guard phase == .placing, let entry = placingEntry else { return }
+        guard phase == .placing, var entry = placingEntry else { return }
         endPlacing()
-        platform?.copy(entry.inserted)
+        platform?.copy(entry.inserted.trimmingCharacters(in: .whitespacesAndNewlines))
+        entry.wasInserted = false // copied, not inserted (DictationController.CopyPlacingToClipboard)
         record(entry)
         receipt = nil
         phase = .idle
@@ -467,11 +561,26 @@ final class AppModel: ObservableObject {
         placingText = nil
     }
 
-    /// As on Windows: back to idle, and the error as the overlay's SOMETHING WENT WRONG notice.
+    /// As on Windows: back to idle, and the error as the overlay's SOMETHING WENT WRONG notice. A problem the user can
+    /// act on says so; anything else points to the log (DictationController.Fail).
     private func fail(_ error: Error) {
         level = 0
         phase = .idle
-        notice(error.localizedDescription, kind: .error)
+        aiNotice = nil
+        if let error = error as? UserFacingError {
+            Log.warn("Dictation failed: " + error.message)
+            notice(error.message, kind: .error)
+        } else {
+            Log.error("Dictation failed: \(error)")
+            notice("Something went wrong during dictation. See \(Self.logPath).", kind: .error)
+        }
+    }
+
+    /// Where the log is, as the notice says it (Windows: data\logs\dictation.log).
+    static var logPath: String {
+        let path = Log.file.path
+        let home = NSHomeDirectory()
+        return path.hasPrefix(home) ? "~" + path.dropFirst(home.count) : path
     }
 
     // MARK: Notices
@@ -481,17 +590,29 @@ final class AppModel: ObservableObject {
     struct OverlayNotice: Equatable {
         var text: String
         var kind: NoticeKind
+        /// Held by the dictation state it came in (a silent microphone while recording): it stays, with no timer,
+        /// until the state changes (OverlayWindow's hide timer is ignored while pinned).
+        var pinned = false
         let id = UUID()
+    }
+
+    /// The overlay is showing a dictation state now (Windows' `_pinnedByState`): every state with "Show overlay" on;
+    /// with it off, only the preview and NO PLACE TO PASTE, which show either way.
+    var overlayPinned: Bool {
+        settings.showOverlay ? phase.isBusy : phase == .preview || phase == .placing
     }
 
     /// A message on the overlay (Windows' `ShowMessage`): OBERTON (info), HEADS UP (warning) or SOMETHING WENT WRONG
     /// (error), with `text` as the body. It stays for its length / 15 seconds, between 3 and 9. Info is skipped while
-    /// a dictation is under way. Shown even with "Show overlay" off, as on Windows.
-    func notice(_ text: String, kind: NoticeKind = .info) {
-        if kind == .info, phase.isBusy { return }
-        let notice = OverlayNotice(text: text, kind: kind)
+    /// the overlay shows a dictation (so with "Show overlay" off it shows); a warning or error then takes the pill and
+    /// stays until the next state (`hold: false` gives it its time instead). Shown even with "Show overlay" off.
+    func notice(_ text: String, kind: NoticeKind = .info, hold: Bool = true) {
+        if kind == .info, overlayPinned { return }
+        let pinned = hold && overlayPinned
+        let notice = OverlayNotice(text: text, kind: kind, pinned: pinned)
         overlayNotice = notice
         overlayNoticeTask?.cancel()
+        guard !pinned else { return }
         overlayNoticeTask = Task {
             try? await Task.sleep(for: .seconds(Self.noticeSeconds(text)))
             if !Task.isCancelled, overlayNotice?.id == notice.id { overlayNotice = nil }
@@ -528,10 +649,13 @@ final class AppModel: ObservableObject {
     func cycleProfile() {
         guard let i = profiles.firstIndex(where: { $0.id == activeProfile.id }), !profiles.isEmpty else { return }
         activeProfile = profiles[(i + 1) % profiles.count]
-        // Mid-dictation the pill's chip already shows the profile; otherwise the notice takes the receipt's place.
-        guard !phase.isBusy else { return }
-        idleTask?.cancel()
-        phase = .idle
+        // While the overlay shows a dictation, its chip already shows the profile; otherwise the notice takes the
+        // receipt's place (with "Show overlay" off it shows mid-dictation too, as on Windows).
+        guard !overlayPinned else { return }
+        if !phase.isBusy {
+            idleTask?.cancel()
+            phase = .idle
+        }
         profileNotice = true
         noticeTask?.cancel()
         noticeTask = Task {
@@ -542,14 +666,20 @@ final class AppModel: ObservableObject {
 
     // MARK: Warming up
 
+    /// The speech settings a profile dictates with (Windows' SpeechModels.For): its own speech model, or Settings'.
+    func speechSettings(for profile: Profile) -> AppSettings { settings.dictating(with: profile) }
+
+    /// The active profile's speech settings.
+    var activeSpeech: AppSettings { speechSettings(for: activeProfile) }
+
     /// The speech model's name for the turnaround samples: Apple's recognizer and the language, or the Whisper model.
-    var speechModelName: String { settings.whisperModel.map { "whisper:" + $0 } ?? "apple-speech:" + settings.language }
+    var speechModelName: String { activeSpeech.whisperModel.map { "whisper:" + $0 } ?? "apple-speech:" + settings.language }
 
     /// The speech model for display: "Apple Speech" or the Whisper model's name.
-    var speechEngineName: String { settings.whisperModel.map(WhisperModels.name(of:)) ?? "Apple Speech" }
+    var speechEngineName: String { activeSpeech.whisperModel.map(WhisperModels.name(of:)) ?? "Apple Speech" }
 
     /// The speech model in a few characters, as Windows' dashboard shows it: "Apple Speech" or the Whisper id ("base.en").
-    var speechShortName: String { settings.whisperModel ?? "Apple Speech" }
+    var speechShortName: String { activeSpeech.whisperModel ?? "Apple Speech" }
 
     /// The AI model a profile uses, or "" without AI.
     func aiModelName(_ profile: Profile) -> String { profile.isRaw ? "" : processor.model(for: profile).description }
@@ -559,11 +689,12 @@ final class AppModel: ObservableObject {
         usage.recentTurnaround(speechModel: speechModelName, aiModel: aiModelName(activeProfile)).seconds
     }
 
-    /// Get the speech model and the active profile's AI model loaded (at launch, and when the profile or language
-    /// changes), as Windows does. A speech model that can't start at launch is reported once (`startupProblem`).
+    /// Get the speech model and the active profile's AI model loaded (at launch, and when the language or the speech
+    /// model changes), as Windows does. A speech model that can't start at launch is reported once (`startupProblem`).
     func warmUp(atLaunch: Bool = false) {
         guard !Self.snapshotMode else { return }
-        let locale = settings.speechLocale, whisper = settings.whisperModel
+        let speech = activeSpeech
+        let locale = speech.speechLocale, whisper = speech.whisperModel
         warmTask?.cancel()
         warmTask = Task {
             speechStatus = whisper.map(loadingStatus) ?? "Speech: loading the speech model (\(languageName))…"
@@ -588,6 +719,23 @@ final class AppModel: ObservableObject {
         warmUpAI(activeProfile)
     }
 
+    /// The active profile changed to one with another speech model: load it now, while idle, so the next dictation
+    /// doesn't wait. Only when a speech model is in memory already (App.SwapSpeechModelAsync).
+    private func swapSpeechModel() {
+        guard speechLoaded, !phase.isBusy, !speechModelLoaded else { return }
+        warmTask?.cancel()
+        let speech = activeSpeech
+        warmTask = Task {
+            do {
+                if let whisper = speech.whisperModel { try await WhisperEngine.shared.load(whisper) }
+                else { try await LiveTranscriber.warmUp(locale: speech.speechLocale) }
+                if !Task.isCancelled { speechReady() }
+            } catch {
+                Log.warn("Loading the profile's speech model failed: " + error.localizedDescription)
+            }
+        }
+    }
+
     /// "Speech: preparing Whisper large-v3 turbo for this Mac…" (first time) or "Speech: loading …".
     private func loadingStatus(_ id: String) -> String {
         WhisperModels.isPrepared(id)
@@ -598,7 +746,7 @@ final class AppModel: ObservableObject {
     /// A Whisper load started or ended: the status line and badges follow it.
     private func whisperChanged() {
         whisperLoad = WhisperEngine.loadingModel
-        if let load = whisperLoad, load.model == settings.whisperModel, !phase.isBusy {
+        if let load = whisperLoad, load.model == activeSpeech.whisperModel, !phase.isBusy {
             speechStatus = loadingStatus(load.model)
             speechOK = false
         }
@@ -606,7 +754,7 @@ final class AppModel: ObservableObject {
     }
 
     private var languageName: String {
-        if let whisper = settings.whisperModel {
+        if let whisper = activeSpeech.whisperModel {
             if WhisperModels.model(whisper)?.englishOnly == true { return "English" }
             if settings.language.isEmpty { return "auto-detect" }
         }
@@ -619,23 +767,133 @@ final class AppModel: ObservableObject {
         objectWillChange.send() // the dashboard's speech dial
     }
 
-    /// Load a profile's AI model without generating anything: Apple Intelligence's prewarm, or an empty Ollama request.
-    /// Cloud models have nothing to load.
-    private func warmUpAI(_ profile: Profile) {
-        guard !profile.isRaw else { return }
+    /// Load a profile's AI model without generating anything (Apple Intelligence's prewarm, or an empty Ollama request),
+    /// saying how it goes in `aiStatus` as Windows' WarmUpAsync does: "Starting AI runtime…", "AI model 'x' not
+    /// installed", "Loading x…", "Ready · x · GPU". Cloud models have nothing to load. A profile without AI warms
+    /// nothing at dictation time (`forDictation`), but its status still names the default model, as on Windows.
+    private func warmUpAI(_ profile: Profile, forDictation: Bool = false) {
+        guard !Self.snapshotMode, !(forDictation && profile.isRaw) else { return }
         let id = processor.model(for: profile)
+        let name = id.shortName
+        func status(_ text: String, _ ok: Bool) {
+            aiStatus = "AI: " + text
+            aiStatusOK = ok
+        }
         switch id.provider {
         case .apple:
-            AppleIntelligenceBackend.warmUp()
-        case .ollama:
-            guard !id.isOllamaCloud, // runs on ollama.com: nothing to load here
-                  let url = try? OllamaBackend.validated(settings.ollamaEndpoint) else { return }
-            let settings = settings
-            Task { await OllamaBackend.warmUp(endpoint: url, model: id.name,
-                                              keepAlive: settings.ollamaKeepAlive(large: await OllamaBackend.size(endpoint: url, model: id.name).large)) }
+            if let reason = AppleIntelligenceBackend.unavailableReason {
+                status(reason, false)
+            } else {
+                AppleIntelligenceBackend.warmUp()
+                status("Ready · \(name)", true)
+            }
         case .anthropic, .openai:
-            break
+            // Nothing to load; and nothing is sent until a dictation needs it.
+            let offline = settings.cloud.keepOffline
+            status(offline ? "\(name) is a cloud model; \"Keep everything offline\" blocks it" : "Ready · \(name) (cloud)", !offline)
+        case .ollama:
+            if id.isOllamaCloud { // runs on ollama.com: nothing to load here
+                let offline = settings.cloud.keepOffline
+                status(offline ? "\(name) runs on ollama.com; \"Keep everything offline\" blocks it" : "Ready · \(name) (cloud)", !offline)
+                return
+            }
+            guard let url = try? OllamaBackend.validated(settings.ollamaEndpoint) else {
+                status("AI runtime unavailable", false)
+                return
+            }
+            let settings = settings
+            aiWarmTask?.cancel()
+            aiWarmTask = Task {
+                status("Starting AI runtime…", false)
+                let installed = await OllamaBackend.installedModels(endpoint: url)
+                if Task.isCancelled { return }
+                if installed.isEmpty, await OllamaBackend.loadedModels(endpoint: url).isEmpty, !(await Self.ollamaRunning(url)) {
+                    status("AI runtime unavailable", false)
+                    return
+                }
+                ollamaModels = installed
+                guard installed.contains(where: { $0.caseInsensitiveCompare(id.name) == .orderedSame || $0.caseInsensitiveCompare(id.name + ":latest") == .orderedSame }) else {
+                    status("AI model '\(name)' not installed", false)
+                    return
+                }
+                status("Loading \(name)…", false)
+                aiLoading = id.name
+                let large = await OllamaBackend.size(endpoint: url, model: id.name).large
+                let ok = await OllamaBackend.warmUp(endpoint: url, model: id.name, keepAlive: settings.ollamaKeepAlive(large: large))
+                if aiLoading == id.name { aiLoading = nil }
+                if Task.isCancelled { return }
+                if ok {
+                    status(await Self.describeLoaded(id.name, large: large, endpoint: url), true)
+                    await refreshLoadedAI()
+                } else {
+                    status("AI runtime error", false)
+                }
+            }
         }
+    }
+
+    /// Whether Ollama answers at all (its root says "Ollama is running").
+    private static func ollamaRunning(_ url: URL) async -> Bool {
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 3
+        return (try? await URLSession.shared.data(for: request)) != nil
+    }
+
+    /// How much of a loaded model sits in GPU memory (TextProcessing.DescribeLoadedAsync). On Apple silicon the memory is
+    /// shared, so Ollama reports it all as GPU memory.
+    private static func describeLoaded(_ model: String, large: Bool, endpoint: URL) async -> String {
+        guard let (data, _) = try? await URLSession.shared.data(from: endpoint.appending(path: "api/ps")),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let models = json["models"] as? [[String: Any]],
+              let m = models.first(where: { ($0["name"] as? String)?.caseInsensitiveCompare(model) == .orderedSame
+                                              || ($0["name"] as? String)?.caseInsensitiveCompare(model + ":latest") == .orderedSame }),
+              let size = (m["size"] as? NSNumber)?.doubleValue, let vram = (m["size_vram"] as? NSNumber)?.doubleValue
+        else { return "Ready · \(model)" }
+        let pct = size <= 0 ? 0 : Int((100 * vram / size).rounded())
+        if large {
+            return pct > 0 ? "Ready · \(model) · \(pct)% on the GPU, the rest in memory" : "Ready · \(model) · in memory, on the processor (no GPU memory free)"
+        }
+        return pct >= 90 ? "Ready · \(model) · GPU" : "Ready · \(model) · \(pct)% GPU (slower: free up GPU memory or pick a smaller model)"
+    }
+
+    /// The dashboard is showing (Windows' 3 s refresh of `LoadedModelsAsync`): keep `loadedAIModels` current while at
+    /// least one view watches. Call with true when it appears and false when it goes.
+    func watchLoadedAI(_ on: Bool) {
+        loadedAIWatchers = max(0, loadedAIWatchers + (on ? 1 : -1))
+        if loadedAIWatchers > 0, loadedAITimer == nil {
+            Task { await refreshLoadedAI() }
+            loadedAITimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
+                Task { @MainActor in await self?.refreshLoadedAI() }
+            }
+        } else if loadedAIWatchers == 0 {
+            loadedAITimer?.invalidate()
+            loadedAITimer = nil
+        }
+    }
+
+    func refreshLoadedAI() async {
+        guard let url = try? OllamaBackend.validated(settings.ollamaEndpoint) else { loadedAIModels = []; return }
+        let loaded = Set(await OllamaBackend.loadedModels(endpoint: url))
+        if loaded != loadedAIModels { loadedAIModels = loaded }
+    }
+
+    /// The dashboard's AI node status for a profile, after "{profile} // " (DashboardPage.Build): "editing" or "loading,
+    /// then editing" while it tidies, "blocked offline" / "ready" for a cloud model, "loaded" / "not loaded" for a local
+    /// one (`loadedAIModels`, kept current by `watchLoadedAI`). Apple Intelligence: "ready" or "not ready". Nil without AI.
+    func aiNodeStatus(_ profile: Profile) -> String? {
+        guard !profile.isRaw else { return nil }
+        let id = processor.model(for: profile)
+        let cloud = !id.isLocal || id.isOllamaCloud
+        let loaded = id.provider == .apple ? AppleIntelligenceBackend.unavailableReason == nil : aiInMemory(id)
+        if phase == .processing { return cloud || loaded ? "editing" : "loading, then editing" }
+        if cloud { return settings.cloud.keepOffline ? "blocked offline" : "ready" }
+        if id.provider == .apple { return loaded ? "ready" : "not ready" }
+        return loaded ? "loaded" : "not loaded"
+    }
+
+    /// An Ollama model is in memory now (as `/api/ps` last said).
+    func aiInMemory(_ id: ModelID) -> Bool {
+        loadedAIModels.contains { $0.lowercased().hasPrefix(id.name.lowercased()) }
     }
 
     /// Whether the AI model is in memory right now (Apple Intelligence and cloud models: nothing to load, or no way to tell).
@@ -658,6 +916,11 @@ final class AppModel: ObservableObject {
     }
 
     private func record(_ entry: HistoryEntry) {
+        // As Windows saves it: the final text trimmed, seconds to a tenth, the turnaround to a hundredth.
+        var entry = entry
+        entry.inserted = entry.inserted.trimmingCharacters(in: .whitespacesAndNewlines)
+        entry.seconds = (entry.seconds * 10).rounded() / 10
+        entry.turnaroundSeconds = (entry.turnaroundSeconds * 100).rounded() / 100
         // The daily counts are kept whether or not History is.
         usage.record(entry)
         usageFile.save(usage)
@@ -694,8 +957,10 @@ final class AppModel: ObservableObject {
     func rerunHistory(_ id: HistoryEntry.ID, progress: @escaping @MainActor (String) -> Void) async -> String {
         guard let entry = history.first(where: { $0.id == id }) else { return "" }
         do {
-            let (changed, message) = try await HistoryRerun.run(entry, profiles: profiles, active: activeProfile, settings: settings,
-                                                                progress: progress)
+            // With the speech model of the profile it was dictated with (HistoryRerun.cs: SpeechModels.For).
+            let profile = profiles.first { $0.name.caseInsensitiveCompare(entry.profileName) == .orderedSame } ?? activeProfile
+            let (changed, message) = try await HistoryRerun.run(entry, profiles: profiles, active: activeProfile,
+                                                                settings: speechSettings(for: profile), progress: progress)
             historyStore.save(changed)
             history = historyStore.entries
             return "✓ " + message
@@ -713,9 +978,21 @@ final class AppModel: ObservableObject {
         return swapped.showingEarlier == true ? "Put back the result from before it was run again." : "Back to the rerun's result."
     }
 
+    /// What History's and the dashboard's insert says: "Inserted into Mail" (or "Copied…"), or the problem.
+    struct InsertNote: Equatable {
+        var ok: Bool
+        var text: String
+        /// History: "✓ Inserted into Mail." or "⚠ {problem}" (HistoryPage).
+        var sentence: String { ok ? "✓ \(text)." : "⚠ \(text)" }
+        /// The dashboard: "✓ INSERTED INTO MAIL" or "⚠ {problem}" (DashboardPage.History).
+        var banner: String { ok ? "✓ " + text.uppercased() : "⚠ \(text)" }
+    }
+
     /// Put a text into the app the last dictation went to (History's "Insert transcription into the last app").
-    func insertIntoLastApp(_ text: String) async -> String {
-        do { return try await platform?.insert(text) ?? "" } catch { return error.localizedDescription }
+    func insertIntoLastApp(_ text: String) async -> InsertNote {
+        do { return InsertNote(ok: true, text: try await platform?.insert(text) ?? "Done") } catch {
+            return InsertNote(ok: false, text: (error as? UserFacingError)?.message ?? error.localizedDescription)
+        }
     }
 
     func resetUsage() {
@@ -884,7 +1161,8 @@ final class AppModel: ObservableObject {
             let voice = activeProfile.voice ?? settings.ttsVoice
             if let text = await platform?.selectedText(), OutputSanitizer.hasContent(text) {
                 reader.read(text, voice: voice, speed: settings.ttsBaseSpeed)
-            } else if let clipboard = platform?.clipboardText(), OutputSanitizer.hasContent(clipboard) {
+            } else if let clipboard = platform?.clipboardText()?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      OutputSanitizer.hasContent(clipboard) {
                 reader.askToReadClipboard(clipboard, voice: voice, speed: settings.ttsBaseSpeed)
             } else {
                 readerNotice("Select some text, then press \(settings.speakHotkey) to hear it read aloud.")
@@ -916,7 +1194,7 @@ final class AppModel: ObservableObject {
 
     /// The speech model in Settings is the one in memory (a dictation started now doesn't wait for it to load).
     var speechModelLoaded: Bool {
-        settings.whisperModel.map { WhisperEngine.loadedModel == $0 } ?? LiveTranscriber.modelRetained
+        activeSpeech.whisperModel.map { WhisperEngine.loadedModel == $0 } ?? LiveTranscriber.modelRetained
     }
 
     /// Unload models right now, on request (the dashboard's speech dial), as App.UnloadNowAsync does on Windows. Never
@@ -943,7 +1221,8 @@ final class AppModel: ObservableObject {
             }
         }
         if voice {
-            if reader.isSpeaking { skipped.append("the Read aloud voice (reading)") }
+            // The player on screen counts as reading, also its DONE card (Windows' ReaderWindow.IsBusy = visible).
+            if reader.isShowing { skipped.append("the Read aloud voice (reading)") }
             else if reader.isLoaded { reader.unload(); done.append("Read aloud voice") }
         }
         var msg = !done.isEmpty ? "Unloaded: " + done.joined(separator: ", ") + ". They load again when needed."
@@ -958,6 +1237,52 @@ final class AppModel: ObservableObject {
     /// Make a speech model the one dictation and Extended Notes use ("" = Apple Speech); it loads now (`warmUp`).
     func useSpeechModel(_ id: String) {
         guard id.isEmpty || WhisperModels.isDownloaded(id) else { return }
+        pendingSpeechModel = nil // the user's own choice wins over the first-run one
+        settings.speechModel = id
+    }
+
+    // MARK: First-run speech model (Windows' RuntimeInstaller: the Whisper model for the hardware, downloaded in setup)
+
+    /// The speech model a new install starts with, as Windows picks by hardware (large-v3 turbo with an NVIDIA GPU,
+    /// small.en without): large-v3 turbo on Apple silicon with 16 GB of memory or more, small.en otherwise and on
+    /// iPhone and iPad. Those English-only models don't fit a device set to another language: there, without room for
+    /// turbo, it stays on Apple Speech (""), which follows the system language.
+    nonisolated static func recommendedSpeechModel(language: String = "", memory: UInt64 = ProcessInfo.processInfo.physicalMemory,
+                                       appleSilicon: Bool = isAppleSilicon, phone: Bool = isPhone) -> String {
+        if !phone, appleSilicon, memory >= 16 << 30 { return "large-v3-turbo" }
+        let code = language.isEmpty ? (Locale.current.language.languageCode?.identifier ?? "en") : String(language.prefix(2))
+        return code == "en" ? "small.en" : ""
+    }
+
+    nonisolated static var isPhone: Bool {
+        #if os(iOS)
+        true
+        #else
+        false
+        #endif
+    }
+
+    nonisolated static var isAppleSilicon: Bool {
+        #if arch(arm64)
+        true
+        #else
+        false
+        #endif
+    }
+
+    /// Setup's speech model step (and a launch after an unfinished one): download the first-run model, then switch
+    /// dictation over to it. Nothing to do when there is none, it is in already, or a download runs.
+    func startDefaultSpeechDownload() {
+        guard let id = pendingSpeechModel, !id.isEmpty else { pendingSpeechModel = nil; return }
+        if WhisperModels.isDownloaded(id) { finishDefaultSpeechModel(id); return }
+        downloadWhisper(id)
+    }
+
+    /// The first-run model is in: dictation uses it from now on (it loads now, `warmUp`).
+    private func finishDefaultSpeechModel(_ id: String) {
+        guard pendingSpeechModel == id else { return }
+        pendingSpeechModel = nil
+        Log.info("Speech model \(id) downloaded at first run: using it from now on")
         settings.speechModel = id
     }
 
@@ -974,8 +1299,12 @@ final class AppModel: ObservableObject {
                     }
                 }
                 Log.info("Downloaded the speech model \(id)")
-                // Prepared for this device now, so choosing it doesn't sit through that.
-                Task.detached { await WhisperEngine.prepare(id) }
+                if pendingSpeechModel == id {
+                    finishDefaultSpeechModel(id) // loads (and prepares) it now
+                } else {
+                    // Prepared for this device now, so choosing it doesn't sit through that.
+                    Task.detached { await WhisperEngine.prepare(id) }
+                }
             } catch is CancellationError {
             } catch {
                 Log.info("Speech model download failed: \(error.localizedDescription)")

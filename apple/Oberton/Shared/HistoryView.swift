@@ -184,7 +184,7 @@ struct HistoryDetail: View {
             }
             #if os(macOS)
             Button("Insert transcription into the last app") {
-                Task { info = await model.insertIntoLastApp(entry.transcription) }
+                Task { info = await model.insertIntoLastApp(entry.transcription).sentence }
             }
             .buttonStyle(.quiet)
             .padding(.top, 14)

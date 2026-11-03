@@ -137,7 +137,7 @@ public final class LiveTranscriber: @unchecked Sendable {
         let node = engine.inputNode
         let micFormat = node.outputFormat(forBus: 0)
         guard micFormat.sampleRate > 0, micFormat.channelCount > 0 else {
-            throw UserFacingError("No microphone was found. Connect one, or pick another in Settings › Microphone.")
+            throw UserFacingError(Self.noMicrophone)
         }
         let leveller = evenOut ? VolumeLeveller(sampleRate: micFormat.sampleRate) : nil
         lock.withLock { self.leveller = leveller }
@@ -147,7 +147,7 @@ public final class LiveTranscriber: @unchecked Sendable {
         engine.prepare()
         do { try engine.start() } catch {
             node.removeTap(onBus: 0)
-            throw UserFacingError("The microphone couldn't be started (\(error.localizedDescription)).")
+            throw UserFacingError(Self.micWontOpen)
         }
     }
 
@@ -222,8 +222,30 @@ public final class LiveTranscriber: @unchecked Sendable {
     /// The level on Windows' meter scale (`sqrt(rms) · 1.8`), used for the speech guard's peak.
     static func speechLevel(rms: Float) -> Float { min(1, rms.squareRoot() * 1.8) }
 
-    /// The level for the meter: −55 dB … −5 dB → 0…1.
+    /// The level for Settings › Microphone's test bar: −55 dB … −5 dB → 0…1.
     static func meterLevel(rms: Float) -> Float { min(1, max(0, (20 * log10(max(rms, 1e-6)) + 55) / 50)) }
+
+    /// MicCapture's messages, in the Mac's words.
+    #if os(macOS)
+    static let noMicrophone = "No microphone was found. Plug one in or enable it in System Settings › Sound."
+    static let micWontOpen = "Could not open the microphone. Check that it is connected and that macOS allows Oberton to use it (System Settings › Privacy & Security › Microphone)."
+    #else
+    static let noMicrophone = "No microphone was found. Plug one in, or check Settings › Privacy & Security › Microphone."
+    static let micWontOpen = "Could not open the microphone. Check that Oberton may use it (Settings › Privacy & Security › Microphone)."
+    #endif
+
+    /// The meter's levels for a buffer, one per 50 ms of it, on Windows' scale (MicCapture: `min(1, √rms · 1.8)`, about
+    /// 20 a second); the overlay takes √ again.
+    static func meterLevels(_ buffer: AVAudioPCMBuffer) -> [Float] {
+        guard let data = buffer.floatChannelData?[0], buffer.frameLength > 0 else { return [] }
+        let n = Int(buffer.frameLength), step = max(1, Int(buffer.format.sampleRate * 0.05))
+        return stride(from: 0, to: n, by: step).map { start in
+            let end = min(n, start + step)
+            var sum: Float = 0
+            for i in start..<end { sum += data[i] * data[i] }
+            return speechLevel(rms: (sum / Float(end - start)).squareRoot())
+        }
+    }
 
     static func rms(_ buffer: AVAudioPCMBuffer) -> (rms: Float, peak: Float)? {
         guard let data = buffer.floatChannelData?[0], buffer.frameLength > 0 else { return nil }
@@ -237,7 +259,7 @@ public final class LiveTranscriber: @unchecked Sendable {
         guard let buffer = Self.copy(tap) else { return }
         var silent = false
         if let (rms, peak) = Self.rms(buffer) {
-            let meter = Self.meterLevel(rms: rms), spoken = Self.speechLevel(rms: rms)
+            let meter = Self.meterLevels(buffer), spoken = Self.speechLevel(rms: rms)
             silent = lock.withLock {
                 peakLevel = max(peakLevel, spoken)
                 if peak > 0 { sawSignal = true; return false }
@@ -247,7 +269,7 @@ public final class LiveTranscriber: @unchecked Sendable {
                 return silentFrames >= twoSeconds && silentFrames - Int(buffer.frameLength) < twoSeconds
             }
             let cb = onLevel
-            DispatchQueue.main.async { cb?(meter) }
+            DispatchQueue.main.async { for level in meter { cb?(level) } }
         }
         if silent { let cb = onSilence; DispatchQueue.main.async { cb?() } }
         onAudio?(buffer) // as recorded: History's "Run again" evens it out afresh
