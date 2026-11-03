@@ -44,9 +44,22 @@ struct ReadAloudView: View {
 
                 #if os(macOS)
                 FieldLabel("Player opacity")
-                ObSlider(value: $model.settings.overlayOpacity, range: 0.3...1, step: 0.01, format: { "\(Int(($0 * 100).rounded()))%" })
+                ObSlider(value: $model.settings.readerOpacity, range: 0.3...1, step: 0.02, format: { "\(Int(($0 * 100).rounded()))%" })
+                Caption("How much of the player's dark background shows; the text stays solid. The dictation pill has its own setting under Settings › Layout.",
+                        size: 12.5).padding(.top, 6)
+
+                FieldLabel("Player position")
+                ObSwitch("Same place as the dictation overlay", isOn: ReaderPositionPicker.samePlaceBinding(model)).fixedSize()
+                HStack(spacing: 14) {
+                    ReaderPositionPicker()
+                    Text(ReaderPositionPicker.placeName(model.settings)).font(Ob.sans(12.5)).foregroundStyle(ob.muted)
+                }
+                .padding(.top, 6)
+                Caption("Put the player somewhere other than the dictation pill if you like. You can also drag it while it reads.",
+                        size: 12.5).padding(.top, 6)
+
                 FieldLabel("How to use it")
-                Caption("Select text, then press \(model.settings.speakHotkey). With nothing selected, Oberton reads your clipboard. Press the shortcut again (or ✕) to stop. Change the shortcut under Hotkeys.")
+                Caption("Select text, then press \(model.settings.speakHotkey). With nothing selected, Oberton offers to read your clipboard. Press the shortcut again (or ✕) to stop. Change the shortcut under Hotkeys.")
                 #endif
 
                 FieldLabel("Read something")

@@ -138,6 +138,12 @@ public final class ReadAloudPlayer: NSObject, ObservableObject, AVSpeechSynthesi
         question = ReaderQuestion(title: "Read aloud couldn't start", body: message, primary: "OK") { [weak self] in self?.stop() }
     }
 
+    /// A plain message on the player's card with OK (for when there is nothing else to show it on).
+    public func showMessage(_ message: String) {
+        stop()
+        question = ReaderQuestion(title: message, body: "", primary: "OK") { [weak self] in self?.stop() }
+    }
+
     /// Stop reading (or close the question) and close the player.
     public func stop() {
         voiceEngine?.stopSpeaking(at: .immediate)
@@ -150,6 +156,28 @@ public final class ReadAloudPlayer: NSObject, ObservableObject, AVSpeechSynthesi
         spokenRange = nil
         resumeAt = nil
     }
+
+    #if DEBUG
+    /// Puts the player in a state without speaking, for the snapshots: `word` is a word of the text (its first
+    /// occurrence), nil = the end.
+    public func showForSnapshot(_ raw: String, word: String?, status: Status, speed: Double = 1, voice: String = "Samantha") {
+        stop()
+        text = MarkdownText.forReading(raw)
+        sentences = ReadAloudText.split(text)
+        chars = sentences.map { ReadAloudText.speakable(text, $0).count }
+        self.speed = speed
+        voiceName = voice
+        isOpen = true
+        self.status = status
+        if let word {
+            let r = (text as NSString).range(of: word)
+            spokenRange = r
+            index = sentences.lastIndex { $0.location <= r.location } ?? 0
+        } else {
+            index = sentences.count - 1
+        }
+    }
+    #endif
 
     // MARK: Controls
 

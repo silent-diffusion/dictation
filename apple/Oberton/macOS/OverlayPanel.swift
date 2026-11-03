@@ -40,10 +40,10 @@ final class OverlayController {
         host.sizingOptions = []
         panel.contentView = host
 
-        model.$phase.combineLatest(model.reader.$isSpeaking, model.$settings, model.$profileNotice)
+        model.$phase.combineLatest(model.$settings, model.$profileNotice)
             .receive(on: RunLoop.main)
-            .sink { [weak self] phase, speaking, settings, notice in
-                self?.update(visible: settings.showOverlay && (phase != .idle || speaking || notice), settings: settings)
+            .sink { [weak self] phase, settings, notice in
+                self?.update(visible: settings.showOverlay && (phase != .idle || notice), settings: settings)
             }
             .store(in: &bag)
         NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
@@ -204,7 +204,6 @@ struct OverlayView: View {
                 ReceiptCard(entry: pending, preview: true) { model.cancel() }
             }
             OverlayPill(reader: model.reader, open: $showReceipt)
-            ReaderCard(player: model.reader, opacity: model.settings.overlayOpacity)
         }
         .padding(OverlayController.padding)
         .fixedSize()

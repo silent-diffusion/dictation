@@ -582,14 +582,25 @@ final class AppModel: ObservableObject {
 
     // MARK: Read aloud
 
-    /// The read-aloud hotkey: the selection, or the clipboard when nothing is selected. Pressed while reading, it stops.
+    /// The read-aloud hotkey: read the selection; with nothing selected, offer the clipboard. Pressed again (while
+    /// reading or asking), it stops.
     func readSelection() {
-        if reader.isSpeaking { reader.stop(); return }
+        if reader.isShowing { reader.stop(); return }
         Task {
-            let text = await platform?.selectedText() ?? platform?.clipboardText()
-            guard let text, OutputSanitizer.hasContent(text) else { return }
-            reader.read(text, voice: activeProfile.voice ?? settings.ttsVoice, speed: settings.ttsBaseSpeed)
+            let voice = activeProfile.voice ?? settings.ttsVoice
+            if let text = await platform?.selectedText(), OutputSanitizer.hasContent(text) {
+                reader.read(text, voice: voice, speed: settings.ttsBaseSpeed)
+            } else if let clipboard = platform?.clipboardText(), OutputSanitizer.hasContent(clipboard) {
+                reader.askToReadClipboard(clipboard, voice: voice, speed: settings.ttsBaseSpeed)
+            } else {
+                readerNotice("Select some text, then press \(settings.speakHotkey) to hear it read aloud.")
+            }
         }
+    }
+
+    /// An info notice for Read aloud. Until the overlay's notices land, the player shows it as a card with OK.
+    private func readerNotice(_ text: String) {
+        reader.showMessage(text)
     }
 
     // MARK: Models

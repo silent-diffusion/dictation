@@ -86,6 +86,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
     private lazy var platform = MacPlatform { [unowned self] in self.model.settings }
     private let hotkeys = HotkeyManager()
     private var overlay: OverlayController?
+    private var reader: ReaderController?
     private var watch: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -94,6 +95,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         #endif
         model.platform = platform
         overlay = OverlayController(model: model)
+        reader = ReaderController(model: model)
         // Re-register as soon as a shortcut changes in Settings, and let go of them while one is being recorded.
         // (@Published sends before the value is stored, so the values come from the publishers.) The Extended Notes
         // marker key is held only while a session records (paused or not); the rest of the time it stays with

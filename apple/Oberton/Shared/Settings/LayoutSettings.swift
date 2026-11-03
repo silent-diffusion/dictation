@@ -9,7 +9,7 @@ struct LayoutSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             #if os(macOS)
-            Caption("Where the dictation overlay and the Read aloud player appear, and how solid they look. Drag either one to move it until Oberton restarts.")
+            Caption("Where the dictation overlay and the Read aloud player appear on your screen, and how much of their background shows.")
             FieldLabel("Dictation overlay")
             HStack(alignment: .top, spacing: 0) {
                 VStack(alignment: .leading, spacing: 0) {
@@ -36,6 +36,38 @@ struct LayoutSection: View {
                 .frame(maxWidth: .infinity)
                 Hairline(vertical: true)
                 preview.frame(maxWidth: .infinity, minHeight: 200)
+            }
+            .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
+            FieldLabel("Read aloud player").padding(.top, 8)
+            HStack(alignment: .top, spacing: 0) {
+                VStack(alignment: .leading, spacing: 0) {
+                    ObSwitch("Same place as the dictation overlay", isOn: ReaderPositionPicker.samePlaceBinding(model))
+                    Hairline()
+                    HStack {
+                        Text("Opacity").font(Ob.sans(13.5))
+                        Spacer()
+                        Text("\(Int((model.settings.readerOpacity * 100).rounded()))%").font(Ob.mono(12))
+                    }
+                    .padding(.top, 12)
+                    Slider(value: $model.settings.readerOpacity, in: 0.3...1).padding(.bottom, 12)
+                        .accessibilityLabel("Read aloud player opacity")
+                    Hairline()
+                    HStack {
+                        Text("Position").font(Ob.sans(13.5))
+                        Spacer()
+                        Text(ReaderPositionPicker.placeName(model.settings)
+                             + (model.settings.readerPosition == .withOverlay ? " (with the overlay)" : ""))
+                            .font(Ob.sans(12)).foregroundStyle(ob.muted)
+                    }
+                    .padding(.top, 12).padding(.bottom, 8)
+                    ReaderPositionPicker()
+                    Caption("The player that reads text aloud. Like the dictation overlay it stays dark in both themes, and you can drag it while it reads.",
+                            size: 12).padding(.top, 12)
+                }
+                .padding(EdgeInsets(top: 6, leading: 18, bottom: 16, trailing: 18))
+                .frame(maxWidth: .infinity)
+                Hairline(vertical: true)
+                ReaderPreview(opacity: model.settings.readerOpacity).frame(maxWidth: .infinity, minHeight: 200)
             }
             .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
             #else
