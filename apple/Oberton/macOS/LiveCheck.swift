@@ -73,6 +73,9 @@ enum LiveCheck {
                 let typedLive = snapshots.contains { $0.count > "Second check. ".count }
                 check("AI live: a piece was typed while speaking", typedLive, snapshots.last ?? "")
                 check("AI live: document = start + final pass", text(edit) == "Second check. " + (model.lastEntry?.inserted ?? "?"), text(edit))
+                log("AI live: document ends \"\(text(edit).suffix(12))\", inserted ends \"\((model.lastEntry?.inserted ?? "").suffix(12))\"")
+                try? await Task.sleep(for: .seconds(2))
+                log("AI live: 2 s later the document ends \"\(text(edit).suffix(12))\"")
                 check("AI live: no note (final pass replaced the live text)", model.lastEntry?.warning == nil, model.lastEntry?.warning ?? "")
             }
 

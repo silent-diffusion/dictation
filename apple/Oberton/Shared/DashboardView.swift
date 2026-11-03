@@ -351,9 +351,7 @@ struct SignalPathCell: View {
 
     /// Whether the next dictation with this profile types while you speak (Windows: the General switch on and the
     /// profile without a preview).
-    // Lane I: replace with `model.typesWhileSpeaking(p)`. Until live typing exists on the Mac nothing types while you
-    // speak, so the node must not claim "// live".
-    private func typesWhileSpeaking(_ p: Profile) -> Bool { false }
+    private func typesWhileSpeaking(_ p: Profile) -> Bool { model.typesWhileSpeaking(p) }
 
     private var nodes: [PathNode] {
         let p = model.activeProfile

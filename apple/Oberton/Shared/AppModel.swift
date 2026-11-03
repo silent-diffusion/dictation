@@ -136,6 +136,16 @@ final class AppModel: ObservableObject {
     @Published private(set) var finalPass = false
     /// "Type as you speak" for the dictation running now, when it is on (Windows' `_live`).
     private var live: LiveInsertion?
+
+    /// Whether a dictation with this profile types while you speak: the General switch on, a profile without a
+    /// preview, and a platform that can type into other apps (the Mac).
+    func typesWhileSpeaking(_ profile: Profile) -> Bool {
+        #if os(macOS)
+        settings.typeWhileSpeaking && !profile.showPreview
+        #else
+        false
+        #endif
+    }
     @Published var ollamaModels: [String] = []
     @Published private(set) var usage: UsageLog
     /// The Analytics word tally (words.json): counts only, never sentences.
@@ -382,7 +392,7 @@ final class AppModel: ObservableObject {
         // and when there is nowhere to type (the text then waits for a click at the end).
         live?.stop()
         live = nil
-        if settings.typeWhileSpeaking, !profile.showPreview, let target = platform?.liveTarget() {
+        if typesWhileSpeaking(profile), let target = platform?.liveTarget() {
             let platform = platform, processor = processor
             live = LiveInsertion(target: target, profile: profile, context: Task { await platform?.insertionContext() },
                                  holdsClipboard: settings.restoreClipboard) { piece in
