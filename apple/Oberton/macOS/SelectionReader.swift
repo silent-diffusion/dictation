@@ -47,9 +47,20 @@ enum SelectionReader {
         return InsertionRules.capped(text).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// Windows logs which apps needed the copy fallback ("Selection not readable via UI Automation: …").
+    /// Windows logs "Selection not readable via UI Automation: {exception}" only when asking the app failed; a control
+    /// that has no text to give (no focused element, no text pattern) and an app that doesn't answer in time fall back
+    /// to the copy without a line. So here: a failed request is logged, a missing attribute or value isn't.
     private static func unreadable(_ error: AXError) {
+        guard shouldLog(error) else { return }
         Log.info("Selection not readable via Accessibility: \(name(error))")
+    }
+
+    /// Whether an answer is a failure (logged) rather than "this control has no selected text" (silent).
+    static func shouldLog(_ error: AXError) -> Bool {
+        switch error {
+        case .success, .attributeUnsupported, .noValue, .parameterizedAttributeUnsupported: false
+        default: true
+        }
     }
 
     private static func name(_ error: AXError) -> String {

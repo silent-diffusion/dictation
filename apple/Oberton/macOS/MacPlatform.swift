@@ -45,8 +45,9 @@ final class MacPlatform: PlatformServices {
     /// Where the cursor was, and the text around it, read while the target still had the focus.
     private var spot: Task<PasteSpot, Never> = Task { .unknown }
     private var context: Task<InsertionContext?, Never> = Task { nil }
-    /// The window and title, written into `target` once read.
+    /// The window and the title, each written into `target` once read.
     private var details: Task<Void, Never> = Task {}
+    private var title: Task<Void, Never> = Task {}
     private var capture = 0
     private let settings: () -> AppSettings
 
@@ -63,9 +64,18 @@ final class MacPlatform: PlatformServices {
 
     /// The dictation window's title, when Accessibility could read it (the direct build): for History and the web
     /// sites. "" for a window without one (as Windows' GetWindowText); nil without Accessibility (the App Store build).
+    /// Read from the hotkey press on, for as long as the app takes to answer (each Accessibility call answers within a
+    /// second): Windows' GetWindowText always has it, so a slow app isn't cut off at 400 ms here; only once the text
+    /// is ready does it wait at most 400 ms more, so a hung app doesn't hold the dictation up.
     var targetWindowTitle: String? {
         get async {
-            await details.value // read at the hotkey press
+            let title = self.title
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask { await title.value }
+                group.addTask { try? await Task.sleep(for: .milliseconds(400)) }
+                await group.next()
+                group.cancelAll()
+            }
             return target?.title
         }
     }
@@ -89,28 +99,29 @@ final class MacPlatform: PlatformServices {
     private struct Capture {
         var target: Target?
         var details: Task<Details, Never>
+        var title: Task<String?, Never>
         var spot: Task<PasteSpot, Never>
         var context: Task<InsertionContext?, Never>
     }
 
     private struct Details: @unchecked Sendable {
         var window: AXRef?
-        var title: String?
     }
 
     /// The app in front now, down to the caret position and the text around it, read while it still has the focus.
     /// Each Accessibility read has its own 400 ms, as Windows reads the spot and the context side by side.
     private func read(readContext: Bool) -> Capture {
         guard let app = NSWorkspace.shared.frontmostApplication else {
-            return Capture(target: nil, details: Task { Details() }, spot: Task { PasteSpot(kind: .none) }, context: Task { nil })
+            return Capture(target: nil, details: Task { Details() }, title: Task { nil }, spot: Task { PasteSpot(kind: .none) }, context: Task { nil })
         }
         let nowhere = InsertionRules.isNowhere(Self.frontApp(app), accessibility: AXReader.available)
         let (pid, bundleID) = (app.processIdentifier, app.bundleIdentifier)
         let details = Task {
-            await AXReader.bounded(.milliseconds(400), fallback: Details()) {
-                let window = AXReader.focusedWindow(pid)
-                return Details(window: window, title: window.map { AXReader.title($0) ?? "" })
-            }
+            await AXReader.bounded(.milliseconds(400), fallback: Details()) { Details(window: AXReader.focusedWindow(pid)) }
+        }
+        // The title has no 400 ms limit of its own (see `targetWindowTitle`): two Accessibility calls, a second each.
+        let title = Task {
+            await AXReader.bounded(.seconds(3), fallback: nil) { AXReader.focusedWindow(pid).map { AXReader.title($0) ?? "" } }
         }
         // A window that is never somewhere to type has no spot to read (Windows `PasteSpot.CaptureAsync`).
         let spot = nowhere ? Task { PasteSpot(kind: .none) }
@@ -118,7 +129,7 @@ final class MacPlatform: PlatformServices {
         let context = readContext && !nowhere
             ? Task { await AXReader.bounded(.milliseconds(400), fallback: nil) { AXReader.context(pid) } }
             : Task<InsertionContext?, Never> { nil }
-        return Capture(target: Target(app: app, nowhere: nowhere), details: details, spot: spot, context: context)
+        return Capture(target: Target(app: app, nowhere: nowhere), details: details, title: title, spot: spot, context: context)
     }
 
     /// The capture becomes the dictation's target. `keepContext`: a placed dictation keeps the text read at the hotkey
@@ -129,7 +140,11 @@ final class MacPlatform: PlatformServices {
         let mine = capture
         details = Task { @MainActor [weak self] in
             let d = await c.details.value
-            if let self, self.capture == mine { self.target?.window = d.window; self.target?.title = d.title }
+            if let self, self.capture == mine { self.target?.window = d.window }
+        }
+        title = Task { @MainActor [weak self] in
+            let t = await c.title.value
+            if let self, self.capture == mine { self.target?.title = t }
         }
         spot = c.spot
         if !keepContext { context = c.context }
@@ -449,7 +464,8 @@ final class MacPlatform: PlatformServices {
     }
 
     func copy(_ text: String) {
-        put(text, on: NSPasteboard.general)
+        // DictationController.CopyPlacingToClipboard logs a clipboard that wouldn't take it.
+        if !put(text, on: NSPasteboard.general) { Log.warn("Copying the dictation failed: the clipboard didn't take the text") }
     }
 
     /// The text left on the clipboard as a last resort, when it couldn't go in: an ordinary copy, so clipboard managers
@@ -459,11 +475,13 @@ final class MacPlatform: PlatformServices {
         NSPasteboard.general.setString(text, forType: .string)
     }
 
-    private func put(_ text: String, on pb: NSPasteboard) {
+    @discardableResult
+    private func put(_ text: String, on pb: NSPasteboard) -> Bool {
         pb.clearContents()
-        pb.setString(text, forType: .string)
+        guard pb.setString(text, forType: .string) else { return false }
         // Clipboard managers that follow nspasteboard.org leave the temporary text out of their history.
         pb.setString("", forType: NSPasteboard.PasteboardType("org.nspasteboard.TransientType"))
+        return true
     }
 
     // MARK: Type as you speak
@@ -481,11 +499,24 @@ final class MacPlatform: PlatformServices {
     /// side effects), else copied with Cmd+C and the user's clipboard put back. nil when nothing is selected.
     func selectedText() async -> String? {
         if NSApp.isActive {
-            // Oberton's own window is in front: ask it directly.
+            // Oberton's own window is in front: its text view is asked directly, with no side effects, as Windows' UI
+            // Automation reads its own window; anything else (no text view has the focus) is copied, as Windows copies
+            // when the focused control has no text pattern.
+            if let text = Self.ownSelection() { return text.isEmpty ? nil : text }
             return await copySelection()
         }
         if let text = await SelectionReader.accessibility() { return text.isEmpty ? nil : text }
         return await copySelection()
+    }
+
+    /// The selection in Oberton's own focused text view (Windows' SelectionReader through UI Automation): each range up
+    /// to 100,000 UTF-16 units, joined and trimmed; "" when nothing is selected; nil when no text view has the focus.
+    private static func ownSelection() -> String? {
+        guard let view = (NSApp.keyWindow ?? NSApp.mainWindow)?.firstResponder as? NSTextView else { return nil }
+        let text = view.string as NSString
+        let parts = view.selectedRanges.map(\.rangeValue).filter { $0.length > 0 && NSMaxRange($0) <= text.length }
+            .map { InsertionRules.capped(text.substring(with: $0)) }
+        return parts.joined().trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Without Accessibility, another app's selection can be neither asked for nor copied (Windows needs no permission).
@@ -531,21 +562,33 @@ final class MacPlatform: PlatformServices {
         if !CGPreflightPostEventAccess() { CGRequestPostEventAccess() }
     }
 
+    /// The clipboard's items, to put back afterwards; a type the app on the clipboard couldn't give is logged
+    /// (TextInserter's "Could not snapshot clipboard: …") and left out.
     fileprivate func snapshot(_ pb: NSPasteboard) -> [[NSPasteboard.PasteboardType: Data]] {
-        (pb.pasteboardItems ?? []).map { item in
-            Dictionary(uniqueKeysWithValues: item.types.compactMap { t in item.data(forType: t).map { (t, $0) } })
+        var missing: [NSPasteboard.PasteboardType] = []
+        let items = (pb.pasteboardItems ?? []).map { item in
+            Dictionary(uniqueKeysWithValues: item.types.compactMap { t in
+                if let data = item.data(forType: t) { return (t, data) }
+                missing.append(t)
+                return nil
+            })
         }
+        if !missing.isEmpty {
+            Log.warn("Could not snapshot clipboard: no data for \(missing.map(\.rawValue).joined(separator: ", "))")
+        }
+        return items
     }
 
     /// The saved clipboard back, whatever is on it now (Windows `ClipboardSnapshot.Restore`); empty → cleared.
     fileprivate func restore(_ items: [[NSPasteboard.PasteboardType: Data]], to pb: NSPasteboard) {
         pb.clearContents()
         guard !items.isEmpty else { return }
-        pb.writeObjects(items.map { types in
+        let written = pb.writeObjects(items.map { types in
             let item = NSPasteboardItem()
             for (t, d) in types { item.setData(d, forType: t) }
             return item
         })
+        if !written { Log.warn("Could not restore clipboard: the saved items could not be written") }
     }
 }
 
@@ -588,13 +631,25 @@ enum WindowList {
         return windows.isEmpty
     }
 
-    /// The dictation's window is the app's front one: of the windows the app had when the dictation started, the first
-    /// still there is the first on screen now. A window opened since (a pop-up list, a sheet, a new document) doesn't
-    /// count; one minimised or on another Space isn't in front.
+    /// The dictation's window is the app's front one (Windows: GetForegroundWindow() is the target's window): the first
+    /// of the app's windows on screen now is the first of those it had when the dictation started that is still there,
+    /// or a window opened since that lies inside it (a pop-up list, a completion list, a sheet: without Accessibility
+    /// the window server can't tell those apart, and a pop-up list must not stop the typing). Another window opened
+    /// since (a new document, a new message) is in front instead, as on Windows; one minimised or on another Space isn't
+    /// in front.
     static func isFront(_ windows: [Window], of pid: pid_t) -> Bool {
-        guard let mine = windows.first(where: { exists($0.id) })?.id else { return true }
+        isFront(windows, now: onScreen(pid), exists: exists)
+    }
+
+    static func isFront(_ windows: [Window], now: [Window], exists: (CGWindowID) -> Bool) -> Bool {
+        guard let mine = windows.first(where: { exists($0.id) }) else { return true }
         let then = Set(windows.map(\.id))
-        return onScreen(pid).first(where: { then.contains($0.id) })?.id == mine
+        for window in now {
+            if window.id == mine.id { return true }
+            if then.contains(window.id) { return false }
+            if !mine.bounds.contains(window.bounds) { return false } // a new window of its own in front
+        }
+        return false
     }
 }
 

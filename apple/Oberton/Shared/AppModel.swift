@@ -1361,13 +1361,16 @@ final class AppModel: ObservableObject {
         Task {
             // Any selection is read, any clipboard text offered (a punctuation-only one then says there's nothing to read).
             // The voice and speed are the current ones when the reading starts (for the clipboard, at READ CLIPBOARD).
+            // Where the selection can't be read at all (the Mac without Accessibility), the clipboard is still offered, as
+            // Windows offers it whenever the copy brought nothing; only with nothing there either does the overlay say
+            // what is missing, where Windows would say to select some text.
             if let text = await platform?.selectedText(), !text.isEmpty {
                 reader.read(text)
-            } else if let why = platform?.selectionUnavailable {
-                notice(why, kind: .warning)
             } else if let clipboard = platform?.clipboardText()?.trimmingCharacters(in: .whitespacesAndNewlines),
                       !clipboard.isEmpty {
                 reader.askToReadClipboard(clipboard)
+            } else if let why = platform?.selectionUnavailable {
+                notice(why, kind: .warning)
             } else {
                 readerNotice("Select some text, then press \(settings.speakHotkey) to hear it read aloud.")
             }
