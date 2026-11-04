@@ -301,6 +301,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, N
     /// Keep a session that is recording, up to now, and the notes draft.
     func applicationWillTerminate(_ notification: Notification) {
         model.notes.shutdown()
+        model.saveProfilesNow()
         Log.info("=== Oberton exiting ===")
     }
 

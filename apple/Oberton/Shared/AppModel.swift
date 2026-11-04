@@ -97,7 +97,7 @@ final class AppModel: ObservableObject {
     }
     @Published var profiles: [Profile] {
         didSet {
-            profilesFile.save(profiles)
+            scheduleProfilesSave()
             // The active profile's own speech model was changed on its page: load it now if a speech model is in
             // memory and nothing is dictating, as a profile switch does (an unloaded engine stays unloaded).
             let id = settings.activeProfileID
@@ -107,6 +107,7 @@ final class AppModel: ObservableObject {
             }
         }
     }
+    private var profilesSaveTask: Task<Void, Never>?
     @Published private(set) var history: [HistoryEntry]
     /// A dictation pauses Extended Notes while it runs (both would hear the same voice).
     @Published private(set) var phase: Phase = .idle {
@@ -251,7 +252,10 @@ final class AppModel: ObservableObject {
         let movesNotepad = !Self.snapshotMode && !loadedSettings.notepad.isEmpty
         if movesNotepad && notesStore.draft.isEmpty { notesStore.setDraft(loadedSettings.notepad) }
         notes = NotesRecorder(store: notesStore, settings: { loadedSettings })
-        profiles = profilesFile.load() ?? BuiltInProfiles.create()
+        // A new install is a missing, empty or unreadable profiles.json, as on Windows (ProfileService).
+        let loadedProfiles = profilesFile.load() ?? []
+        let freshProfiles = loadedProfiles.isEmpty
+        profiles = freshProfiles ? BuiltInProfiles.create() : loadedProfiles
         self.history = history
         if var loaded = usageFile.load() {
             // Sites are new (version 2): filled in once for the dictations History still has (UsageStore).
@@ -274,17 +278,15 @@ final class AppModel: ObservableObject {
             words = WordTally()
         }
         if settingsFile.load() == nil {
-            // A new install starts on Grammar & Clarity (as on Windows since 5.18), or on Raw on a device without Apple
-            // Intelligence rather than failing every dictation. Existing installs keep their own.
-            settings.activeProfileID = AppleIntelligenceBackend.unavailableReason != nil && settings.defaultModel == .appleOnDevice
-                ? BuiltInProfiles.rawID
-                : profiles.first { $0.name == BuiltInProfiles.defaultName }?.id
+            // A new install's AI model (`LocalAISetup`): Windows' qwen2.5:3b on Oberton's own runtime in the direct
+            // download, Apple Intelligence in the App Store version.
+            if !Self.snapshotMode { LocalAISetup.newInstall(&settings) }
             // The speech model for this device, as Windows' setup picks it: downloaded during setup
             // (`startDefaultSpeechDownload`); Apple Speech until it is in.
             if !Self.snapshotMode { pendingSpeechModel = Self.recommendedSpeechModel(language: settings.language) }
         }
         if movesNotepad { settings.notepad = "" }
-        startProfiles()
+        startProfiles(fresh: freshProfiles)
         // Extended Notes transcribes with the active profile's speech model, as Windows' NotesRecorder (SpeechModels.For).
         notes.settingsSource = { [weak self] in self.map { $0.settings.dictating(with: $0.activeProfile) } ?? loadedSettings }
         notesChange = notes.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
@@ -339,6 +341,8 @@ final class AppModel: ObservableObject {
         if !Self.snapshotMode { unloader.start(self) }
         // Warm both models in the background so the first hotkey press is quick.
         if !Self.snapshotMode { Task { @MainActor [weak self] in self?.warmUp(atLaunch: true) } }
+        // The new install's AI model: the direct download fetches its runtime and model once setup is done.
+        if !Self.snapshotMode { LocalAISetup.shared.resume(self) }
         // A first-run speech model download that didn't finish (Oberton quit meanwhile) carries on once setup is done.
         if !Self.snapshotMode, OnboardingView.isDone, pendingSpeechModel != nil {
             Task { @MainActor [weak self] in
@@ -351,12 +355,11 @@ final class AppModel: ObservableObject {
     /// At start, as Windows' ProfileService and SettingsService: built-ins added in later versions show up once, the
     /// default profile (on an update, the profile that was active) is the one active, and the Ollama address must be
     /// local. (Property observers don't run in init, so this saves itself.)
-    private func startProfiles() {
-        let added = BuiltInProfiles.addMissing(to: &profiles, added: &settings.builtInProfilesAdded)
-        if added && !Self.snapshotMode { profilesFile.save(profiles) }
-        func find(_ id: String?) -> String? { profiles.first { $0.id == id }?.id }
-        settings.defaultProfileID = find(settings.defaultProfileID) ?? find(settings.activeProfileID) ?? profiles.first?.id
-        settings.activeProfileID = settings.defaultProfileID
+    private func startProfiles(fresh: Bool) {
+        // A new install starts on Grammar & Clarity, or on Raw where Apple Intelligence is the model and can't run,
+        // rather than failing every dictation (the Mac's addition).
+        let raw = AppleIntelligenceBackend.unavailableReason != nil && settings.defaultModel == .appleOnDevice ? BuiltInProfiles.rawID : nil
+        if BuiltInProfiles.start(&profiles, settings: &settings, fresh: fresh, freshPick: raw), !Self.snapshotMode { profilesFile.save(profiles) }
         settings.enforceLocalEndpoint()
         if !Self.snapshotMode { settingsFile.save(settings) }
     }
@@ -624,7 +627,7 @@ final class AppModel: ObservableObject {
             self.receipt = !readIt || entry.safetyNet == true || entry.warning != nil ? entry : nil
             phase = .done(entry.warning ?? receipt)
             showAINotice()
-            if readIt { reader.read(text, voice: voice ?? settings.ttsVoice) }
+            if readIt { reader.read(text, voice: Profile.readVoice(voice, fallback: settings.ttsVoice)) }
         } catch {
             // The text is on the clipboard now (the platform put it there): a HEADS UP, not a failure; History keeps
             // it as not inserted, and there is no receipt.
@@ -1404,6 +1407,27 @@ final class AppModel: ObservableObject {
     }
 
     func cancelWhisperDownload() { whisperDownloadTask?.cancel() }
+
+    /// Load the active profile's AI model again (after its runtime or model was installed).
+    func rewarmAI() { warmUpAI(activeProfile) }
+
+    /// profiles.json is written 400 ms after the last change, as Windows' AutoSave does (not on every keystroke), and
+    /// at once by `saveProfilesNow` (leaving a profile's page, quitting).
+    private func scheduleProfilesSave() {
+        profilesSaveTask?.cancel()
+        profilesSaveTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            self?.saveProfilesNow()
+        }
+    }
+
+    func saveProfilesNow() {
+        guard profilesSaveTask != nil else { return }
+        profilesSaveTask?.cancel()
+        profilesSaveTask = nil
+        profilesFile.save(profiles)
+    }
 
     /// The installed Ollama models, after making sure the runtime answers (Windows' EnsureRunningAsync starts its own).
     func refreshOllama() async {
