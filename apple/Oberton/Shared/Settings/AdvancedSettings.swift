@@ -43,7 +43,12 @@ struct AdvancedSection: View {
             #endif
 
             FieldLabel("Privacy")
-            Text("No cloud services, accounts, analytics or telemetry. The speech engine runs offline (models are only downloaded when you pick them) and the AI runtime is only reached on 127.0.0.1. Logs record timings and sizes, never what you said. Audio is never written to disk.")
+            // Whisper loads with downloads off, as Windows' HF_HUB_OFFLINE. The direct build runs the AI runtime itself
+            // (it listens on 127.0.0.1, as Windows'); the App Store build uses the user's own Ollama, which it only
+            // reaches there.
+            Text("No cloud services, accounts, analytics or telemetry. The speech engine runs offline (Hugging Face access is disabled at runtime) and the AI runtime "
+                 + (OllamaRuntime.canManage ? "only listens on 127.0.0.1" : "is only reached on 127.0.0.1")
+                 + ". Logs record timings and sizes, never what you said. Audio is never written to disk.")
                 .font(Ob.sans(Ob.body)).fixedSize(horizontal: false, vertical: true)
         }
         .task { await listModels() }
@@ -62,7 +67,13 @@ struct AdvancedSection: View {
         let speech = await LiveTranscriber.installedLanguages()
         await model.refreshOllama()
         let names = speech.map { Locale.current.localizedString(forIdentifier: $0) ?? $0 }
-        let whisper = WhisperModels.downloaded()
+        // As Windows lists the model folders by their repository ids ("Systran/faster-whisper-small.en"): every model
+        // folder there, by its place in WhisperKit's repository.
+        let repo = "argmaxinc/whisperkit-coreml"
+        let folder = Self.modelsDir.appending(path: "whisper/models/\(repo)", directoryHint: .isDirectory)
+        let whisper = ((try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.isDirectoryKey], options: .skipsHiddenFiles)) ?? [])
+            .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+            .map { "\(repo)/\($0.lastPathComponent)" }.sorted()
         localModels = "Speech (models/whisper):  " + (whisper.isEmpty ? "none" : whisper.joined(separator: ", ")) + "\n"
             + "Speech (Apple Speech):  " + (names.isEmpty ? "none" : names.joined(separator: ", ")) + "\n"
             + "Language models (\(OllamaRuntime.canManage ? "models/ollama" : "Ollama")):  " + (model.ollamaModels.isEmpty ? "none (or runtime not running)" : model.ollamaModels.joined(separator: ", "))

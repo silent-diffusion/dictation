@@ -10,7 +10,8 @@ struct AboutSection: View {
         VStack(alignment: .leading, spacing: 0) {
             Text(versionLine).font(Ob.mono(13, .bold)).padding(.bottom, 4)
             // The Caption style (the window's 12, LineHeight 19) with Margin 0,0,0,8, then the divider 10 below that.
-            (Text("Free and open source (MIT license). ")
+            // Two spaces: the Run's own and the line break before <Hyperlink> (XAML whitespace between inlines).
+            (Text("Free and open source (MIT license).  ")
                 + Text("[Project page on GitHub](https://github.com/silent-diffusion/dictation)").foregroundStyle(ob.ink).underline())
                 .font(Ob.sans(Ob.body)).foregroundStyle(ob.muted).tint(ob.ink).wpfLineHeight(19, size: Ob.body)
                 .fixedSize(horizontal: false, vertical: true)
@@ -40,7 +41,7 @@ struct AboutSection: View {
                 .overlay(alignment: .trailing) { Rectangle().fill(ob.ink).frame(width: 1) }
                 .overlay(alignment: .bottom) { Rectangle().fill(ob.ink).frame(height: 1) }
                 prose(ink("Why these sizes:") + Text(" the AI model reads at most \(NotesSummary.contextTokens.formatted(.number.locale(Locale(identifier: "en_US")))) tokens per request, about 9,400 characters or ten minutes of speech, with room left for its instructions and reply. Summing up in sections, then summaries of summaries, keeps every request inside that window however long the session runs. Nothing is sent to the AI while you dictate, so dictation always comes first."), top: 12)
-                prose(ink("The model:") + Text(" by default the largest installed one that fits your graphics card's memory, or a mixture-of-experts model such as Qwen3 30B-A3B that fits in the \(Device.noun)'s memory (what fits goes on the graphics card, the rest stays in RAM); without one, the active model (Settings › Models › Extended Notes AI). After a session you can play the recording (made louder, skipping silences), jump from any line to the moment it was said, export it, or click a step at the top of the session to redo it. Extended Notes never counts toward your dictation figures; Analytics shows it in a section of its own."))
+                prose(ink("The model:") + Text(" by default the largest installed one that fits your graphics card's memory, or a mixture-of-experts model such as Qwen3 30B-A3B that fits in the \(Device.noun)'s memory (what fits goes on the graphics card, the rest stays in RAM) (Settings › Models › Extended Notes AI). After a session you can play the recording (made louder, skipping silences), jump from any line to the moment it was said, export it, or click a step at the top of the session to redo it. Extended Notes never counts toward your dictation figures; Analytics shows it in a section of its own."))
             }
             part("D.2.4", "What it keeps", "履歴") {
                 prose(Text("Everything stays in Oberton's data folder on this \(Device.noun), outside the program folder, so updates never touch it:"))
@@ -106,7 +107,10 @@ struct AboutSection: View {
          // The active profile's engine: Windows' text for Whisper, and the same sentence for Apple's recognizer.
          ("02 Transcribe", model.activeSpeech.whisperModel != nil ? "Whisper turns speech into text as you speak, on your graphics card if you have one."
                                                                   : "Apple Speech turns speech into text as you speak, on this Mac."),
-         ("03 Tidy up", "A local language model (Apple Intelligence, or through Ollama) edits the text, following the active profile's instructions."),
+         // The active profile's AI, as for 02: Windows' "(through Ollama)" when it is an Ollama model.
+         ("03 Tidy up", model.processor.model(for: model.activeProfile).provider == .apple
+            ? "A local language model (Apple Intelligence) edits the text, following the active profile's instructions."
+            : "A local language model (through Ollama) edits the text, following the active profile's instructions."),
          ("04 Insert", "Finished sentences can appear while you speak; at the end the final text replaces them at your cursor, and your clipboard is put back.")]
         #else
         [("01 Listen", "Your microphone is recorded while you dictate. The recording is kept in History only if you choose to (Settings › History)."),
@@ -144,8 +148,9 @@ struct AboutSection: View {
                     extra()
                 }
             }
-            // Each section 16 below the line before it and 18 above the next.
-            if !last { Hairline().padding(.top, 18).padding(.bottom, 16) }
+            // Each section 16 below the line before it and 18 above the next; the last keeps its Grid's 18 below
+            // (Margin 0,16,0,18), before the page's own 40.
+            if !last { Hairline().padding(.top, 18).padding(.bottom, 16) } else { Color.clear.frame(height: 18) }
         }
     }
 

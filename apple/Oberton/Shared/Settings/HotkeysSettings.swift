@@ -119,8 +119,11 @@ private struct HotkeyBox: View {
         // bottom while it records). It is a Tab stop: taking the focus starts recording, as the TextBox's GotFocus does.
         Text(hotkey.isEmpty ? (none.isEmpty ? " " : none) : hotkey)
             .font(Ob.sans(14)).lineLimit(1)
+            // A TextBox: its text can be drag-selected, under the I-beam.
+            .textSelection(.enabled)
             .fluentBox(focused: recording, padding: EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8), width: 240)
             .contentShape(Rectangle())
+            .pointerStyle(.horizontalText)
             .focusable()
             .focused($focused)
             .onChange(of: focused) { _, now in if now { start() } else { stop() } }

@@ -119,7 +119,10 @@ private struct FlowLayout: Layout {
         var rows = [Row()]
         for i in subviews.indices {
             let size = subviews[i].sizeThatFits(.unspecified)
-            if !rows[rows.count - 1].items.isEmpty, rows[rows.count - 1].width + spacing + size.width > width {
+            // A WrapPanel measures each button with its Margin 0,0,8,8, the last one's 8 included: the next goes on a
+            // new line when the line's (width + 8)s would pass the panel's width.
+            let line = rows[rows.count - 1]
+            if !line.items.isEmpty, line.width + spacing + size.width + spacing > width {
                 let last = rows[rows.count - 1]
                 rows.append(Row(y: last.y + last.height + spacing))
             }
