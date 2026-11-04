@@ -16,10 +16,37 @@ struct OnboardingView: View {
     /// Called by START USING OBERTON.
     var finish: () -> Void
 
+    /// Where earlier versions kept "the setup is done": the app's preferences, now moved into the data folder.
     static let doneKey = "setupDone"
+    /// A setup was started and not finished (Windows finds the runtimes it left): it opens on CONTINUE SETUP.
+    static let startedKey = "setupStarted"
+
+    /// The setup's mark in the data folder (Windows' runtime.json): once it is there the setup is done, and when the data
+    /// folder is deleted the setup runs again, as on Windows (RuntimeInstaller.IsInstalled).
+    static var marker: URL { AppPaths.dataDir.appending(path: "setup.json") }
+
     static var isDone: Bool {
-        get { UserDefaults.standard.bool(forKey: doneKey) }
-        set { UserDefaults.standard.set(newValue, forKey: doneKey) }
+        get {
+            if FileManager.default.fileExists(atPath: marker.path) { return true }
+            guard UserDefaults.standard.bool(forKey: doneKey) else { return false }
+            // Done before the mark existed: written once (not into a test run's own data folder).
+            if !AppPaths.isOverridden {
+                isDone = true
+                UserDefaults.standard.removeObject(forKey: doneKey)
+            }
+            return true
+        }
+        set {
+            if newValue {
+                let stamp = ["completed": ISO8601DateFormatter().string(from: .now), "version": Distribution.version]
+                if let data = try? JSONSerialization.data(withJSONObject: stamp, options: [.prettyPrinted, .sortedKeys]) {
+                    try? data.write(to: marker, options: .atomic)
+                }
+                UserDefaults.standard.removeObject(forKey: startedKey)
+            } else {
+                try? FileManager.default.removeItem(at: marker)
+            }
+        }
     }
 
     enum Phase: Equatable { case plan, running, done }
@@ -29,12 +56,14 @@ struct OnboardingView: View {
     @State private var fraction: Double?
     @State private var detail = ""
     @State private var error: String?
-    /// A run stopped (cancelled or failed): the button says CONTINUE SETUP.
+    /// A run stopped (cancelled or failed): the progress panel stays.
     @State private var stopped = false
+    /// A run was started before, here or at an earlier start: the button says CONTINUE SETUP (also while it runs).
+    @State private var resume = UserDefaults.standard.bool(forKey: OnboardingView.startedKey)
     @State private var runTask: Task<Void, Never>?
     @State private var mic = OnboardingView.micState
     #if os(macOS)
-    @State private var accessibility = CGPreflightPostEventAccess()
+    @State private var accessibility = Distribution.accessibilityAllowed
     private let accessibilityPoll = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     #endif
 
@@ -84,7 +113,8 @@ struct OnboardingView: View {
                 .fixedSize(horizontal: false, vertical: true).padding(.top, 22)
             Rule().padding(.top, 10)
             Text("One download and you can talk into any app. After this, Oberton works offline: no accounts, no cloud, no telemetry.")
-                .font(Ob.sans(15)).foregroundStyle(ob.muted).lineSpacing(7).fixedSize(horizontal: false, vertical: true).padding(.top, 8)
+                .font(Ob.sans(15)).foregroundStyle(ob.muted).lineSpacing(Ob.lineSpacing(15, lineHeight: 22))
+                .fixedSize(horizontal: false, vertical: true).padding(.top, 8)
 
             VStack(spacing: 0) {
                 row(done: mic == .granted, warn: mic == .denied, name: "Microphone",
@@ -94,8 +124,7 @@ struct OnboardingView: View {
                 }
                 #if os(macOS)
                 Hairline()
-                row(done: accessibility, warn: false, name: "Accessibility",
-                    what: accessibility ? "Allowed" : "To put the text where your cursor is, Oberton presses ⌘V for you in the app you were using. macOS lets an app do that only once you allow it under Privacy & Security › Accessibility. Oberton doesn't read other apps.") {
+                row(done: accessibility, warn: false, name: "Accessibility", what: accessibility ? "Allowed" : Self.accessibilityWhy) {
                     if !accessibility { openPrivacy("Privacy_Accessibility") }
                 }
                 #endif
@@ -110,9 +139,9 @@ struct OnboardingView: View {
                     VStack(alignment: .leading, spacing: 0) {
                         Text(stepTitle).font(Ob.sans(13, .semibold))
                         ProgressBar(fraction: phase == .done ? 1 : stopped ? fraction ?? 0 : fraction).frame(height: 6).padding(.top, 8)
-                        if !detail.isEmpty {
-                            Text(detail).font(Ob.sans(12)).foregroundStyle(ob.muted).fixedSize(horizontal: false, vertical: true).padding(.top, 6)
-                        }
+                        // Always there, one empty line when there is nothing to say (Windows' DetailText).
+                        Text(detail.isEmpty ? " " : detail).font(Ob.sans(12)).foregroundStyle(ob.muted)
+                            .fixedSize(horizontal: false, vertical: true).padding(.top, 6)
                     }
                     .padding(EdgeInsets(top: 14, leading: 18, bottom: 14, trailing: 18))
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -124,7 +153,7 @@ struct OnboardingView: View {
 
             #if os(macOS)
             // Read aloud's Ctrl+Space is also macOS's input-source shortcut when that is on: said here, with another key.
-            SystemShortcutClash().padding(.top, 16)
+            SystemShortcutClash(top: 16)
             #endif
 
             if let error {
@@ -142,11 +171,17 @@ struct OnboardingView: View {
                         Button("Cancel") { runTask?.cancel() }.buttonStyle(CapsuleButtonStyle(kind: .quiet, height: 40))
                     } else if phase != .done {
                         #if os(macOS)
-                        Button("Quit") { NSApp.terminate(nil) }.buttonStyle(CapsuleButtonStyle(kind: .quiet, height: 40))
+                        Button("Quit") {
+                            // DialogResult false: Oberton exits without starting (App.xaml.cs).
+                            Log.info("Setup not completed; exiting")
+                            model.cancelWhisperDownload()
+                            NSApp.terminate(nil)
+                        }
+                        .buttonStyle(CapsuleButtonStyle(kind: .quiet, height: 40))
                         #endif
                     }
-                    Button(phase == .done ? "Start using Oberton" : stopped ? "Continue setup" : "Set up") {
-                        if phase == .done { Self.isDone = true; finish() } else { runTask = Task { await run() } }
+                    Button(phase == .done ? "Start using Oberton" : resume ? "Continue setup" : "Set up") {
+                        if phase == .done { finish() } else { runTask = Task { await run() } }
                     }
                     .buttonStyle(CapsuleButtonStyle(kind: .primary, height: 40))
                     .keyboardShortcut(.defaultAction)
@@ -159,9 +194,10 @@ struct OnboardingView: View {
         .foregroundStyle(ob.ink)
         .background(ob.paper)
         #if os(macOS)
-        .frame(width: 640)
+        // Windows' Width="640" is the whole window, its 7 px frames included.
+        .frame(width: 626)
         .onReceive(accessibilityPoll) { _ in
-            accessibility = CGPreflightPostEventAccess()
+            accessibility = Distribution.accessibilityAllowed
             mic = Self.micState
         }
         #endif
@@ -171,7 +207,8 @@ struct OnboardingView: View {
     private func row(done: Bool, warn: Bool, name: String, what: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(alignment: .top, spacing: 12) {
-                StepMark(done: done, color: done ? ob.ink : warn ? ob.record : ob.muted).frame(width: 18, height: 18).padding(.top, 1)
+                // Not OK is muted, as Windows' setup draws it: red only ever means recording.
+                StepMark(done: done, color: done ? ob.ink : ob.muted).frame(width: 18, height: 18).padding(.top, 1)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(name).font(Ob.sans(14))
                     Text(what).font(Ob.mono(12)).foregroundStyle(ob.muted).fixedSize(horizontal: false, vertical: true)
@@ -200,7 +237,8 @@ struct OnboardingView: View {
     /// "About 1.6 GB in total, saved to ~/Library/…" (Windows' plan line), or Apple's own download.
     private var planText: String {
         if let id = whisperToGet, let m = WhisperModels.model(id) {
-            return "About \(m.size) in total, saved to \((AppPaths.dataDir.path as NSString).abbreviatingWithTildeInPath)."
+            // The whole path, as Windows prints it (in the App Store build, inside Oberton's container).
+            return "About \(m.size) in total, saved to \(AppPaths.dataDir.path)."
         }
         return "The speech model is a one-time download from Apple, a few hundred MB, kept by the system."
     }
@@ -212,15 +250,18 @@ struct OnboardingView: View {
         phase = .running
         error = nil
         stopped = false
+        UserDefaults.standard.set(true, forKey: Self.startedKey)
         do {
             try await runSteps()
         } catch is CancellationError {
             fail("Setup was cancelled. Click Continue setup to pick up where it left off.")
         } catch let problem as Problem {
             fail(problem.message)
+        } catch let problem as UserFacingError {
+            fail(problem.message)
         } catch {
             Log.error("Setup failed", error)
-            fail("Setup failed unexpectedly: \(error.localizedDescription)\nDetails are in \((Log.dir.path as NSString).abbreviatingWithTildeInPath)")
+            fail("Setup failed unexpectedly: \(error.localizedDescription)\nDetails are in \(Log.dir.path)")
         }
         runTask = nil
     }
@@ -228,10 +269,12 @@ struct OnboardingView: View {
     private func fail(_ message: String) {
         error = message
         stopped = true
+        resume = true
         phase = .plan
     }
 
     private func runSteps() async throws {
+        Log.info("Runtime setup starting (speech model \(whisperToGet ?? model.settings.whisperModel ?? "Apple Speech"), AI model \(model.settings.defaultModel.shortName))")
         var n = 0
         n += 1
         begin(n, "Microphone", "Allow the microphone when asked.")
@@ -241,7 +284,7 @@ struct OnboardingView: View {
         #if os(macOS)
         n += 1
         begin(n, "Accessibility", accessibility ? "" : "Turn on Oberton under Privacy & Security › Accessibility. You can do this later, too: until then the text is copied, ready to paste.")
-        if !accessibility { CGRequestPostEventAccess() }
+        if !accessibility { Distribution.requestAccessibility() }
         try Task.checkCancellation()
         #endif
         n += 1
@@ -252,7 +295,7 @@ struct OnboardingView: View {
             do {
                 let downloaded = try await LiveTranscriber.download(locale: model.settings.speechLocale) { f in
                     fraction = f
-                    if let f, f < 1 { detail = "Downloading the \(languageName) speech model  (\(Int(f * 100))%)" }
+                    if let f, f < 1 { detail = "Downloading the \(languageName) speech model" + Self.percent(f) }
                 }
                 speechReady = whisper == nil
                 detail = downloaded ? "Downloaded." : "Already on this \(Device.noun)."
@@ -272,7 +315,9 @@ struct OnboardingView: View {
         n += 1
         begin(n, "Apple Intelligence", AppleIntelligenceBackend.unavailableReason ?? "Ready.")
         AppleIntelligenceBackend.warmUp()
-        Log.info("Setup finished (microphone \(mic), speech model ready)")
+        Log.info("Runtime setup complete")
+        // Done from here on, also if the window is closed now (Windows has written runtime.json by this point).
+        Self.isDone = true
         phase = .done
         stepTitle = "All set!"
         fraction = 1
@@ -287,7 +332,8 @@ struct OnboardingView: View {
     /// Windows' step 4: "Downloading the speech model (large-v3-turbo)", through the app's own download (the one the
     /// model lists show), with "  (42%)" after the detail.
     private func downloadWhisper(_ id: String, step: Int) async throws {
-        begin(step, "Downloading the speech model (\(id))")
+        let size = "About \(Self.whisperMB(id).formatted(.number.grouping(.automatic))) MB"
+        begin(step, "Downloading the speech model (\(id))", size)
         if !WhisperModels.isDownloaded(id) {
             if model.whisperDownload?.id != id {
                 if model.pendingSpeechModel == id { model.startDefaultSpeechDownload() } else { model.downloadWhisper(id) }
@@ -298,12 +344,14 @@ struct OnboardingView: View {
                     throw CancellationError()
                 }
                 fraction = model.whisperDownload?.fraction
-                detail = fraction.map { $0 < 1 ? "  (\(Int($0 * 100))%)" : "" } ?? ""
+                detail = size + (fraction.map { $0 < 1 ? Self.percent($0) : "" } ?? "")
                 try? await Task.sleep(for: .milliseconds(200))
             }
             try Task.checkCancellation()
             guard WhisperModels.isDownloaded(id) else {
-                throw Problem(message: "A download failed. Check your internet connection and click Retry.")
+                // RunToolAsync's message, then what went wrong (Windows adds the tool's last lines).
+                let why = model.whisperDownloadError.map { "\n\n" + $0 } ?? ""
+                throw Problem(message: "Downloading the speech model failed. Check your internet connection and click Retry." + why)
             }
         }
         // Already there: AppModel switches dictation over to it.
@@ -313,7 +361,34 @@ struct OnboardingView: View {
         detail = ""
     }
 
+    /// "  (42%)", rounded as Windows' {g:P0}.
+    private static func percent(_ f: Double) -> String { "  (\(f.formatted(.percent.precision(.fractionLength(0)))))" }
+
+    /// Windows' WhisperModelMb: the rough download of a speech model, in MB, for "About 1,550 MB".
+    static func whisperMB(_ id: String) -> Int {
+        switch id {
+        case "large-v3-turbo": 1550
+        case "large-v3": 3000
+        case "distil-large-v3": 1500
+        case "medium.en", "medium": 1500
+        case "small.en", "small": 470
+        case "base.en", "base": 145
+        case "tiny.en", "tiny": 75
+        default: 1000
+        }
+    }
+
     // MARK: Permissions
+
+    #if os(macOS)
+    /// What Accessibility is for, in this build. The direct build reads other apps' text (Windows does it through UI
+    /// Automation, which needs no permission; its General page words it the same way); the App Store build can't.
+    static var accessibilityWhy: String {
+        Distribution.isDirect
+            ? "To put the text where your cursor is, Oberton presses ⌘V for you in the app you were using. It also reads a sentence or two around the cursor so the text fits in, the text you select for Read aloud, and the window's title for History. macOS allows this only once you turn Oberton on under Privacy & Security › Accessibility. The text around the cursor is never stored or sent anywhere."
+            : "To put the text where your cursor is, Oberton presses ⌘V for you in the app you were using, and ⌘C to copy the text you select for Read aloud. macOS lets an app do that only once you allow it under Privacy & Security › Accessibility. Apart from that, Oberton doesn't read other apps."
+    }
+    #endif
 
     enum MicState: String { case unknown, granted, denied }
 

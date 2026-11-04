@@ -1,5 +1,8 @@
 import ObertonCore
 import SwiftUI
+#if os(macOS)
+import ServiceManagement
+#endif
 
 // MARK: - A // Dictation
 
@@ -12,13 +15,18 @@ struct GeneralSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Caption("Everything runs on this \(Device.noun). No audio or text is sent anywhere unless you allow cloud AI (Settings › Cloud AI), and there is no telemetry.")
             #if os(macOS)
+            Caption("Everything runs on this computer. No audio or text is sent anywhere unless you allow cloud AI (Settings › Cloud AI), and there is no telemetry.")
             SwitchCard {
-                ObSwitch("Start when you log in (hidden in the menu bar)", isOn: $model.settings.startAtLogin)
+                ObSwitch("Start with Mac (minimized to the menu bar)", isOn: $model.settings.startAtLogin)
                 ObSwitch("Keep running in the menu bar when the window is closed", isOn: $model.settings.minimizeToTray)
             }
             .padding(.top, 8)
+            // macOS can hold the login item back until the user allows it; the switch alone would say it's on.
+            if model.settings.startAtLogin, SMAppService.mainApp.status == .requiresApproval {
+                Caption("macOS waits for your permission before it starts Oberton when you log in: turn Oberton on in System Settings › General › Login Items.")
+                    .padding(.top, 6)
+            }
 
             SwitchCard {
                 ObSwitch("Type as you speak",
@@ -39,6 +47,11 @@ struct GeneralSection: View {
                              isOn: $model.settings.matchSurroundingText)
                 }
                 .padding(.top, 16)
+                // Reading the text around the cursor needs Accessibility; until it is allowed the switch can't work.
+                if model.settings.matchSurroundingText, !Distribution.axTrusted {
+                    Caption("Oberton isn't allowed to read the text around the cursor yet. Allow it in System Settings › Privacy & Security › Accessibility.")
+                        .padding(.top, 6)
+                }
             }
 
             FieldLabel("Text insertion method").padding(.top, 4)
@@ -52,6 +65,8 @@ struct GeneralSection: View {
                          detail: "Oberton pastes the text at the cursor, then puts back what you had copied.", isOn: $model.settings.restoreClipboard)
             }
             .padding(.top, 12)
+            #else
+            Caption("Everything runs on this \(Device.noun). No audio or text is sent anywhere unless you allow cloud AI (Settings › Cloud AI), and there is no telemetry.")
             #endif
 
             FieldLabel("Maximum length of one dictation (seconds)")

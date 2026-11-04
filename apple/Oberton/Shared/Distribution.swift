@@ -38,6 +38,28 @@ enum Distribution {
         #endif
     }
 
+    #if os(macOS)
+    /// Oberton has what it needs from Privacy & Security › Accessibility: in the App Store build, pressing ⌘V (and ⌘C)
+    /// in other apps; in the direct build also reading their text (`axTrusted`), which the same switch allows.
+    static var accessibilityAllowed: Bool {
+        isDirect && !isSandboxed ? AXIsProcessTrusted() && CGPreflightPostEventAccess() : CGPreflightPostEventAccess()
+    }
+
+    /// Asks macOS for Accessibility: the system's prompt, which adds Oberton to Privacy & Security › Accessibility. The
+    /// direct build asks with AXIsProcessTrustedWithOptions, which covers reading other apps' text too.
+    static func requestAccessibility() {
+        if isDirect && !isSandboxed {
+            if !AXIsProcessTrusted() {
+                _ = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
+            } else if !CGPreflightPostEventAccess() {
+                CGRequestPostEventAccess()
+            }
+        } else if !CGPreflightPostEventAccess() {
+            CGRequestPostEventAccess()
+        }
+    }
+    #endif
+
     /// The version as Windows writes it on Settings › Updates and About: "Oberton 5.18.1".
     static var version: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
