@@ -48,9 +48,7 @@ struct MainWindowContent: View {
 
     var body: some View {
         RootView()
-            #if os(macOS)
-            .frame(minWidth: 960, minHeight: 600)
-            #else
+            #if os(iOS)
             .overlay(alignment: .bottom) { PhoneOverlay() }
             #endif
             .obertonTheme(model.settings)
@@ -116,8 +114,12 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, N
     private var servicesStarted = false
     /// The marker key is held (an Extended Notes session records).
     private var markerHeld = false
+    /// The start-up card, while it shows.
+    private var splash: NSWindow?
 
     override init() {
+        // Before the services, as App.OnStartup logs it before `new AppServices()`: what they log comes after it.
+        if !AppModel.snapshotMode { Log.info("=== Oberton starting ===") }
         let before = Date()
         model = AppModel()
         servicesMs = Int(Date().timeIntervalSince(before) * 1000)
@@ -133,13 +135,31 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, N
             // Any start with --minimized, as on Windows (`open -a Oberton --args --minimized`).
             || CommandLine.arguments.contains("--minimized")
         NSApp.setActivationPolicy(.accessory)
+        // The "Oberton · starting" card until the window is drawn (App.OnStartup's SplashScreen): not when starting
+        // hidden, and closed before a first-run setup (Windows shows the setup without it).
+        if !startedHidden, OnboardingView.isDone, !Self.debugRun { splash = StartupCard.show() }
+    }
+
+    /// A DEBUG run that draws or checks something and quits (snapshots, stress and live checks): no start-up card.
+    private static var debugRun: Bool {
+        let env = ProcessInfo.processInfo.environment
+        return ["OBERTON_SNAPSHOT", "OBERTON_STRESS", "OBERTON_WHISPER_CHECK", "OBERTON_WORDS_CHECK", "OBERTON_LIVE_CHECK"].contains { env[$0] != nil }
+    }
+
+    /// CloseSplash: fades out over 250 ms.
+    private func closeSplash() {
+        guard let card = splash else { return }
+        splash = nil
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.25
+            card.animator().alphaValue = 0
+        }, completionHandler: { card.orderOut(nil) })
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         #if DEBUG
         if ProcessInfo.processInfo.environment["OBERTON_SNAPSHOT"] != nil { Snapshots.write(to: ProcessInfo.processInfo.environment["OBERTON_SNAPSHOT"]!, model: model); return }
         #endif
-        Log.info("=== Oberton starting ===")
         // Objective-C exceptions only: a Swift trap can't be caught and kept running as Windows' handlers do.
         NSSetUncaughtExceptionHandler { e in Log.error("Unhandled UI exception: \(e.name.rawValue): \(e.reason ?? "")") }
         #if DEBUG
@@ -163,6 +183,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, N
             return
         }
         #endif
+        InkSelection.start()
         // The theme applies to every window, the title bars and menus included (ThemeManager).
         watches.append(model.$settings.map(\.theme).removeDuplicates().sink { theme in
             NSApp.appearance = theme == .system ? nil : NSAppearance(named: theme == .dark ? .darkAqua : .aqua)
@@ -176,6 +197,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, N
         }
         // First run (or a setup left unfinished): the setup before anything else.
         if !OnboardingView.isDone {
+            closeSplash()
             showSetup()
             return
         }
@@ -211,8 +233,10 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, N
                 guard let self else { return }
                 if let error = hotkeys.holdEscape(waiting ? { [weak self] in self?.model.cancel() } : nil) { Log.warn(error) }
             })
-        watches.append(model.$settings.map(\.startAtLogin).removeDuplicates().sink { Self.applyLoginItem($0) })
-        if startedHidden { startupReported = true } // started hidden: no opening time to report
+        // Applied again at every settings change, as App.OnSettingsChanged calls Autostart.Apply: a login item removed in
+        // System Settings comes back with the next change, not only at the next launch.
+        watches.append(model.$settings.map(\.startAtLogin).sink { Self.applyLoginItem($0) })
+        if startedHidden { startupReported = true; closeSplash() } // started hidden: no opening time to report
         // The speech engine couldn't start: the window opens with the message (App.xaml.cs, also when started hidden).
         watches.append(model.$startupProblem.compactMap { $0 }.sink { [weak self] problem in
             Log.warn("Speech init: " + problem)
@@ -223,7 +247,8 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, N
             .sink { [weak self] id, profiles in
                 let name = (profiles.first { $0.id == id } ?? profiles.first)?.name ?? ""
                 let text = "Oberton · \(name)"
-                self?.statusItem?.button?.toolTip = text.count > 60 ? String(text.prefix(60)) : text
+                // Cut at 60 UTF-16 units, as `text[..60]` (a tooltip can't take more on Windows).
+                self?.statusItem?.button?.toolTip = text.utf16.count > 60 ? String(decoding: Array(text.utf16.prefix(60)), as: UTF16.self) : text
             })
     }
 
@@ -248,6 +273,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, N
             startupReported = true
             // Once the window is drawn (the next turn of the run loop), as Windows' ContentRendered.
             DispatchQueue.main.async { [self] in
+                closeSplash() // ContentRendered
                 let elapsed = Int(Date().timeIntervalSince(startClock) * 1000)
                 let total = Self.processStart.map { Int(Date().timeIntervalSince($0) * 1000) } ?? elapsed
                 Log.info("Startup: window drawn \(total) ms after opening (runtime \(total - elapsed) ms, services \(servicesMs) ms, "
@@ -281,7 +307,9 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, N
     /// between launches, as on Windows.
     private func makeMainWindow() -> NSWindow {
         let host = NSHostingController(rootView: MainWindowContent().environmentObject(model))
-        host.sizingOptions = [.minSize]
+        // MinWidth 960 / MinHeight 600 are the whole window's, its title bar included (WPF's Window sizes): set on the
+        // window, not taken from the content, which sits below the title bar's safe area.
+        host.sizingOptions = []
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1200, height: 780),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                               backing: .buffered, defer: false)
@@ -289,6 +317,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, N
         window.title = "Oberton"
         window.titlebarAppearsTransparent = true
         window.setContentSize(NSSize(width: 1200, height: 780))
+        window.minSize = NSSize(width: 960, height: 600)
         window.isReleasedWhenClosed = false
         window.collectionBehavior.insert(.fullScreenPrimary)
         window.identifier = NSUserInterfaceItemIdentifier("main")
@@ -444,8 +473,8 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, N
         ])
         // The marker key is checked against the others always, not only while a session records (App.MarkerClash).
         if let clash = HotkeyManager.markerClash(marker: keys[3], dictation: keys[0], speak: keys[2], cycle: keys[1]) {
+            // Only the error: a marker key held while a session records keeps its earlier key, as on Windows.
             errors.append(clash)
-            hotkeys.holdMarker(nil)
         } else if markerHeld, let error = hotkeys.holdMarker(keys[3], { [weak self] in self?.model.notes.addMarker() }) {
             errors.append(error)
         }
@@ -472,6 +501,73 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, N
         let error = HotkeyManager.markerClash(marker: s.notesMarkerHotkey, dictation: s.hotkey, speak: s.speakHotkey, cycle: s.cycleProfileHotkey)
             ?? hotkeys.holdMarker(s.notesMarkerHotkey) { [weak self] in self?.model.notes.addMarker() }
         if let error { Log.warn(error) }
+    }
+}
+
+/// Windows' Assets/splash.png (480×160): the mark, OBERTON, "STARTING // ONE MOMENT", a rule and "LOCAL DICTATION" on
+/// paper in a 1 px frame, centred on the screen, in front, until the main window is drawn.
+enum StartupCard {
+    static func show() -> NSWindow {
+        let card = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 160), styleMask: [.borderless], backing: .buffered, defer: false)
+        card.contentView = NSHostingView(rootView: Face())
+        card.isOpaque = true
+        card.hasShadow = true
+        card.level = .floating
+        card.isReleasedWhenClosed = false
+        if let area = (NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? NSScreen.main)?.visibleFrame {
+            card.setFrameOrigin(NSPoint(x: (area.midX - 240).rounded(), y: (area.midY - 80).rounded()))
+        }
+        card.orderFrontRegardless()
+        card.display()
+        return card
+    }
+
+    /// The image's own colours (it doesn't follow the theme).
+    struct Face: View {
+        var body: some View {
+            let ink = Color(hex: 0x0D0D0C), muted = Color(hex: 0x5C5B57)
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 11) {
+                    Rectangle().fill(ink).frame(width: 14, height: 14)
+                    Text("OBERTON").font(Ob.mono(24, .bold)).foregroundStyle(ink)
+                }
+                .padding(.top, 28)
+                Text("STARTING  //  ONE MOMENT").font(Ob.mono(11)).foregroundStyle(muted).padding(.leading, 4).padding(.top, 15)
+                Rectangle().fill(ink).frame(height: 1).padding(.top, 18)
+                Text("LOCAL DICTATION").font(Ob.mono(11)).foregroundStyle(muted).padding(.leading, 4).padding(.top, 11)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 24)
+            .frame(width: 480, height: 160, alignment: .topLeading)
+            .background(Color(hex: 0xE8E7E3))
+            .overlay(Rectangle().strokeBorder(muted, lineWidth: 1))
+        }
+    }
+}
+
+/// Selected text in every text box as the Windows themes draw it (Light/Dark.xaml's
+/// AccentFillColorSelectedTextBackgroundBrush is the ink, under WPF's SelectionOpacity 0.4), not macOS's Highlight
+/// colour: each text view (a field's editor or a text area) takes it when its selection first changes.
+enum InkSelection {
+    private static var watch: NSObjectProtocol?
+
+    static func start() {
+        guard watch == nil else { return }
+        watch = NotificationCenter.default.addObserver(forName: NSTextView.didChangeSelectionNotification, object: nil, queue: .main) { note in
+            MainActor.assumeIsolated {
+                guard let view = note.object as? NSTextView else { return }
+                apply(to: view)
+            }
+        }
+    }
+
+    @MainActor static func apply(to view: NSTextView) {
+        let dark = view.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let ink = dark ? NSColor(srgbRed: 0xE8 / 255, green: 0xE7 / 255, blue: 0xE3 / 255, alpha: 0.4)
+            : NSColor(srgbRed: 0x0D / 255, green: 0x0D / 255, blue: 0x0C / 255, alpha: 0.4)
+        if view.selectedTextAttributes[.backgroundColor] as? NSColor != ink {
+            view.selectedTextAttributes = [.backgroundColor: ink]
+        }
     }
 }
 
