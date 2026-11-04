@@ -27,6 +27,11 @@ final class OverlayController {
     private var fromBottom = true
     /// The frame is being set by `layout`, not dragged by the user.
     private var placing = false
+    /// The last pill, frozen as it was when the dictation went back to Idle, shown 250 ms more before the panel hides
+    /// (OverlayWindow.ShowState(Idle) → HideAfter(250 ms)); the live view is already drawing the idle state by then.
+    private var frozen: NSImageView?
+    private var frozenUntil = Date.distantPast
+    private var hideWork: DispatchWorkItem?
     static let margin: CGFloat = 8
     static let padding: CGFloat = 16
 
@@ -52,12 +57,21 @@ final class OverlayController {
         panel.setAccessibilityTitle("Oberton overlay")
         host = NSHostingView(rootView: AnyView(EmptyView()))
         host.sizingOptions = []
-        panel.contentView = host
+        // A plain view holds the pill, so the frozen copy can lie over it (`freeze`).
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 80))
+        host.frame = container.bounds
+        host.autoresizingMask = [.width, .height]
+        container.addSubview(host)
+        panel.contentView = container
 
         // After each change has landed (objectWillChange fires before it; the hop to the main run loop waits it out).
         model.objectWillChange
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.update() }
+            .store(in: &bag)
+        // Before the change lands (the pill still shows the state it is leaving): going back to Idle freezes it.
+        model.$phase
+            .sink { [weak self] new in if new == .idle { self?.freeze() } }
             .store(in: &bag)
         // Settings › Layout moved the overlay (or the player, which can follow it): forget the dragged spot and flash
         // the pill at the new one (App.PreviewOverlay).
@@ -88,13 +102,17 @@ final class OverlayController {
     /// where Windows calls App.PreviewOverlay from a position grid. The "Same place" switches call it themselves.
     static func flashes(from old: PositionPair, to new: PositionPair) -> Bool { PositionPreview.previews(from: old, to: new) }
 
-    /// The screen it is on, or the one it was dragged to, or the primary one (the menu bar's), as Windows places it on
-    /// the primary monitor's work area.
+    /// Where the position setting puts it: the primary screen's visible area (the menu bar's screen), as Windows always
+    /// places it on the primary monitor's work area. Once dragged, the screen it was dragged to gives its room.
     private var screen: CGRect? {
-        if panel.isVisible, let s = panel.screen { return s.visibleFrame }
         if let anchor, let s = NSScreen.screens.first(where: { $0.frame.insetBy(dx: -1, dy: -1).contains(anchor) }) { return s.visibleFrame }
-        return (NSScreen.screens.first ?? NSScreen.main)?.visibleFrame
+        return Self.primary
     }
+
+    private static var primary: CGRect? { (NSScreen.screens.first ?? NSScreen.main)?.visibleFrame }
+
+    /// Every screen together (Windows' virtual screen): a dragged pill is kept inside it as it grows.
+    private static var desktop: CGRect? { NSScreen.screens.map(\.frame).reduce(nil) { $0?.union($1) ?? $1 } }
 
     /// Shown while dictating (with "Show overlay" on); the preview, NO PLACE TO PASTE, notices, the
     /// profile switch and the position flash show either way, as on Windows.
@@ -105,9 +123,45 @@ final class OverlayController {
             || model.trialPreview != nil
             || { if case .failed = phase { true } else { false } }()
             || (model.settings.showOverlay && phase != .idle && (!done || model.receipt != nil)) // no receipt: read aloud took its place
-        guard visible else { panel.orderOut(nil); return }
+        guard visible else { hide(); return }
+        hideWork?.cancel()
+        hideWork = nil
+        unfreeze()
         if !panel.isVisible { layout(fresh: true) }
         panel.orderFrontRegardless()
+    }
+
+    /// Hidden now, or, when the dictation has just gone back to Idle, 250 ms from then with the last pill frozen.
+    private func hide() {
+        guard panel.isVisible, frozen != nil else { unfreeze(); panel.orderOut(nil); return }
+        hideWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.unfreeze()
+            self?.panel.orderOut(nil)
+        }
+        hideWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, frozenUntil.timeIntervalSinceNow), execute: work)
+    }
+
+    /// A picture of the pill as it is now, over the live view, for the 250 ms Windows keeps it after Idle.
+    private func freeze() {
+        guard panel.isVisible, frozen == nil, host.bounds.width > 0, host.bounds.height > 0,
+              let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return }
+        host.cacheDisplay(in: host.bounds, to: rep)
+        let image = NSImage(size: host.bounds.size)
+        image.addRepresentation(rep)
+        let view = NSImageView(frame: host.frame)
+        view.image = image
+        view.imageScaling = .scaleNone
+        view.autoresizingMask = [.width, .height]
+        panel.contentView?.addSubview(view, positioned: .above, relativeTo: host)
+        frozen = view
+        frozenUntil = Date().addingTimeInterval(0.25)
+    }
+
+    private func unfreeze() {
+        frozen?.removeFromSuperview()
+        frozen = nil
     }
 
     /// ● DICTATION APPEARS HERE for 1.5 s at the new position, unless a dictation is showing. It takes the place of
@@ -119,11 +173,12 @@ final class OverlayController {
         if panel.isVisible { layout(fresh: true) }
     }
 
-    /// The user dragged it: remember the spot (WindowDrag.Remember).
+    /// The user dragged it: remember the spot (WindowDrag.Remember). Its lower or upper half is judged against the
+    /// primary screen's work area, as Windows does, whichever screen it was dragged to.
     private func moved() {
-        guard !placing, panel.isVisible, let screen else { return }
+        guard !placing, panel.isVisible, let primary = Self.primary else { return }
         let f = panel.frame
-        fromBottom = f.midY < screen.midY
+        fromBottom = f.midY < primary.midY
         anchor = CGPoint(x: f.midX, y: fromBottom ? f.minY : f.maxY)
     }
 
@@ -139,7 +194,7 @@ final class OverlayController {
                 .environmentObject(model).environment(\.overlayRoom, room))
         }
         let size = contentSize ?? host.fittingSize
-        let frame = anchor.map { Self.frame(size: size, anchor: $0, fromBottom: fromBottom, screen: screen) }
+        let frame = anchor.map { Self.frame(size: size, anchor: $0, fromBottom: fromBottom, screen: Self.desktop ?? screen) }
             ?? Self.frame(size: size, position: model.settings.overlayPosition, screen: screen, current: fresh ? nil : panel.frame)
         placing = true
         panel.setFrame(frame, display: true)
@@ -147,7 +202,7 @@ final class OverlayController {
     }
 
     /// Where a panel of `size` goes when it was dragged: centred on `anchor.x`, its bottom (or top) edge on `anchor.y`,
-    /// kept inside the screen.
+    /// kept inside `screen` (all screens together: WindowDrag.Place clamps to the virtual screen).
     static func frame(size: CGSize, anchor: CGPoint, fromBottom: Bool, screen: CGRect) -> CGRect {
         var x = anchor.x - size.width / 2
         var y = fromBottom ? anchor.y : anchor.y - size.height
@@ -298,15 +353,13 @@ enum OverlaySnapshots {
                 }
             }
         }
-        // The meter keeps moving with no audio at all: a burst, then silence, settles to flat and keeps scrolling.
+        // Every level heard is one column, and with nothing heard the meter holds still (OverlayWindow.SetLevel).
         let meterCheck = LevelMeter()
-        var t = Date()
         for i in 0..<30 {
             if i < 6 { meterCheck.hear(0.5) }
-            meterCheck.tick(now: t)
-            t += 0.05
+            meterCheck.tick()
         }
-        print("meter after a burst and 1.2 s of nothing: " + meterCheck.columns.map { String(format: "%.2f", $0) }.joined(separator: " "))
+        print("meter after 6 levels and 1.2 s of nothing: " + meterCheck.columns.map { String(format: "%.2f", $0) }.joined(separator: " "))
         // A box's COPY takes the selected part; AI EDIT's leaves out the struck-through words.
         let selection = OverlayTextSelection()
         let textView = NSTextView()

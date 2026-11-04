@@ -137,7 +137,10 @@ struct PillCard: ViewModifier {
             .frame(width: max(40, min(width, room.width - 28)), alignment: .leading)
             .foregroundStyle(lightText)
             .padding(EdgeInsets(top: 9, leading: 19, bottom: 9, trailing: 9))
-            .background(shape.fill(darkInk.opacity(min(1, max(0.3, opacity)))).shadow(color: .black.opacity(0.35), radius: 12, x: 2.8, y: 2.8))
+            // WPF's DropShadowEffect (BlurRadius 24, ShadowDepth 4 at 315°, Opacity .35): its blur radius spans three
+            // standard deviations (σ 8); SwiftUI's shadow radius is the standard deviation itself (measured: the edge's
+            // shadow falls to 16 % at one radius out), so 8.
+            .background(shape.fill(darkInk.opacity(min(1, max(0.3, opacity)))).shadow(color: .black.opacity(0.35), radius: 8, x: 2.8, y: 2.8))
             .overlay(shape.strokeBorder(Color(hex: 0xE8E7E3, alpha: 0x24 / 255), lineWidth: 1))
             .contentShape(shape)
     }
@@ -760,6 +763,8 @@ struct ReceiptPill: View {
     private var safetyNet: Bool { entry.safetyNet ?? false }
     private var noted: Bool { safetyNet || entry.warning != nil }
     private var edited: Bool { entry.inserted != entry.transcription }
+    /// The words that went in (InsertReceipt.Words: the inserted text split at white space), 0 when nothing did.
+    private var words: Int { entry.inserted.split(whereSeparator: \.isWhitespace).count }
 
     var body: some View {
         // Windows' widths: 360 for the receipt, 470 with a note, 560 with the boxes open.
@@ -769,7 +774,7 @@ struct ReceiptPill: View {
                 Text(title)
             } middle: {
                 if !noted {
-                    Text("\(entry.words) \(entry.words == 1 ? "WORD" : "WORDS") // \(Self.seconds(entry.turnaroundSeconds)) S")
+                    Text("\(words) \(words == 1 ? "WORD" : "WORDS") // \(Self.seconds(entry.turnaroundSeconds)) S")
                         .font(Ob.mono(11.5)).foregroundStyle(mutedText).lineLimit(1).truncationMode(.tail)
                 }
             }
@@ -977,23 +982,25 @@ struct OverlayRichText {
         return OverlayRichText(runs: runs, color: lightText, accent: accent, isDiff: true)
     }
 
-    /// At most ~160 characters of the surrounding text, cut at a word, with "…" where it was cut (Windows `Around`).
+    /// At most ~160 characters of the surrounding text, cut at a word, with "…" where it was cut (Windows `Around`):
+    /// every line ending .NET's ReplaceLineEndings knows (CR, LF, CRLF, NEL, LS, PS, FF) made a space, and the 160
+    /// counted in UTF-16 units, as .NET counts a string's length.
     static func around(_ text: String?, fromEnd: Bool) -> String {
-        let text = (text ?? "").replacingOccurrences(of: "\r\n", with: " ").replacingOccurrences(of: "\n", with: " ")
-            .replacingOccurrences(of: "\r", with: " ")
+        var text = (text ?? "").replacingOccurrences(of: "\r\n", with: " ")
+        for ending in ["\r", "\n", "\u{85}", "\u{2028}", "\u{2029}", "\u{0C}"] { text = text.replacingOccurrences(of: ending, with: " ") }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "" }
-        let max = 160
-        if text.count <= max {
+        let max = 160, units = Array(text.utf16), space = UInt16(32)
+        if units.count <= max {
             return fromEnd ? String(text.drop(while: \.isWhitespace)) : String(text.reversed().drop(while: \.isWhitespace).reversed())
         }
         if fromEnd {
-            let cut = String(text.suffix(max))
-            if let space = cut.firstIndex(of: " ") { return "…" + cut[cut.index(after: space)...] }
-            return "…" + cut
+            let cut = units.suffix(max)
+            if let i = cut.firstIndex(of: space) { return "…" + String(decoding: cut[(i + 1)...], as: UTF16.self) }
+            return "…" + String(decoding: cut, as: UTF16.self)
         }
-        let head = String(text.prefix(max))
-        if let space = head.lastIndex(of: " "), space > head.startIndex { return head[..<space] + "…" }
-        return head + "…"
+        let head = units.prefix(max)
+        if let i = head.lastIndex(of: space), i > 0 { return String(decoding: head[..<i], as: UTF16.self) + "…" }
+        return String(decoding: head, as: UTF16.self) + "…"
     }
 
     private static let removedColor = Color(hex: 0xE8E7E3, alpha: 0x70 / 255)
@@ -1085,7 +1092,11 @@ struct OverlayText: NSViewRepresentable {
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
         scroll.scrollerStyle = .legacy
-        scroll.scrollerKnobStyle = .light
+        // WPF's classic bar in the overlay (ThemeMode None): always light, 17 wide, whatever the app's theme. (Its arrow
+        // buttons have no counterpart: macOS scrollers have drawn none since 10.7.)
+        scroll.verticalScroller = ClassicScroller()
+        scroll.appearance = NSAppearance(named: .aqua)
+        scroll.scrollerKnobStyle = .dark
         let view = OverlayTextView(usingTextLayoutManager: false)
         view.isEditable = false
         view.isSelectable = true
@@ -1128,18 +1139,51 @@ struct OverlayText: NSViewRepresentable {
     }
 }
 
-/// Takes the first click (the panel is never key) and never drags the panel: a drag in it selects.
+/// WPF's classic scrollbar width (SystemParameters.VerticalScrollBarWidth, 17).
+private final class ClassicScroller: NSScroller {
+    override class func scrollerWidth(for controlSize: NSControl.ControlSize, scrollerStyle: NSScroller.Style) -> CGFloat { 17 }
+}
+
+/// Takes the first click (the panel is never key) and never drags the panel: a drag in it selects. The I-beam shows
+/// over its text, as Windows' boxes (Cursor="IBeam"); pushed on hover, since the panel is never key and cursor rects
+/// don't apply there.
 private final class OverlayTextView: NSTextView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override var mouseDownCanMoveWindow: Bool { false }
+    private var beam = false
+    private var hover: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hover { removeTrackingArea(hover) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self)
+        addTrackingArea(area)
+        hover = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        if !beam { NSCursor.iBeam.push(); beam = true }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        if beam { NSCursor.pop(); beam = false }
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil, beam { NSCursor.pop(); beam = false }
+        super.viewWillMove(toWindow: newWindow)
+    }
 
     /// A read-only WPF box's menu: Cut, Copy, Paste, with only Copy enabled (and only with a selection).
     override func menu(for event: NSEvent) -> NSMenu? {
         let menu = NSMenu()
         menu.autoenablesItems = false
-        for (title, action, on) in [("Cut", #selector(cut(_:)), false), ("Copy", #selector(copy(_:)), selectedRange().length > 0),
-                                    ("Paste", #selector(paste(_:)), false)] {
-            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        // With their shortcuts shown, as WPF's items show Ctrl+X, Ctrl+C, Ctrl+V.
+        for (title, action, key, on) in [("Cut", #selector(cut(_:)), "x", false), ("Copy", #selector(copy(_:)), "c", selectedRange().length > 0),
+                                         ("Paste", #selector(paste(_:)), "v", false)] {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
             item.target = self
             item.isEnabled = on
             menu.addItem(item)
