@@ -24,7 +24,7 @@ struct GeneralSection: View {
             .padding(.top, 8)
             // macOS can hold the login item back until the user allows it; the switch alone would say it's on.
             if model.settings.startAtLogin, SMAppService.mainApp.status == .requiresApproval {
-                Caption("macOS waits for your permission before it starts Oberton when you log in: turn Oberton on in System Settings › General › Login Items.")
+                Caption("macOS waits for your permission before it starts Oberton when you log in: turn Oberton on in System Settings › General › Login Items.", bottom: 0)
                     .padding(.top, 6)
             }
 
@@ -49,7 +49,7 @@ struct GeneralSection: View {
                 .padding(.top, 16)
                 // Reading the text around the cursor needs Accessibility; until it is allowed the switch can't work.
                 if model.settings.matchSurroundingText, !Distribution.axTrusted {
-                    Caption("Oberton isn't allowed to read the text around the cursor yet. Allow it in System Settings › Privacy & Security › Accessibility.")
+                    Caption("Oberton isn't allowed to read the text around the cursor yet. Allow it in System Settings › Privacy & Security › Accessibility.", bottom: 0)
                         .padding(.top, 6)
                 }
             }
