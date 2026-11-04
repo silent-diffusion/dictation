@@ -18,6 +18,9 @@ protocol PlatformServices: AnyObject {
     func liveTarget() -> LiveTarget?
     /// Put the text where the user was. Returns a short receipt ("Inserted into Mail", "Copied").
     func insert(_ text: String) async throws -> String
+    /// History's "insert into the last app" (Windows `InsertIntoLastTargetAsync`): the last dictation's app, no caret
+    /// spot, nothing copied on failure, and the window in front when asked comes back afterwards.
+    func insertIntoLastTarget(_ text: String) async throws -> String
     /// The name of the app the text is going into, if known.
     var targetAppName: String? { get }
     /// That app's window title when the dictation started (Windows' InsertionTarget.Title), for History and the web
@@ -25,6 +28,8 @@ protocol PlatformServices: AnyObject {
     var targetWindowTitle: String? { get async }
     /// The text selected in the frontmost app, or nil.
     func selectedText() async -> String?
+    /// Why no app's selection can be read now (the Mac without Accessibility); nil when it can be asked.
+    var selectionUnavailable: String? { get }
     func clipboardText() -> String?
     /// Ask once for the permissions dictation needs (microphone; on the Mac, Accessibility to paste).
     func requestPermissions() async
@@ -41,6 +46,8 @@ extension PlatformServices {
     var targetWindowTitle: String? { nil }
     func insertionContext() async -> InsertionContext? { nil }
     func liveTarget() -> LiveTarget? { nil }
+    func insertIntoLastTarget(_ text: String) async throws -> String { try await insert(text) }
+    var selectionUnavailable: String? { nil }
     var nowhereToPaste: Bool { false }
     /// The text left on the clipboard as a last resort, when it couldn't go in: an ordinary copy, so clipboard managers
     /// keep it too.
@@ -516,7 +523,7 @@ final class AppModel: ObservableObject {
             // If the model was still loading, it now catches up on the whole recording.
             // Cancelled meanwhile: `cancel()` already let the recording go, and a new one may be running.
             do { try await engine?.value } catch {
-                if Task.isCancelled { return }
+                if Task.isCancelled { Log.info("A cancelled dictation ended: \(type(of: error))"); return }
                 transcriber.cancel()
                 fail(error)
                 return
@@ -531,6 +538,7 @@ final class AppModel: ObservableObject {
             // No phantom text: silence, a click or a stock phrase the recognizer made up inserts nothing (unless text
             // was already typed while speaking).
             if live?.hasTyped != true, SpeechGuard.shouldDiscard(raw, recorded: seconds, peakLevel: peak) {
+                Log.info("Discarded a likely phantom transcript (\(raw.utf16.count) chars, \(String(format: "%.1f", seconds)) s, peak \(String(format: "%.2f", peak)))")
                 live?.stop()
                 live = nil
                 phase = .idle
@@ -1169,7 +1177,7 @@ final class AppModel: ObservableObject {
 
     /// Put a text into the app the last dictation went to (History's "Insert transcription into the last app").
     func insertIntoLastApp(_ text: String) async -> InsertNote {
-        do { return InsertNote(ok: true, text: try await platform?.insert(text) ?? "Done") } catch {
+        do { return InsertNote(ok: true, text: try await platform?.insertIntoLastTarget(text) ?? "Done") } catch {
             // Logged as Windows logs it; the Mac still says what went wrong rather than nothing.
             if !(error is UserFacingError) { Log.error("Unhandled UI exception", error) }
             return InsertNote(ok: false, text: (error as? UserFacingError)?.message ?? error.localizedDescription)
@@ -1350,6 +1358,8 @@ final class AppModel: ObservableObject {
             // The voice and speed are the current ones when the reading starts (for the clipboard, at READ CLIPBOARD).
             if let text = await platform?.selectedText(), !text.isEmpty {
                 reader.read(text)
+            } else if let why = platform?.selectionUnavailable {
+                notice(why, kind: .warning)
             } else if let clipboard = platform?.clipboardText()?.trimmingCharacters(in: .whitespacesAndNewlines),
                       !clipboard.isEmpty {
                 reader.askToReadClipboard(clipboard)
