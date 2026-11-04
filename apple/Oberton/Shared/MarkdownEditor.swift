@@ -29,6 +29,8 @@ struct MarkdownEditor {
     /// line is rendered again and it gives up the keyboard (MarkdownPresenter.Shown).
     var shown = true
     var onEdit: (String) -> Void
+    /// Whether the box has the keyboard (the dashboard's text box draws its accent line then).
+    var onFocus: ((Bool) -> Void)? = nil
     /// Where the cursor is (UTF-16), for the Play button and the Summary's match.
     var onCaret: ((Int) -> Void)? = nil
     /// The Jump item for a place in the text, or nil for none.
@@ -40,6 +42,7 @@ struct MarkdownEditor {
 
     fileprivate func update(_ c: MarkdownEditorController, palette: Palette) {
         c.onEdit = onEdit
+        c.onFocus = onFocus
         c.onCaret = onCaret
         c.jump = jump
         c.setLook(MarkdownLook(size: size, palette: palette))
@@ -63,6 +66,7 @@ final class MarkdownEditorController: NSObject {
     #endif
 
     var onEdit: (String) -> Void = { _ in }
+    var onFocus: ((Bool) -> Void)?
     var onCaret: ((Int) -> Void)?
     var jump: ((Int) -> MarkdownJump?)?
 
@@ -269,6 +273,12 @@ final class MarkdownEditorController: NSObject {
         guard o < ls.count else { return false }
         selectedRange = NSRange(location: end ? NSMaxRange(ls[o].content) : ls[o].content.location, length: 0)
         return true
+    }
+
+    /// Told after the current update, so a view may keep it in its state.
+    func focusChanged(_ focused: Bool) {
+        guard let onFocus else { return }
+        DispatchQueue.main.async { onFocus(focused) }
     }
 
     func lostFocus() {
@@ -706,9 +716,15 @@ final class MarkdownTextView: NSTextView {
         super.keyDown(with: event)
     }
 
+    override func becomeFirstResponder() -> Bool {
+        let ok = super.becomeFirstResponder()
+        if ok { controller?.focusChanged(true) }
+        return ok
+    }
+
     override func resignFirstResponder() -> Bool {
         let ok = super.resignFirstResponder()
-        if ok { controller?.lostFocus() }
+        if ok { controller?.lostFocus(); controller?.focusChanged(false) }
         return ok
     }
 
@@ -754,8 +770,8 @@ final class MarkdownUITextView: UITextView {
 
 extension MarkdownEditorController: UITextViewDelegate {
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) { userScrolledAt = Date() }
-    func textViewDidBeginEditing(_ textView: UITextView) { didClick() }
-    func textViewDidEndEditing(_ textView: UITextView) { lostFocus() }
+    func textViewDidBeginEditing(_ textView: UITextView) { didClick(); focusChanged(true) }
+    func textViewDidEndEditing(_ textView: UITextView) { lostFocus(); focusChanged(false) }
     func textViewDidChange(_ textView: UITextView) { userEdited() }
     func textViewDidChangeSelection(_ textView: UITextView) { selectionChanged() }
 
