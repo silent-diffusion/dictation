@@ -193,10 +193,25 @@ extension BrokenFileTests {
 
     @Test func percentAndGroupingFollowTheRegion() {
         #expect(NetNumber.percent(0.06, locale: us) == "6%")
-        #expect(NetNumber.percent(0.125, locale: us) == "13%")
+        #expect(NetNumber.percent(1, locale: us) == "100%")
+        #expect(NetNumber.percent(0, locale: us) == "0%")
         #expect(NetNumber.percent(0.06, locale: de).hasPrefix("6") && NetNumber.percent(0.06, locale: de).hasSuffix("%")
                 && NetNumber.percent(0.06, locale: de).count == 3)
         #expect(NetNumber.n0(1234, locale: us) == "1,234")
         #expect(NetNumber.n0(1234, locale: de) == "1.234")
+    }
+
+    @Test func percentRoundsTheExactValueWithTiesToEvenAsDotNetCoresP0() {
+        // Exact halves (k/8 is exact in binary) go to the even whole percent, as .NET Core 3.0+'s standard formats do.
+        #expect(NetNumber.percent(0.125, locale: us) == "12%") // 12.5 → 12
+        #expect(NetNumber.percent(0.375, locale: us) == "38%") // 37.5 → 38
+        #expect(NetNumber.percent(0.625, locale: us) == "62%") // 62.5 → 62
+        #expect(NetNumber.percent(0.875, locale: us) == "88%") // 87.5 → 88
+        // Values that only look like halves are rounded by where their binary value really lies.
+        #expect(NetNumber.percent(0.005, locale: us) == "1%") // 0.0050000000000000001
+        #expect(NetNumber.percent(0.285, locale: us) == "28%") // 0.28499999999999998
+        #expect(NetNumber.percent(0.135, locale: us) == "14%") // 0.13500000000000000888
+        #expect(NetNumber.percent(0.7, locale: us) == "70%")
+        #expect(NetNumber.wholePercent(2.5) == 250 && NetNumber.wholePercent(-0.125) == -12)
     }
 }

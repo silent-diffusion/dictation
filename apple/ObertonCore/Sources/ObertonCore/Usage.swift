@@ -26,11 +26,12 @@ public struct UsageDay: Codable, Sendable, Equatable {
 
     public init() {}
 
-    // Files from older versions are missing newer keys: those keep their defaults. A value that is there but won't read
-    // fails the whole file, as Windows' strict read does (kept as usage.json.bad, the counts seeded again from History).
+    // Files from older versions are missing newer keys: those keep their defaults. A value that is there but won't read,
+    // null included, fails the whole file, as Windows' strict read does (kept as usage.json.bad, the counts seeded again
+    // from History).
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        func take<T: Decodable>(_ key: CodingKeys, _ into: inout T) throws { if let v = try c.decodeIfPresent(T.self, forKey: key) { into = v } }
+        func take<T: Decodable>(_ key: CodingKeys, _ into: inout T) throws { if let v = try c.strict(T.self, key) { into = v } }
         try take(.dictations, &dictations); try take(.words, &words); try take(.secondsSpoken, &secondsSpoken)
         try take(.turnaroundSeconds, &turnaroundSeconds); try take(.turnaroundCount, &turnaroundCount)
         try take(.readings, &readings); try take(.wordsRead, &wordsRead); try take(.secondsRead, &secondsRead)
@@ -55,6 +56,32 @@ public struct TurnaroundSample: Codable, Sendable, Equatable {
         self.aiModel = aiModel
         self.seconds = seconds
         self.modelLoaded = modelLoaded
+    }
+
+    /// As System.Text.Json reads Windows' TurnaroundSample: a missing key keeps the member's default (DateTime's
+    /// 0001-01-01, "", 0, false); a null time, number or flag fails the file; a null model name is taken (as "").
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        date = try c.strict(Date.self, .date) ?? Self.minDate
+        speechModel = try c.decodeIfPresent(String.self, forKey: .speechModel) ?? ""
+        aiModel = try c.decodeIfPresent(String.self, forKey: .aiModel) ?? ""
+        seconds = try c.strict(Double.self, .seconds) ?? 0
+        modelLoaded = try c.strict(Bool.self, .modelLoaded) ?? false
+    }
+
+    /// .NET's default(DateTime): 0001-01-01 00:00 of the proleptic Gregorian calendar (62,135,596,800 s before 1970).
+    static let minDate = Date(timeIntervalSince1970: -62_135_596_800)
+}
+
+extension KeyedDecodingContainer {
+    /// A value as System.Text.Json reads it into a .NET number, flag, date or list: nil when the key is missing (the
+    /// default stays), an error when it is null or won't read.
+    func strict<T: Decodable>(_ type: T.Type, _ key: Key) throws -> T? {
+        guard contains(key) else { return nil }
+        if try decodeNil(forKey: key) {
+            throw DecodingError.valueNotFound(T.self, .init(codingPath: codingPath + [key], debugDescription: "null where a value is needed"))
+        }
+        return try decode(T.self, forKey: key)
     }
 }
 
@@ -89,9 +116,11 @@ public struct UsageLog: Codable, Sendable, Equatable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         // Strict, as Windows: a value that won't read fails the file (`JSONFile.load` keeps it as .bad and logs it), and
         // the counts are seeded again from History rather than silently starting from nothing.
-        version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 1
-        days = try c.decodeIfPresent([String: UsageDay].self, forKey: .days) ?? [:]
-        samples = try c.decodeIfPresent([TurnaroundSample].self, forKey: .samples) ?? []
+        // A null fails too: System.Text.Json refuses it for the version (an int), and a null list of days or samples
+        // would leave Windows' store without one.
+        version = try c.strict(Int.self, .version) ?? 1
+        days = try c.strict([String: UsageDay].self, .days) ?? [:]
+        samples = try c.strict([TurnaroundSample].self, .samples) ?? []
     }
 
     public static func key(_ date: Date) -> String {

@@ -23,14 +23,41 @@ public enum NetNumber {
         return f.string(from: rounded as NSDecimalNumber) ?? String(describing: rounded)
     }
 
-    /// .NET's "P0": a whole percent, rounded half away from zero, in the region's percent pattern.
+    /// .NET's "P0": a whole percent in the region's percent pattern. A standard format on .NET Core 3.0 and later
+    /// rounds the exact binary value, an exact half to the even neighbour: 0.125 (exactly 12.5 %) is "12%", 0.135 (just
+    /// under 13.5 %) "13%", 0.285 (just under 28.5 %) "28%".
     public static func percent(_ x: Double, locale: Locale = .current) -> String {
+        guard x.isFinite else { return String(x) }
+        let whole = wholePercent(x)
         let f = NumberFormatter()
         f.locale = locale
         f.numberStyle = .percent
+        f.multiplier = 1
         f.maximumFractionDigits = 0
-        f.roundingMode = .halfUp
-        return f.string(from: NSNumber(value: x)) ?? "\(Int((x * 100).rounded()))%"
+        return f.string(from: NSNumber(value: whole)) ?? "\(whole)%"
+    }
+
+    /// x × 100 rounded to a whole number from the double's exact value (significand × 2^exponent), ties to even.
+    static func wholePercent(_ x: Double) -> Int {
+        let magnitude = abs(x)
+        guard magnitude != 0 else { return 0 }
+        guard magnitude < 1e15 else { return Int((x * 100).rounded(.toNearestOrEven)) }
+        // magnitude = sig × 2^exp exactly, sig < 2^53, so sig × 100 < 2^60 fits.
+        let exp = Int(magnitude.exponent) - Double.significandBitCount
+        let sig = UInt64(magnitude.significandBitPattern) | (magnitude.isNormal ? UInt64(1) << UInt64(Double.significandBitCount) : 0)
+        let scaled = sig * 100
+        var whole: UInt64
+        if exp >= 0 {
+            whole = scaled << UInt64(exp)
+        } else if -exp >= 64 {
+            whole = 0 // below 2^60 / 2^64 of a percent: rounds to 0
+        } else {
+            let shift = UInt64(-exp)
+            whole = scaled >> shift
+            let rest = scaled & ((UInt64(1) << shift) - 1), half = UInt64(1) << (shift - 1)
+            if rest > half || (rest == half && whole % 2 == 1) { whole += 1 }
+        }
+        return x < 0 ? -Int(whole) : Int(whole)
     }
 
     /// .NET's "N0": a whole number with the region's digit grouping ("1,234").

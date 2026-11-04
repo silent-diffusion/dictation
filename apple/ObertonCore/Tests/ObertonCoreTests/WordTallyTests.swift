@@ -137,15 +137,25 @@ import Testing
         #expect(WordTally.correction(removed: ["İzmir"], added: ["Izmir"]) == "İzmir" + WordTally.arrow + "Izmir")
     }
 
-    @Test func digitsOutsideTheBasicPlaneAreNotDigitsAsOnWindows() {
-        // U+1D7CE MATHEMATICAL BOLD DIGIT ZERO, twice: four UTF-16 surrogates, none a digit to char.IsDigit.
-        let item = WordTally.analyze(transcript: "x", aiOutput: nil, final: "\u{1D7CE}\u{1D7CE} 2026")
-        #expect(item.words == ["\u{1D7CE}\u{1D7CE}"])
+    @Test func charactersOutsideTheBasicPlaneAreNoPartOfAWordAsOnWindows() {
+        // .NET's Regex sees the two UTF-16 surrogates of U+1D7CE (bold digit zero) and U+20000 (a CJK letter), and a
+        // surrogate is neither \p{L} nor \p{N}: they are no word at all, and they end the word they follow.
+        #expect(WordTally.tokens("\u{1D7CE}\u{1D7CF} \u{20000}\u{20001} ab\u{1D7CE}cd x\u{20000}") == ["ab", "cd", "x"])
+        let item = WordTally.analyze(transcript: "x", aiOutput: nil, final: "\u{1D7CE}\u{1D7CE} 2026 \u{20000}\u{20001}")
+        #expect(item.words.isEmpty)
+        #expect(item.phrases.isEmpty)
     }
 
-    @Test func aWrittenWordOfThreeUTF16UnitsCarriesMeaning() {
-        // Two letters outside the BMP are four UTF-16 units: long enough on Windows (w.Length >= 3).
-        #expect(WordTally.correction(removed: ["ab"], added: ["\u{20000}\u{20001}"]) != nil)
+    @Test func aWrittenWordOutsideTheBasicPlaneIsNoCorrection() {
+        // Windows' Tokens(written) is empty for "𠀀𠀁" and is ["x"] (one letter) for "x𠀀": neither carries meaning.
+        #expect(WordTally.correction(removed: ["ab"], added: ["\u{20000}\u{20001}"]) == nil)
+        #expect(WordTally.correction(removed: ["ab"], added: ["x\u{20000}"]) == nil)
+        // A BMP word beside them still counts.
+        #expect(WordTally.correction(removed: ["overton"], added: ["Oberton\u{20000}"]) == "overton" + WordTally.arrow + "Oberton\u{20000}")
+    }
+
+    @Test func lettersOfTheBasicPlaneStillMakeWords() {
+        #expect(WordTally.tokens("Größe 東京 ２０２６ don’t") == ["größe", "東京", "２０２６", "don't"])
     }
 
     @Test func profilesUsedEquallyOnOneDayKeepTheOrderTheyWereUsed() {
@@ -347,5 +357,28 @@ extension BrokenFileTests {
         #expect(lines.contains { $0.contains("keeping a .bad copy") })
         // A missing key is fine: it keeps its default.
         #expect(try JSONDecoder().decode(UsageLog.self, from: Data(#"{"days":{"2026-10-01":{"words":3}}}"#.utf8)).days["2026-10-01"]?.words == 3)
+    }
+
+    @Test func aNullCountFailsTheUsageFileAsSystemTextJsonDoes() throws {
+        // System.Text.Json refuses null for an int or a double: the file is .bad and the counts are seeded again.
+        for json in [#"{"days":{"2026-10-01":{"words":null}}}"#, #"{"version":null,"days":{}}"#,
+                     #"{"days":{"2026-10-01":{"secondsSpoken":null}}}"#, #"{"days":null}"#, #"{"samples":null}"#,
+                     #"{"days":{"2026-10-01":{"apps":{"Mail":null}}}}"#,
+                     #"{"samples":[{"date":"2026-10-01T10:00:00Z","speechModel":"a","aiModel":"","seconds":null,"modelLoaded":false}]}"#] {
+            #expect(throws: DecodingError.self) { try JSONDecoder().decode(UsageLog.self, from: Data(json.utf8)) }
+        }
+    }
+
+    @Test func aTurnaroundSampleMissingAKeyKeepsItsDefaultAsOnWindows() throws {
+        // Windows defaults a missing member; it doesn't fail the whole file.
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .iso8601
+        let log = try dec.decode(UsageLog.self, from: Data(#"{"samples":[{"date":"2026-10-01T10:00:00Z","speechModel":"small","seconds":1.5}]}"#.utf8))
+        #expect(log.samples.count == 1)
+        #expect(log.samples[0].aiModel == "" && log.samples[0].modelLoaded == false && log.samples[0].seconds == 1.5)
+        let bare = try dec.decode(TurnaroundSample.self, from: Data("{}".utf8))
+        #expect(bare.speechModel == "" && bare.seconds == 0 && bare.date == TurnaroundSample.minDate)
+        // A null model name is taken, as a .NET string can be null.
+        #expect(try dec.decode(TurnaroundSample.self, from: Data(#"{"speechModel":null}"#.utf8)).speechModel == "")
     }
 }

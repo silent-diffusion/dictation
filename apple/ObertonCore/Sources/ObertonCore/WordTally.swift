@@ -270,7 +270,11 @@ public struct WordTally: Codable, Sendable, Equatable {
         "so", "okay", "well",
     ]
 
-    private static let wordRx = try! NSRegularExpression(pattern: "[\\p{L}\\p{N}]+(?:['’][\\p{L}]+)*")
+    /// Windows' `[\p{L}\p{N}]+(?:['’][\p{L}]+)*`. .NET's Regex looks at UTF-16 units, and the two halves of a character
+    /// outside the BMP (𝟎, 𠀀) are surrogates, never letters or digits; ICU looks at whole characters, so the classes
+    /// are kept to the BMP: such characters are no part of any word, as on Windows ("ab𝟎" → "ab", "𠀀𠀁" → nothing).
+    private static let wordRx = try! NSRegularExpression(
+        pattern: "[[\\p{L}\\p{N}]&&[\\x{0}-\\x{FFFF}]]+(?:['’][[\\p{L}]&&[\\x{0}-\\x{FFFF}]]+)*")
     private static let sentenceRx = try! NSRegularExpression(pattern: "(?<=[.!?;:])\\s+|\\n")
 
     /// The words of a text, lower case, apostrophes straightened, punctuation dropped.
@@ -293,8 +297,7 @@ public struct WordTally: Codable, Sendable, Equatable {
         return String(out)
     }
 
-    /// .NET's `t.All(char.IsDigit)`: every UTF-16 unit a decimal digit (a digit outside the BMP is two surrogates there,
-    /// which aren't digits).
+    /// .NET's `t.All(char.IsDigit)`: every UTF-16 unit a decimal digit (tokens hold only BMP characters, see `wordRx`).
     static func allDigits(_ s: String) -> Bool {
         s.utf16.allSatisfy { Unicode.Scalar($0)?.properties.generalCategory == .decimalNumber }
     }
