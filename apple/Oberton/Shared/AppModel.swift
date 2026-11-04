@@ -1441,31 +1441,9 @@ final class AppModel: ObservableObject {
 
     // MARK: First-run speech model (Windows' RuntimeInstaller: the Whisper model for the hardware, downloaded in setup)
 
-    /// The speech model a new install starts with, as Windows picks by hardware (large-v3 turbo with an NVIDIA GPU,
-    /// small.en without): large-v3 turbo on Apple silicon with 16 GB of memory or more, small.en otherwise and on
-    /// iPhone and iPad. Those English-only models don't fit a device set to another language: there, without room for
-    /// turbo, it stays on Apple Speech (""), which follows the system language.
-    nonisolated static func recommendedSpeechModel(language: String = "", memory: UInt64 = ProcessInfo.processInfo.physicalMemory,
-                                       appleSilicon: Bool = isAppleSilicon, phone: Bool = isPhone) -> String {
-        if !phone, appleSilicon, memory >= 16 << 30 { return "large-v3-turbo" }
-        let code = language.isEmpty ? (Locale.current.language.languageCode?.identifier ?? "en") : String(language.prefix(2))
-        return code == "en" ? "small.en" : ""
-    }
-
-    nonisolated static var isPhone: Bool {
-        #if os(iOS)
-        true
-        #else
-        false
-        #endif
-    }
-
-    nonisolated static var isAppleSilicon: Bool {
-        #if arch(arm64)
-        true
-        #else
-        false
-        #endif
+    /// The speech model a new install starts with (`SpeechModelChoice.recommended`, tested in ObertonCore).
+    nonisolated static func recommendedSpeechModel(language: String = "") -> String {
+        SpeechModelChoice.recommended(language: language)
     }
 
     /// Setup's speech model step (and a launch after an unfinished one): download the first-run model, then switch
