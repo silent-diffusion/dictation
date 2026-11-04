@@ -47,7 +47,7 @@ struct CloudSection: View {
         VStack(alignment: .leading, spacing: 0) {
             Text("API key").font(Ob.sans(Ob.body)).padding(.bottom, 6)
             HStack(spacing: 8) {
-                ObField("", text: text, mono: true, secure: true).accessibilityLabel(name)
+                ObField("", text: text, secure: true, padding: EdgeInsets(top: 5, leading: 6, bottom: 5, trailing: 6)).accessibilityLabel(name)
                     .onSubmit { save(text, provider) }
                 Button("Save key") { save(text, provider) }.buttonStyle(.primary)
                 Button("Remove") {
@@ -59,8 +59,8 @@ struct CloudSection: View {
             Caption(hasKey(provider) ? "A key is saved (encrypted)." : "No key saved.", bottom: 0).padding(.top, 6)
             extra()
         }
-        .padding(EdgeInsets(top: 14, leading: 18, bottom: 14, trailing: 18))
-        .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
+        .padding(EdgeInsets(top: 14 + Ob.border, leading: 18 + Ob.border, bottom: 14 + Ob.border, trailing: 18 + Ob.border)) // Card Padding 18,14 inside its line
+        .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: Ob.border))
     }
 
     /// CloudPage.SaveKey: an empty box does nothing (it never removes the saved key); after saving, the box is cleared.
@@ -90,13 +90,13 @@ struct CommitField: View {
     @Environment(\.ob) private var ob
 
     var body: some View {
+        // A stock TextBox under the Fluent theme (its style sets 14 pt, over the window's 12): see ObField.
         TextField("", text: $text)
             .textFieldStyle(.plain)
-            .font(Ob.sans(Ob.body)) // a stock WPF TextBox: the window's 12
+            .font(Ob.sans(14))
             .focused($focused)
-            .padding(.horizontal, 8).padding(.vertical, 6)
-            .frame(maxWidth: width ?? .infinity, alignment: .leading)
-            .overlay(Rectangle().strokeBorder(invalid ? Color.red : focused ? ob.ink : ob.divider, lineWidth: 1))
+            .fluentBox(focused: focused, width: width)
+            .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(invalid ? Color.red : .clear, lineWidth: 1))
             .onAppear { text = value }
             .onChange(of: value) { if !focused { text = value; invalid = false } }
             .onChange(of: focused) { if !focused { commit() } }

@@ -1,22 +1,29 @@
 import ObertonCore
 import SwiftUI
 
-/// A text field drawn as on Windows: a hairline box, square, the text in the sans (or mono).
+/// A text box as WPF's Fluent theme draws the Windows app's TextBox and PasswordBox (SYS-008): 14 pt, a faint fill with
+/// 4-pt corners and a hairline edge, a darker bottom line that turns into the 2-pt accent line while typing, at least 32
+/// tall, Padding 10,5,6,6 inside the 1 px edge (CloudPage's PasswordBox sets 6,5).
 struct ObField: View {
     var placeholder: String
     @Binding var text: String
     var mono = false
     var secure = false
     var width: CGFloat?
-    @Environment(\.ob) private var ob
+    var padding = ObField.fluentPadding
     @FocusState private var focused: Bool
 
-    init(_ placeholder: String, text: Binding<String>, mono: Bool = false, secure: Bool = false, width: CGFloat? = nil) {
+    /// Fluent's TextControlThemePadding.
+    static let fluentPadding = EdgeInsets(top: 5, leading: 10, bottom: 6, trailing: 6)
+
+    init(_ placeholder: String, text: Binding<String>, mono: Bool = false, secure: Bool = false, width: CGFloat? = nil,
+         padding: EdgeInsets = ObField.fluentPadding) {
         self.placeholder = placeholder
         _text = text
         self.mono = mono
         self.secure = secure
         self.width = width
+        self.padding = padding
     }
 
     var body: some View {
@@ -24,11 +31,21 @@ struct ObField: View {
             if secure { SecureField(placeholder, text: $text) } else { TextField(placeholder, text: $text) }
         }
         .textFieldStyle(.plain)
-        .font(mono ? Ob.mono(12.5) : Ob.sans(Ob.body))
+        .font(mono ? Ob.mono(14) : Ob.sans(14))
         .focused($focused)
-        .padding(.horizontal, 8).padding(.vertical, 6)
-        .frame(maxWidth: width ?? .infinity, alignment: .leading)
-        .overlay(Rectangle().strokeBorder(focused ? ob.accent : ob.divider, lineWidth: 1))
+        .fluentBox(focused: focused, padding: padding, width: width)
+    }
+}
+
+extension View {
+    /// The Fluent text box around a field: Padding inside the 1 px edge, at least 32 tall, `width` its own (WPF Width).
+    func fluentBox(focused: Bool, padding: EdgeInsets = ObField.fluentPadding, width: CGFloat? = nil) -> some View {
+        self.padding(EdgeInsets(top: padding.top + Ob.border, leading: padding.leading + Ob.border,
+                                bottom: padding.bottom + Ob.border, trailing: padding.trailing + Ob.border))
+            .frame(minHeight: 32)
+            .frame(width: width)
+            .frame(maxWidth: width ?? .infinity, alignment: .leading)
+            .modifier(FluentField(focused: focused))
     }
 }
 
