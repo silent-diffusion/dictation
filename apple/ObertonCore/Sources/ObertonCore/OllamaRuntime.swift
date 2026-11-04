@@ -130,7 +130,7 @@ public enum OllamaRuntime {
             lock.withLock { stopLocked(); process = p }
             do { try p.run() } catch {
                 CoreLog.error("The AI runtime didn't start: \(error)")
-                throw UserFacingError("The local AI runtime (Ollama) didn't start. See logs/oberton.log.")
+                throw UserFacingError("The local AI runtime (Ollama) didn't start. See logs/dictation.log.")
             }
             Self.killAtExit()
             CoreLog.info("Started the AI runtime (Ollama) on port \(endpoint.port ?? 11434)")

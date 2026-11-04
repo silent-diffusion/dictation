@@ -24,7 +24,8 @@ public struct Hotkey: Equatable, Hashable, Sendable {
     }
 
     /// Reads "Ctrl+Alt+D" (any case, spaces allowed), with WPF's key names or the characters themselves ("Ctrl+1",
-    /// "Ctrl+-", as earlier Mac versions stored them). Nil when a part isn't a modifier or a known key, or there is no key.
+    /// "Ctrl+-", as earlier Mac versions stored them). Nil when a part isn't a modifier or a known key, or there is no key;
+    /// "Ctrl+D+E" is Ctrl+E.
     public init?(_ text: String) {
         var mods: Modifiers = []
         var key: String?
@@ -38,8 +39,10 @@ public struct Hotkey: Equatable, Hashable, Sendable {
             case "shift": mods.insert(.shift)
             case "cmd", "command", "win", "windows": mods.insert(.command)
             default:
-                guard key == nil else { return nil } // two keys
-                key = Self.aliases[part] ?? part
+                // Every key must be known; with two keys the last counts (Windows' TryParse).
+                let name = Self.aliases[part] ?? part
+                guard Self.keys.contains(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) else { return nil }
+                key = name
             }
         }
         guard let key else { return nil }

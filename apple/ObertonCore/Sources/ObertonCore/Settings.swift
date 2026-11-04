@@ -71,6 +71,17 @@ public struct CloudSettings: Codable, Sendable, Equatable {
     public var openAIBaseURL = "https://api.openai.com/v1"
     public var openAIModel = "gpt-4.1-mini"
     // The API keys themselves live in the Keychain (`KeyStore`), never in settings.json.
+
+    public init() {}
+
+    /// A missing or wrong key takes its default and the rest are kept (System.Text.Json fills only what is missing).
+    public init(from decoder: Decoder) throws {
+        self.init()
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        if let v = try? c.decode(Bool.self, forKey: .keepOffline) { keepOffline = v }
+        if let v = try? c.decode(String.self, forKey: .openAIBaseURL) { openAIBaseURL = v }
+        if let v = try? c.decode(String.self, forKey: .openAIModel) { openAIModel = v }
+    }
 }
 
 public struct AppSettings: Codable, Sendable, Equatable {
@@ -156,6 +167,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
     public var restoreClipboard = true
     public var insertion = InsertionMode.auto
     /// Per-app insertion override, keyed by the app's bundle identifier (Windows: by process name, e.g. "notepad").
+    /// Look one up with `insertionOverride(for:)`, which ignores case as Windows does.
     public var appOverrides: [String: InsertionMode] = [:]
     /// Kept with Windows' settings file (`TypingMaxChars`), which defines it but whose inserter doesn't use it: typing
     /// switches to pasting only for text with a line break, whatever its length.
@@ -223,9 +235,10 @@ public struct AppSettings: Codable, Sendable, Equatable {
         take(.historyDays, &historyDays); take(.saveHistoryAudio, &saveHistoryAudio); take(.audioLimit, &audioLimit); take(.audioDays, &audioDays)
         take(.collapsedSettingsGroups, &collapsedSettingsGroups)
         take(.checkUpdatesOnStartup, &checkUpdatesOnStartup)
-        // One unknown mode drops only that app's override, not the others.
+        // One unknown mode drops only that app's override, not the others. "Typing", "typing" and "TYPING" are all
+        // Typing, as Windows reads enum names.
         if let raw = try? c.decode([String: String].self, forKey: .appOverrides) {
-            appOverrides = raw.compactMapValues(InsertionMode.init(rawValue:))
+            appOverrides = raw.compactMapValues { InsertionMode(rawValue: $0.lowercased()) }
         }
     }
 }
@@ -247,6 +260,13 @@ extension AppSettings {
         return s
     }
 
+    /// The per-app insertion override for an app, its bundle identifier in any case ("com.apple.textedit" is TextEdit),
+    /// as Windows' AppOverrides ignore case (StringComparer.OrdinalIgnoreCase).
+    public func insertionOverride(for bundleID: String) -> InsertionMode? {
+        if let exact = appOverrides[bundleID] { return exact }
+        return appOverrides.first { $0.key.caseInsensitiveCompare(bundleID) == .orderedSame }?.value
+    }
+
     /// The Whisper model dictation and Extended Notes use, or nil for Apple Speech.
     public var whisperModel: String? { speechModel.isEmpty ? nil : speechModel }
     /// The language for Apple Speech: the setting, or the system's when it is empty (auto-detect is Whisper's).
@@ -259,17 +279,18 @@ extension AppSettings {
     }
 }
 
-/// The app's data folder: Application Support/Oberton (inside the sandbox container on the App Store build).
+/// The app's data folder: Application Support/Oberton (inside the sandbox container on the App Store build), or the
+/// folder OBERTON_DATA_DIR names (Windows' DICTATION_ROOT; test runs keep their history and notes out of the user's own).
 public enum AppPaths {
+    /// OBERTON_DATA_DIR is set: the data lives somewhere else than usual.
+    public static var isOverridden: Bool { ProcessInfo.processInfo.environment["OBERTON_DATA_DIR"]?.isEmpty == false }
+
     public static var dataDir: URL {
-        #if DEBUG
-        // The start/stop stress run (`OBERTON_STRESS`) keeps its history and notes out of the user's own.
-        if let dir = ProcessInfo.processInfo.environment["OBERTON_DATA_DIR"] {
+        if let dir = ProcessInfo.processInfo.environment["OBERTON_DATA_DIR"], !dir.isEmpty {
             let url = URL(fileURLWithPath: dir, isDirectory: true)
             try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
             return url
         }
-        #endif
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let dir = base.appending(path: "Oberton", directoryHint: .isDirectory)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -277,32 +298,51 @@ public enum AppPaths {
     }
 }
 
-/// Reads and writes one Codable value as pretty JSON in the data folder.
+/// Reads and writes one Codable value as pretty JSON in the data folder (Windows' JsonStore).
 public struct JSONFile<T: Codable> {
     public let url: URL
     public init(_ name: String) { url = AppPaths.dataDir.appending(path: name) }
     public init(url: URL) { self.url = url }
 
     /// The value, or nil when the file is missing or can't be read. An unreadable file is kept as "<name>.bad" and
-    /// logged (as Windows' JsonStore), so the defaults that replace it never cost the user what was in it.
+    /// logged (as Windows' JsonStore), so the defaults that replace it never cost the user what was in it. Comments and
+    /// trailing commas in a hand-edited file are fine, as on Windows.
     public func load() -> T? {
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        let dec = JSONDecoder()
-        dec.dateDecodingStrategy = .iso8601 // as `save` writes them
-        do { return try dec.decode(T.self, from: data) } catch {
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        do {
+            let data = try Data(contentsOf: url)
+            let dec = JSONDecoder()
+            dec.allowsJSON5 = true
+            dec.dateDecodingStrategy = .iso8601 // as `save` writes them
+            return try dec.decode(T.self, from: data)
+        } catch {
+            CoreLog.error("Could not read \(url.path); keeping a .bad copy: \(error)")
             let bad = url.appendingPathExtension("bad")
             try? FileManager.default.removeItem(at: bad)
             try? FileManager.default.copyItem(at: url, to: bad)
-            CoreLog.error("Could not read \(url.lastPathComponent); keeping a .bad copy (\(error))")
             return nil
         }
     }
 
+    /// Writes the value (atomically), or leaves the file alone when it already holds exactly this, so a file is only
+    /// rewritten when something in it changed. A failure is logged as Windows logs it, and the app goes on.
     public func save(_ value: T) {
-        let enc = JSONEncoder()
-        enc.outputFormatting = [.prettyPrinted, .sortedKeys]
-        enc.dateEncodingStrategy = .iso8601
-        if let data = try? enc.encode(value) { try? data.write(to: url, options: .atomic) }
+        do {
+            let enc = JSONEncoder()
+            enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+            enc.dateEncodingStrategy = .iso8601
+            let data = try enc.encode(value)
+            if let old = try? Data(contentsOf: url), old == data { return }
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: url, options: .atomic)
+        } catch {
+            switch url.lastPathComponent {
+            case "settings.json": CoreLog.error("Saving settings failed: \(error)")
+            case "profiles.json": CoreLog.error("Saving profiles failed: \(error)")
+            case "usage.json": CoreLog.warn("Saving usage counts failed: \(error.localizedDescription)")
+            default: CoreLog.error("Saving \(url.lastPathComponent) failed: \(error)")
+            }
+        }
     }
 }
 

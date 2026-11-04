@@ -6,6 +6,7 @@ extension AppSettings {
     @discardableResult
     public mutating func enforceLocalEndpoint() -> Bool {
         if (try? OllamaBackend.validated(ollamaEndpoint)) != nil { return false }
+        CoreLog.warn("LLM endpoint '\(ollamaEndpoint)' is not local; resetting to default.")
         ollamaEndpoint = AppSettings().ollamaEndpoint
         return true
     }

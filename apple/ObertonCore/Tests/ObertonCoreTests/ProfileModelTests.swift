@@ -185,7 +185,8 @@ final class BudgetBackend: LanguageModelBackend, @unchecked Sendable {
         defer { CoreLog.sink = nil }
         #expect(JSONFile<[Profile]>(url: url).load() == nil)
         #expect(try Data(contentsOf: url.appendingPathExtension("bad")) == broken)
-        #expect(logged.contains { $0.hasPrefix("ERROR Could not read profiles.json; keeping a .bad copy") })
+        // Windows' line: the file's whole path, then the error.
+        #expect(logged.contains { $0.hasPrefix("ERROR Could not read ") && $0.contains("profiles.json; keeping a .bad copy: ") })
         // A file that is fine loads as before, dates included.
         JSONFile<[TurnaroundSample]>(url: dir.appending(path: "t.json")).save([TurnaroundSample(speechModel: "s", aiModel: "", seconds: 1, modelLoaded: false)])
         #expect(JSONFile<[TurnaroundSample]>(url: dir.appending(path: "t.json")).load()?.count == 1)

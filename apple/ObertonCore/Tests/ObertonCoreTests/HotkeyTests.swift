@@ -64,8 +64,9 @@ import Testing
     @Test func rejectsWhatIsNotAShortcut() {
         #expect(Hotkey("") == nil)
         #expect(Hotkey("Ctrl") == nil)
-        #expect(Hotkey("Ctrl+D+E") == nil)
+        #expect(Hotkey("Ctrl+D+E")?.text == "Ctrl+E") // the last key counts, as on Windows
         #expect(Hotkey("Ctrl+Banana") == nil)
+        #expect(Hotkey("Ctrl+Banana+D") == nil)
         #expect(Hotkey.keyName(forKeyCode: 0x3B) == nil) // kVK_Control on its own
     }
 
