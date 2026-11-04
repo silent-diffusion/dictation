@@ -56,11 +56,13 @@ struct AnalyticsView: View {
     /// (AnalyticsPage.xaml).
     private var header: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .bottom, spacing: 0) {
-                Text("ANALYTICS").font(Ob.mono(compact ? 26 : 30, .bold)).lineLimit(1)
-                Decor("分析", size: compact ? 22 : 26, color: ob.divider, weight: .bold).fixedSize().padding(.leading, 12).padding(.bottom, 1)
-                Spacer(minLength: 16)
-                if !compact { periods.padding(.bottom, 2) }
+            // The title at the top of the row, the decor and the periods at its bottom (HeaderRow, as Decor.cs).
+            HeaderRow(decorGap: 12, decorBottom: 1, trailingGap: 16, trailingBottom: 2) {
+                Text("ANALYTICS").font(Ob.mono(compact ? 26 : 30, .bold)).noWrap()
+                    .layoutValue(key: HeaderRow.RoleKey.self, value: .title)
+                Decor("分析", size: compact ? 22 : 26, color: ob.divider, weight: .bold).noWrap()
+                    .layoutValue(key: HeaderRow.RoleKey.self, value: .decor)
+                if !compact { periods.fixedSize().layoutValue(key: HeaderRow.RoleKey.self, value: .trailing) }
             }
             Rule().padding(.top, 6).padding(.bottom, 6)
             let summary = (period.map { "Last \($0) days" } ?? "Everything so far") + ": how you dictate, what gets corrected, and the words you reach for."

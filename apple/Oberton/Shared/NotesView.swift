@@ -94,9 +94,12 @@ struct NotesLanding: View {
 
     private var top: some View {
             VStack(alignment: .leading, spacing: 0) {
-                HStack(alignment: .bottom, spacing: 12) {
-                    Text("EXTENDED NOTES").font(Ob.mono(30, .bold))
-                    Decor("記録", size: 26, color: ob.divider, weight: .bold).padding(.bottom, 1)
+                // The title at the top of the row, the decor at its bottom (a horizontal StackPanel, HeaderRow).
+                HeaderRow(decorGap: 12, decorBottom: 1, trailingGap: 0, trailingBottom: 0) {
+                    Text("EXTENDED NOTES").font(Ob.mono(30, .bold)).noWrap()
+                        .layoutValue(key: HeaderRow.RoleKey.self, value: .title)
+                    Decor("記録", size: 26, color: ob.divider, weight: .bold).noWrap()
+                        .layoutValue(key: HeaderRow.RoleKey.self, value: .decor)
                 }
                 Rule().padding(.vertical, 6)
                 Caption("Leave it on through a lecture or a meeting. It transcribes as it goes, tidies the text with the AI about every minute, keeps a running summary and the recording, and you can type your own notes straight into the text. Everything stays on this \(Device.noun).")

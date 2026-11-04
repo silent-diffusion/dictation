@@ -123,11 +123,13 @@ struct DashboardView: View {
     private func header(now: Date, phone: Bool) -> some View {
         let size: CGFloat = phone ? 26 : 30
         return VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .bottom, spacing: 0) {
+            // The title at the top of the row, the decor and the clock at its bottom (HeaderRow, as Decor.cs).
+            HeaderRow(decorGap: 12, decorBottom: 1, trailingGap: 16, trailingBottom: 4) {
                 Text("DASHBOARD").font(Ob.mono(size, .bold)).lineLimit(1).truncationMode(.tail)
-                Decor("計器", size: size - 4, color: ob.divider, weight: .bold).fixedSize().padding(.leading, 12).padding(.bottom, 1)
-                Spacer(minLength: 16)
-                if !phone { Readout(clock(now)).fixedSize().padding(.bottom, 4).layoutPriority(1) }
+                    .layoutValue(key: HeaderRow.RoleKey.self, value: .title)
+                Decor("計器", size: size - 4, color: ob.divider, weight: .bold).noWrap()
+                    .layoutValue(key: HeaderRow.RoleKey.self, value: .decor)
+                if !phone { Readout(clock(now)).fixedSize().layoutValue(key: HeaderRow.RoleKey.self, value: .trailing) }
             }
             Rule().padding(.top, 6)
             Text(summary).font(Ob.sans(12.5)).foregroundStyle(ob.muted)
@@ -720,6 +722,7 @@ struct NotesCell: View {
         .alert("Oberton", isPresented: Binding(get: { problem != nil }, set: { if !$0 { problem = nil } })) {
             Button("OK") { problem = nil }
         } message: { Text(problem ?? "") }
+        .dialogLook(.warning, shown: problem != nil)
     }
 
     private func warn(_ message: String) { NotesDialog.warn(message) { problem = $0 } }
@@ -1093,7 +1096,7 @@ struct FittedText: View {
         }
     }
 
-    static func spacing(_ size: CGFloat) -> CGFloat { Ob.lineSpacing(size, lineHeight: size * 1.4) }
+    static func spacing(_ size: CGFloat) -> CGFloat { Ob.lineSpacing(size, lineHeight: size * 1.4, mono: true) } // Cascadia's own line
 
     /// The size the text is drawn at in a space this big.
     static func fit(_ text: String, in space: CGSize) -> CGFloat {
