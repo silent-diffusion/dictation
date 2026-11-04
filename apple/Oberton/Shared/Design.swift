@@ -138,6 +138,11 @@ enum TextSize {
     }
 
     // The shortcuts as tooltips and captions name them (Windows: Ctrl+0, Ctrl+B, Alt+Left; Ctrl → ⌘, the "+" kept).
+    /// Settings › Appearance's A−, A+ and RESET go through the window, as Windows' Main.Zoom / Main.SetZoom: the toast
+    /// shows even when the size doesn't change (RESET at 100%). RootView answers it.
+    static let request = Notification.Name("ObertonSetTextSize")
+    static func set(_ scale: Double) { NotificationCenter.default.post(name: request, object: nil, userInfo: ["scale": scale]) }
+
     static let resetKey = "⌘+0"
     static let menuKey = "⌘+B"
     static let backKey = "⌘+["
@@ -449,10 +454,18 @@ struct Box<Content: View>: View {
 
 // MARK: - Buttons
 
+#if os(macOS)
+/// On the Mac the capsules are a PrimitiveButtonStyle, so the keyboard can press them (SYS-007, see `tabStop`).
+typealias ObButtonStyle = PrimitiveButtonStyle
+#else
+typealias ObButtonStyle = ButtonStyle
+#endif
+
 /// Capsules (App.xaml's PrimaryButton, QuietButton, DashedButton). Filled ink = the main action; ink outline = the
-/// others; dashed = something to add. Always at least 34 tall, the hand cursor over them, and an accent border while
-/// they have the keyboard focus.
-struct CapsuleButtonStyle: ButtonStyle {
+/// others; dashed = something to add. Always at least 34 tall with CornerRadius 17 (a capsule at 34; Setup's 40-tall
+/// ones keep 17), the hand cursor over them, and an accent border while they have the keyboard focus. On the Mac each is
+/// a Tab stop, takes the focus when clicked, and Space or Return presses it, as a WPF Button.
+struct CapsuleButtonStyle: ObButtonStyle {
     enum Kind { case primary, quiet, dashed }
     var kind: Kind = .quiet
     var size: CGFloat = 12
@@ -468,12 +481,19 @@ struct CapsuleButtonStyle: ButtonStyle {
     @Environment(\.isFocused) private var focused
 
     func makeBody(configuration: Configuration) -> some View {
-        Face(configuration: configuration, kind: kind, size: size, padding: padding ?? (compact ? 10 : 16), height: height,
-             minWidth: minWidth, ob: ob, enabled: enabled, focused: focused)
+        #if os(macOS)
+        Pressable(trigger: configuration.trigger) { pressed, keyFocused in
+            Face(label: configuration.label, kind: kind, size: size, padding: padding ?? (compact ? 10 : 16), height: height,
+                 minWidth: minWidth, ob: ob, enabled: enabled, focused: focused || keyFocused, pressed: pressed)
+        }
+        #else
+        Face(label: configuration.label, kind: kind, size: size, padding: padding ?? (compact ? 10 : 16), height: height,
+             minWidth: minWidth, ob: ob, enabled: enabled, focused: focused, pressed: configuration.isPressed)
+        #endif
     }
 
-    private struct Face: View {
-        var configuration: Configuration
+    private struct Face<Label: View>: View {
+        var label: Label
         var kind: Kind
         var size: CGFloat
         var padding: CGFloat
@@ -482,10 +502,12 @@ struct CapsuleButtonStyle: ButtonStyle {
         var ob: Palette
         var enabled: Bool
         var focused: Bool
+        var pressed: Bool
         @State private var hover = false
 
         var body: some View {
-            configuration.label
+            let shape = RoundedRectangle(cornerRadius: 17)
+            label
                 .font(Ob.mono(size, kind == .primary ? .semibold : .regular))
                 .textCase(.uppercase)
                 .lineLimit(1)
@@ -496,35 +518,126 @@ struct CapsuleButtonStyle: ButtonStyle {
                 .frame(minWidth: minWidth, minHeight: height)
                 .background {
                     switch kind {
-                    case .primary: Capsule().fill(ob.ink)
-                    case .quiet: Capsule().fill(hover ? ob.subtle : .clear)
+                    case .primary: shape.fill(ob.ink)
+                    case .quiet: shape.fill(hover ? ob.subtle : .clear)
                     case .dashed: Color.clear
                     }
                 }
                 .overlay {
                     switch kind {
-                    case .primary, .quiet: Capsule().strokeBorder(focused ? ob.accent : ob.ink, lineWidth: 1)
+                    case .primary, .quiet: shape.strokeBorder(focused ? ob.accent : ob.ink, lineWidth: 1)
                     // The dashed stroke stays muted on hover; only the text turns ink.
-                    case .dashed: Capsule().strokeBorder(ob.muted, style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                    case .dashed: shape.strokeBorder(ob.muted, style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
                     }
                 }
-                .contentShape(Capsule())
+                .contentShape(shape)
                 // App.xaml's triggers: hover .82 / pressed .66 (primary), pressed .7 (quiet), disabled .4; the dashed
                 // template has only its hover colour.
-                .opacity(kind == .dashed ? 1 : !enabled ? 0.4 : configuration.isPressed ? (kind == .quiet ? 0.7 : 0.66) : kind == .primary && hover ? 0.82 : 1)
+                .opacity(kind == .dashed ? 1 : !enabled ? 0.4 : pressed ? (kind == .quiet ? 0.7 : 0.66) : kind == .primary && hover ? 0.82 : 1)
                 .onHover { hover = $0 }
                 .handCursor(enabled) // WPF shows no hand over a disabled control
         }
     }
 }
 
-extension ButtonStyle where Self == CapsuleButtonStyle {
+extension ObButtonStyle where Self == CapsuleButtonStyle {
     static var primary: CapsuleButtonStyle { CapsuleButtonStyle(kind: .primary) }
     static var quiet: CapsuleButtonStyle { CapsuleButtonStyle(kind: .quiet) }
     static var dashed: CapsuleButtonStyle { CapsuleButtonStyle(kind: .dashed) }
     static var quietSmall: CapsuleButtonStyle { CapsuleButtonStyle(kind: .quiet, size: 10, compact: true) }
     /// A QuietButton with Padding="12,6" (Hotkeys' RESET and CLEAR, and others).
     static var quietNarrow: CapsuleButtonStyle { CapsuleButtonStyle(kind: .quiet, padding: 12) }
+}
+
+#if os(macOS)
+/// A button's press as WPF's ButtonBase does it, for a PrimitiveButtonStyle: pressed while the pointer is down on it,
+/// the action on release inside, and a Tab stop (`tabStop`) whatever macOS's Keyboard navigation setting.
+private struct Pressable<Content: View>: View {
+    var trigger: () -> Void
+    @ViewBuilder var content: (_ pressed: Bool, _ keyFocused: Bool) -> Content
+    @State private var pressed = false
+    @State private var keyFocused = false
+    @State private var size = CGSize.zero
+    @Environment(\.isEnabled) private var enabled
+
+    var body: some View {
+        content(pressed, keyFocused)
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
+            .gesture(DragGesture(minimumDistance: 0)
+                .onChanged { v in pressed = enabled && CGRect(origin: .zero, size: size).contains(v.location) }
+                .onEnded { v in
+                    let inside = CGRect(origin: .zero, size: size).contains(v.location)
+                    pressed = false
+                    if inside && enabled { trigger() }
+                })
+            .tabStop(focused: $keyFocused) { if enabled { trigger() } }
+    }
+}
+#endif
+
+/// Windows' keyboard focus for a control the Mac would skip (SYS-007): with macOS's Keyboard navigation off (the
+/// default), SwiftUI buttons are no Tab stops and clicking doesn't focus them. This makes the control a Tab stop, gives
+/// it the focus when clicked, and lets Space or Return press it, as a WPF Button / CheckBox / RadioButton. With Keyboard
+/// navigation on, the control's own focus is left as it is. `focused` mirrors the focus for the control's look.
+private struct TabStop: ViewModifier {
+    var isStop: Bool
+    /// Take the focus now (a ListBox entry the arrow keys just chose).
+    var claim = false
+    @Binding var focused: Bool
+    var action: () -> Void
+    #if os(macOS)
+    @FocusState private var own: Bool
+    @Environment(\.isEnabled) private var enabled
+    #endif
+
+    func body(content: Content) -> some View {
+        #if os(macOS)
+        if NSApp?.isFullKeyboardAccessEnabled == true || !isStop {
+            content.onAppear { if !isStop { focused = false } }
+        } else {
+            content
+                .focusable(enabled)
+                .focused($own)
+                .onChange(of: own) { _, now in focused = now }
+                .onKeyPress(keys: [.space, .return]) { _ in
+                    guard enabled else { return .ignored }
+                    action()
+                    return .handled
+                }
+                .simultaneousGesture(TapGesture().onEnded { if enabled { own = true } })
+                .onAppear { if claim { own = true } }
+                .onChange(of: claim) { _, now in if now { own = true } }
+        }
+        #else
+        content
+        #endif
+    }
+}
+
+/// `tabStop` for a bare button with no focus look of its own: an accent outline around it while it has the focus.
+private struct KeyTabStop: ViewModifier {
+    var radius: CGFloat
+    var action: () -> Void
+    @State private var focused = false
+    @Environment(\.ob) private var ob
+
+    func body(content: Content) -> some View {
+        content
+            .tabStop(focused: $focused, action: action)
+            .overlay { if focused { RoundedRectangle(cornerRadius: radius).strokeBorder(ob.accent, lineWidth: 1).padding(-2).allowsHitTesting(false) } }
+    }
+}
+
+extension View {
+    /// A bare button as a WPF Tab stop (see `TabStop`), outlined in the accent while focused.
+    func keyTabStop(radius: CGFloat = 4, action: @escaping () -> Void) -> some View {
+        modifier(KeyTabStop(radius: radius, action: action))
+    }
+
+    /// A Tab stop with WPF's keyboard behaviour; see `TabStop`. `isStop: false` leaves it out of the Tab order.
+    func tabStop(_ isStop: Bool = true, claim: Bool = false, focused: Binding<Bool>, action: @escaping () -> Void) -> some View {
+        modifier(TabStop(isStop: isStop, claim: claim, focused: focused, action: action))
+    }
 }
 
 extension View {
@@ -572,6 +685,7 @@ struct ObSwitch: View {
     @Environment(\.isEnabled) private var enabled
     @State private var hover = false
     @FocusState private var focused
+    @State private var keyFocused = false
 
     init(_ title: String, detail: String? = nil, titleWeight: Font.Weight = .regular, isOn: Binding<Bool>) {
         self.title = title
@@ -590,7 +704,7 @@ struct ObSwitch: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 ZStack(alignment: isOn ? .trailing : .leading) {
                     Capsule().fill(isOn ? ob.ink : .clear)
-                    Capsule().strokeBorder(focused ? ob.accent : isOn || hover ? ob.ink : ob.muted, lineWidth: 1)
+                    Capsule().strokeBorder(focused || keyFocused ? ob.accent : isOn || hover ? ob.ink : ob.muted, lineWidth: 1)
                     Group {
                         if isOn { Circle().fill(ob.onInk) } else { Circle().strokeBorder(ob.muted, lineWidth: 1) }
                     }
@@ -603,6 +717,7 @@ struct ObSwitch: View {
         }
         .buttonStyle(.plain)
         .focused($focused)
+        .tabStop(focused: $keyFocused) { isOn.toggle() }
         .opacity(enabled ? 1 : 0.45)
         .onHover { hover = $0 }
         .handCursor(enabled)

@@ -43,7 +43,7 @@ private struct ReadAloudPage: View {
                 Caption(modelNote, bottom: 0).padding(.top, 6)
 
                 FieldLabel("Voice").padding(.top, -2)
-                ObMenu(options: voiceItems, selection: voiceBinding, width: 380).accessibilityLabel("Voice")
+                ObMenu(options: voiceItems, selection: voiceBinding, width: 380, maxListHeight: 420).accessibilityLabel("Voice")
                 Caption("Used unless a profile picks its own model and voice (see its page under Speech to text).", bottom: 0).padding(.top, 6)
 
                 FieldLabel("Base speed")

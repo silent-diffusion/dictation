@@ -764,8 +764,12 @@ struct NotesCell: View {
                     .frame(width: 10, height: 10).frame(width: 22, height: 22).contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .handCursor(!notes.isFinishing)
             .disabled(notes.isFinishing)
+            .keyTabStop(radius: 11) {
+                if renaming { commitRename() }
+                Task { await notes.stop() }
+            }
+            .handCursor(!notes.isFinishing)
             .help(notes.isFinishing ? "Finishing…" : "Stop the session")
             .accessibilityLabel("Stop the extended notes session")
             if renaming {
@@ -787,6 +791,7 @@ struct NotesCell: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .keyTabStop { startRenaming(s) }
                 .iBeamCursor()
                 .help("Click to rename")
             }
@@ -876,7 +881,8 @@ struct FluentField: ViewModifier {
                     shape.fill(focused ? Color.white : hover ? Color(hex: 0xF9F9F9, alpha: 0.5) : Color.white.opacity(0.7))
                 }
                 shape.strokeBorder(ob.dark ? Color.white.opacity(0.07) : Color.black.opacity(0.06), lineWidth: 1)
-                Rectangle().fill(focused ? ob.accent : ob.dark ? Color.white.opacity(0.55) : Color.black.opacity(0.45))
+                // AccentFillColorDefaultBrush, which Light/Dark.xaml set to ink.
+                Rectangle().fill(focused ? ob.ink : ob.dark ? Color.white.opacity(0.55) : Color.black.opacity(0.45))
                     .frame(height: focused ? 2 : 1)
             }
             .clipShape(shape)

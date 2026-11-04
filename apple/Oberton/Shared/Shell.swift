@@ -190,6 +190,9 @@ struct RootView: View {
             }
             .background(ob.paper.ignoresSafeArea())
             .onChange(of: model.settings.uiScale) { showZoomToast(TextSize.clamped(model.settings.uiScale)) }
+            .onReceive(NotificationCenter.default.publisher(for: TextSize.request)) { note in
+                if let scale = note.userInfo?["scale"] as? Double { setZoom(TextSize.clamped(scale)) }
+            }
             #if os(macOS)
             .onAppear {
                 // The mouse's back button (button 3) goes back, as on Windows.
@@ -371,17 +374,19 @@ struct IconButton<Glyph: View>: View {
     @Environment(\.ob) private var ob
     @State private var hover = false
     @FocusState private var focused
+    @State private var keyFocused = false
 
     var body: some View {
         Button(action: action) {
             glyph
                 .frame(width: 36, height: 36)
                 .background(Capsule().fill(hover ? ob.subtle : .clear))
-                .overlay(Capsule().strokeBorder(focused ? ob.accent : .clear, lineWidth: 1))
+                .overlay(Capsule().strokeBorder(focused || keyFocused ? ob.accent : .clear, lineWidth: 1))
                 .contentShape(Capsule())
         }
         .buttonStyle(PressedDim())
         .focused($focused)
+        .tabStop(focused: $keyFocused, action: action)
         .onHover { hover = $0 }
         .handCursor()
         .help(help)
@@ -411,6 +416,8 @@ struct Sidebar: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var nav: Navigator
     @Environment(\.ob) private var ob
+    /// ↑/↓ just moved the choice: the newly chosen entry takes the focus.
+    @State private var arrowMoved = false
 
     static let width: CGFloat = 216
 
@@ -422,11 +429,28 @@ struct Sidebar: View {
                 .padding(.leading, 42)
                 // 24 below the header and the first entry's own 1 (Margin 0,1).
                 .padding(.bottom, 25)
+            // MainWindow's ListBox "Sections": one Tab stop (the chosen entry), ↑/↓ move the choice and open the page.
             VStack(spacing: 2) {
                 ForEach(Section.allCases, id: \.self) { s in
-                    NavCapsule(title: s.title, japanese: s.japanese, icon: s, selected: nav.place.section == s) { nav.open(s) }
+                    NavCapsule(title: s.title, japanese: s.japanese, icon: s, selected: nav.place.section == s,
+                               tabStop: nav.place.section == s, claimFocus: arrowMoved && nav.place.section == s) { nav.open(s) }
                 }
             }
+            #if os(macOS)
+            .onMoveCommand { direction in
+                let all = Section.allCases
+                guard let i = all.firstIndex(of: nav.place.section) else { return }
+                let next = direction == .down ? i + 1 : direction == .up ? i - 1 : i
+                if next != i, all.indices.contains(next) {
+                    // The focus follows the choice, as in a ListBox.
+                    arrowMoved = true
+                    nav.open(all[next])
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { arrowMoved = false }
+                }
+            }
+            #endif
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Sections")
             Spacer(minLength: 12)
             engineStatus
         }
@@ -546,10 +570,15 @@ struct NavCapsule: View {
     var icon: Section?
     var size: CGFloat = 12
     var selected: Bool
+    /// In a ListBox only the chosen entry is a Tab stop (Tab enters the list once; ↑/↓ move within it).
+    var tabStop = true
+    /// Take the keyboard focus (the arrow keys just chose this entry).
+    var claimFocus = false
     var action: () -> Void
     @Environment(\.ob) private var ob
     @State private var hover = false
     @FocusState private var focused
+    @State private var keyFocused = false
     @Environment(\.sidebarHidden) private var sidebarHidden
 
     var body: some View {
@@ -568,11 +597,12 @@ struct NavCapsule: View {
             .foregroundStyle(selected ? ob.onInk : ob.ink)
             .padding(.horizontal, 13).padding(.vertical, size < 12 ? 7 : 8)
             .background(Capsule().fill(selected ? ob.ink : hover ? ob.subtle : .clear))
-            .overlay(Capsule().strokeBorder(focused ? ob.accent : .clear, lineWidth: 1))
+            .overlay(Capsule().strokeBorder(focused || keyFocused ? ob.accent : .clear, lineWidth: 1))
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .focused($focused)
+        .tabStop(tabStop && !sidebarHidden, claim: claimFocus, focused: $keyFocused, action: action)
         .modifier(OutOfTabOrder(hidden: sidebarHidden))
         .onHover { hover = $0 }
         .handCursor()

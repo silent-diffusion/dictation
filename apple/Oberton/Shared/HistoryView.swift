@@ -598,6 +598,7 @@ struct SpeedToggle: View {
                 .contentShape(RoundedRectangle(cornerRadius: 4))
         }
         .buttonStyle(.plain)
+        .keyTabStop { on.toggle() }
         .onHover { hover = $0 }
         .help("Play at double speed")
         .accessibilityLabel("Double speed")

@@ -346,6 +346,7 @@ private struct TypingSpeed: View {
                     .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
             }
             .buttonStyle(.plain)
+            .keyTabStop { editing = true }
             .handCursor()
             .help("Click to change the typing speed time saved is measured against")
         }
@@ -531,6 +532,7 @@ private struct AppRow: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .keyTabStop(radius: 0, action: pick)
             .handCursor()
             .onHover { hover = $0 }
             .help(key == nil ? "Show the words of every app" : "Show the words dictated into \(tip)")

@@ -105,7 +105,7 @@ struct ProfileVoicePicker: View {
     var body: some View {
         HStack(spacing: 8) {
             ObMenu(options: models, selection: modelBinding, width: 260).accessibilityLabel("Read aloud model")
-            ObMenu(options: voices.isEmpty ? [("", "No voices downloaded")] : voices, selection: voiceBinding, width: 260)
+            ObMenu(options: voices.isEmpty ? [("", "No voices downloaded")] : voices, selection: voiceBinding, width: 260, maxListHeight: 420)
                 .disabled(currentModel.isEmpty).accessibilityLabel("Read aloud voice")
         }
     }

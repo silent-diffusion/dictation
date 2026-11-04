@@ -91,7 +91,10 @@ struct CommitField: View {
 
     var body: some View {
         // A stock TextBox under the Fluent theme (its style sets 14 pt, over the window's 12): see ObField.
-        TextField("", text: $text)
+        Group {
+            // The debug snapshots' image renderer can't draw an AppKit text field: the text stands in for it there.
+            if PageScroll<EmptyView>.flat { Text(value).frame(maxWidth: .infinity, alignment: .leading) } else { TextField("", text: $text) }
+        }
             .textFieldStyle(.plain)
             .font(Ob.sans(14))
             .focused($focused)

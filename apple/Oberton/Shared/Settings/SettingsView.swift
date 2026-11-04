@@ -13,6 +13,8 @@ struct SettingsView: View {
     @State private var phoneShowsSection = false
     /// Unfolded only because a section in it was opened.
     @State private var shownOpen: Set<String> = []
+    /// ↑/↓ just moved the choice: the newly chosen entry takes the focus.
+    @State private var arrowMoved = false
 
     private func isFolded(_ group: String) -> Bool {
         !shownOpen.contains(group) && model.settings.collapsedSettingsGroups.contains { SettingsSection.groupKey(stored: $0) == group }
@@ -82,7 +84,10 @@ struct SettingsView: View {
                         // the last. ↑/↓ move the selection and open the section, as in a ListBox.
                         VStack(alignment: .leading, spacing: 2) {
                             ForEach(sections, id: \.self) { s in
-                                NavCapsule(title: s.title, size: 11.5, selected: nav.place.settings == s && sizeClass != .compact) {
+                                // One Tab stop per list: its chosen entry, or its first when the choice is in another list.
+                                NavCapsule(title: s.title, size: 11.5, selected: nav.place.settings == s && sizeClass != .compact,
+                                           tabStop: sections.contains(nav.place.settings) ? nav.place.settings == s : s == sections[0],
+                                           claimFocus: arrowMoved && nav.place.settings == s) {
                                     nav.goSettings(s)
                                     phoneShowsSection = true
                                 }
@@ -94,7 +99,12 @@ struct SettingsView: View {
                         .onMoveCommand { direction in
                             guard let i = sections.firstIndex(of: nav.place.settings) else { return }
                             let next = direction == .down ? i + 1 : direction == .up ? i - 1 : i
-                            if next != i, sections.indices.contains(next) { nav.goSettings(sections[next]) }
+                            if next != i, sections.indices.contains(next) {
+                                // The focus follows the choice, as in a ListBox.
+                                arrowMoved = true
+                                nav.goSettings(sections[next])
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { arrowMoved = false }
+                            }
                         }
                         #endif
                         .accessibilityElement(children: .contain)
@@ -153,6 +163,7 @@ private struct GroupHeader: View {
     @Environment(\.ob) private var ob
     @State private var hover = false
     @FocusState private var focused
+    @State private var keyFocused = false
 
     var body: some View {
         Button(action: action) {
@@ -164,11 +175,12 @@ private struct GroupHeader: View {
             }
             .padding(.horizontal, 13).padding(.vertical, 7)
             .background(RoundedRectangle(cornerRadius: 4).fill(hover ? ob.subtle : .clear))
-            .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(focused ? ob.accent : .clear, lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(focused || keyFocused ? ob.accent : .clear, lineWidth: 1))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .focused($focused)
+        .tabStop(focused: $keyFocused, action: action)
         .onHover { hover = $0 }
         .handCursor()
         // The Expander's toggle: its heading as written, with its expanded state.

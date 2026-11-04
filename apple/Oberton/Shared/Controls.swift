@@ -28,7 +28,9 @@ struct ObField: View {
 
     var body: some View {
         Group {
-            if secure { SecureField(placeholder, text: $text) } else { TextField(placeholder, text: $text) }
+            // The debug snapshots' image renderer can't draw an AppKit text field: the text stands in for it there.
+            if PageScroll<EmptyView>.flat { Text(secure ? String(repeating: "•", count: text.count) : text).frame(maxWidth: .infinity, alignment: .leading) }
+            else if secure { SecureField(placeholder, text: $text) } else { TextField(placeholder, text: $text) }
         }
         .textFieldStyle(.plain)
         .font(mono ? Ob.mono(14) : Ob.sans(14))
@@ -43,7 +45,7 @@ extension View {
         self.padding(EdgeInsets(top: padding.top + Ob.border, leading: padding.leading + Ob.border,
                                 bottom: padding.bottom + Ob.border, trailing: padding.trailing + Ob.border))
             .frame(minHeight: 32)
-            .frame(width: width)
+            .frame(width: width, alignment: .leading)
             .frame(maxWidth: width ?? .infinity, alignment: .leading)
             .modifier(FluentField(focused: focused))
     }
@@ -82,47 +84,247 @@ extension View {
 /// A dropdown as WPF's Fluent theme draws the Windows app's ComboBox (App.xaml doesn't restyle it): 14 pt, a faint fill
 /// with 4-pt corners, a hairline edge a little darker along the bottom, a lighter fill under the pointer, Padding
 /// 12,5,0,7 inside the 1 px edge, the chevron 10 from the right, at least 32 tall; the focus ring while it has the
-/// keyboard focus.
+/// keyboard focus. On the Mac it opens Windows' list below the box (as wide as it, at most `maxListHeight` tall, else a
+/// third of the screen as WPF's default MaxDropDownHeight, scrolling beyond), it is a Tab stop, ↑/↓ change the choice of
+/// a closed box (SYS-014), and Alt+↓ / F4 / Space / Return open it; in the open list ↑/↓ move, Return takes, Esc closes.
 struct ObMenu<Value: Hashable>: View {
     var options: [(Value, String)]
     @Binding var selection: Value
     var width: CGFloat?
+    /// Windows' MaxDropDownHeight where the page sets one (the voice boxes: 420).
+    var maxListHeight: CGFloat? = nil
     @Environment(\.ob) private var ob
     @FocusState private var focused
     @State private var hover = false
+    @State private var keyFocused = false
+    @State private var open = false
+    @State private var highlighted: Int?
+
+    private var current: String { options.first { $0.0 == selection }?.1 ?? "—" }
 
     var body: some View {
+        #if os(macOS)
+        Button { toggle() } label: { face }
+            .buttonStyle(.plain)
+            .focused($focused)
+            .tabStop(focused: $keyFocused) { activate() } // Space / Return (it handles them before the keys below)
+            .onKeyPress(keys: [.upArrow, .downArrow, .escape, .return, .space, KeyEquivalent(Character(UnicodeScalar(NSF4FunctionKey)!))]) { press in
+                key(press)
+            }
+            // (Not in the debug snapshots: the image renderer can't draw the AppKit anchor.)
+            .background { if !PageScroll<EmptyView>.flat { DropDownPanel(isPresented: $open, maxHeight: maxListHeight) { list } } }
+            .onHover { hover = $0 }
+            .handCursor()
+            .accessibilityLabel(current)
+            .accessibilityValue(current) // a label set on the box still reads its choice
+            .accessibilityAddTraits(.isButton)
+            .fixedSize(horizontal: width == nil ? false : true, vertical: true)
+        #else
         Menu {
             ForEach(options, id: \.0) { value, label in
                 Button { selection = value } label: {
                     if value == selection { Label(label, systemImage: "checkmark") } else { Text(label) }
                 }
             }
-        } label: {
-            HStack(spacing: 0) {
-                Text(options.first { $0.0 == selection }?.1 ?? "—").font(Ob.sans(14)).lineLimit(1)
-                Spacer(minLength: 8)
-                Image(systemName: "chevron.down").font(.system(size: 11, weight: .regular)).foregroundStyle(ob.ink.opacity(0.62))
-                    .padding(.trailing, 10)
-            }
-            .foregroundStyle(ob.ink)
-            .padding(EdgeInsets(top: 5 + Ob.border, leading: 12 + Ob.border, bottom: 7 + Ob.border, trailing: Ob.border))
-            .frame(minHeight: 32)
-            // A given width is the combo's own (WPF ComboBox Width), not just a cap.
-            .frame(minWidth: width, maxWidth: width ?? .infinity)
-            .background { FluentComboFace(hover: hover, focused: focused) }
-            .contentShape(Rectangle())
+        } label: { face }
+            .focused($focused)
+            .accessibilityValue(current)
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .fixedSize(horizontal: width == nil ? false : true, vertical: true)
+        #endif
+    }
+
+    private var face: some View {
+        HStack(spacing: 0) {
+            Text(current).font(Ob.sans(14)).lineLimit(1)
+            Spacer(minLength: 8)
+            Image(systemName: "chevron.down").font(.system(size: 11, weight: .regular)).foregroundStyle(ob.ink.opacity(0.62))
+                .padding(.trailing, 10)
         }
-        .onHover { hover = $0 }
-        .focused($focused)
-        .handCursor()
-        .accessibilityValue(options.first { $0.0 == selection }?.1 ?? "") // a label set on the menu still reads its choice
-        .menuStyle(.button)
+        .foregroundStyle(ob.ink)
+        .padding(EdgeInsets(top: 5 + Ob.border, leading: 12 + Ob.border, bottom: 7 + Ob.border, trailing: Ob.border))
+        .frame(minHeight: 32)
+        // A given width is the combo's own (WPF ComboBox Width), not just a cap.
+        .frame(minWidth: width, maxWidth: width ?? .infinity)
+        .background { FluentComboFace(hover: hover || open, focused: focused || keyFocused) }
+        .contentShape(Rectangle())
+    }
+
+    #if os(macOS)
+    private var index: Int? { options.firstIndex { $0.0 == selection } }
+
+    private func toggle() {
+        highlighted = index
+        open.toggle()
+    }
+
+    /// Space or Return: opens the list, or takes the highlighted choice in the open one.
+    private func activate() {
+        if open, let h = highlighted, options.indices.contains(h) { selection = options[h].0 }
+        if open { open = false } else { toggle() }
+    }
+
+    private func key(_ press: KeyPress) -> KeyPress.Result {
+        let f4 = press.key == KeyEquivalent(Character(UnicodeScalar(NSF4FunctionKey)!))
+        if open {
+            switch press.key {
+            case .upArrow: highlighted = max(0, (highlighted ?? index ?? 0) - 1)
+            case .downArrow: highlighted = min(options.count - 1, (highlighted ?? index ?? -1) + 1)
+            case .return, .space:
+                if let h = highlighted, options.indices.contains(h) { selection = options[h].0 }
+                open = false
+            case .escape: open = false
+            default: if f4 { open = false } else { return .ignored }
+            }
+            return .handled
+        }
+        if press.key == .downArrow && press.modifiers.contains(.option) || f4 || press.key == .space || press.key == .return {
+            toggle()
+            return .handled
+        }
+        guard !options.isEmpty else { return .ignored }
+        switch press.key {
+        case .upArrow: if let i = index, i > 0 { selection = options[i - 1].0 } else if index == nil { selection = options[0].0 }
+        case .downArrow: if let i = index { if i + 1 < options.count { selection = options[i + 1].0 } } else { selection = options[0].0 }
+        default: return .ignored
+        }
+        return .handled
+    }
+
+    /// The open list: Fluent's ComboBox popup, an item per choice, the chosen one with the ink pill at its left.
+    private var list: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach(Array(options.enumerated()), id: \.offset) { i, option in
+                        DropDownRow(text: option.1, chosen: option.0 == selection, highlighted: highlighted == i) {
+                            selection = option.0
+                            open = false
+                        }
+                        .id(i)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+            .onAppear { if let i = index { proxy.scrollTo(i, anchor: .center) } }
+            .onChange(of: highlighted) { _, h in if let h { proxy.scrollTo(h) } }
+        }
+        .environment(\.ob, ob)
+    }
+    #endif
+}
+
+#if os(macOS)
+/// One choice in the open list (Fluent's ComboBoxItem): 14 pt, Margin 5,2 with 4-pt corners, a wash under the pointer
+/// or the keys, and on the chosen one the wash and a 3×16 pill in the accent fill (ink in Oberton's theme).
+private struct DropDownRow: View {
+    var text: String
+    var chosen: Bool
+    var highlighted: Bool
+    var action: () -> Void
+    @Environment(\.ob) private var ob
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(text).font(Ob.sans(14)).foregroundStyle(ob.ink).lineLimit(1)
+                .padding(EdgeInsets(top: 5, leading: 11, bottom: 7, trailing: 11))
+                .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 4).fill(chosen || hover || highlighted ? ob.ink.opacity(ob.dark ? 0.08 : 0.05) : .clear))
+                .overlay(alignment: .leading) {
+                    if chosen { Capsule().fill(ob.ink).frame(width: 3, height: 16) }
+                }
+                .contentShape(Rectangle())
+                .padding(.horizontal, 5).padding(.vertical, 2)
+        }
         .buttonStyle(.plain)
-        .menuIndicator(.hidden)
-        .fixedSize(horizontal: width == nil ? false : true, vertical: true)
+        .onHover { hover = $0 }
+        .accessibilityAddTraits(chosen ? .isSelected : [])
     }
 }
+
+/// Windows' dropdown: a borderless panel just below its box (above it when the screen has no room below), as wide as
+/// the box, at most `maxHeight` tall (else a third of the screen), on the flyout's fill with 8-pt corners and a shadow.
+/// It never takes the key focus from the window, so the box keeps the keys; a click anywhere else closes it.
+private struct DropDownPanel<Content: View>: NSViewRepresentable {
+    @Binding var isPresented: Bool
+    var maxHeight: CGFloat?
+    @ViewBuilder var content: Content
+    @Environment(\.ob) private var ob
+
+    func makeNSView(context: Context) -> NSView { NSView() }
+
+    func updateNSView(_ anchor: NSView, context: Context) {
+        let c = context.coordinator
+        c.close = { isPresented = false }
+        if isPresented {
+            let face = AnyView(content
+                .background(RoundedRectangle(cornerRadius: 8).fill(ob.dark ? Color(hex: 0x2C2C2C) : Color(hex: 0xF9F9F9)))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.black.opacity(ob.dark ? 0.2 : 0.06), lineWidth: 1))
+                .clipShape(RoundedRectangle(cornerRadius: 8)))
+            c.show(face, below: anchor, maxHeight: maxHeight)
+        } else {
+            c.hide()
+        }
+    }
+
+    static func dismantleNSView(_ anchor: NSView, coordinator: Coordinator) { coordinator.hide() }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    @MainActor final class Coordinator {
+        var close: () -> Void = {}
+        private var panel: NSPanel?
+        private var monitors: [Any] = []
+
+        func show(_ content: AnyView, below anchor: NSView, maxHeight: CGFloat?) {
+            guard let parent = anchor.window else { return }
+            let box = parent.convertToScreen(anchor.convert(anchor.bounds, to: nil))
+            let screen = (parent.screen ?? NSScreen.main)?.visibleFrame ?? .infinite
+            let cap = maxHeight ?? (parent.screen ?? NSScreen.main).map { $0.frame.height / 3 } ?? 360
+            let host = NSHostingView(rootView: AnyView(content.frame(width: box.width)))
+            let natural = host.fittingSize.height
+            let height = min(natural, cap)
+            host.rootView = AnyView(content.frame(width: box.width, height: height))
+            let panel = self.panel ?? {
+                let p = NSPanel(contentRect: .zero, styleMask: [.nonactivatingPanel, .borderless], backing: .buffered, defer: true)
+                p.isOpaque = false
+                p.backgroundColor = .clear
+                p.hasShadow = true
+                p.becomesKeyOnlyIfNeeded = true
+                p.level = parent.level
+                return p
+            }()
+            panel.contentView = host
+            var frame = CGRect(x: box.minX, y: box.minY - 4 - height, width: box.width, height: height)
+            if frame.minY < screen.minY { frame.origin.y = box.maxY + 4 }
+            panel.setFrame(frame, display: true)
+            guard self.panel == nil else { return }
+            self.panel = panel
+            parent.addChildWindow(panel, ordered: .above)
+            let outside: (NSEvent) -> Void = { [weak self, weak anchor] e in
+                guard let self, e.window !== self.panel else { return }
+                // A click on the box itself is the box's own (it toggles the list).
+                if e.window === parent, let anchor, anchor.bounds.contains(anchor.convert(e.locationInWindow, from: nil)) { return }
+                DispatchQueue.main.async { self.close() }
+            }
+            if let m = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: outside) { monitors.append(m) }
+            if let m = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: { outside($0); return $0 }) { monitors.append(m) }
+        }
+
+        func hide() {
+            monitors.forEach(NSEvent.removeMonitor)
+            monitors = []
+            guard let panel else { return }
+            panel.parent?.removeChildWindow(panel)
+            panel.orderOut(nil)
+            self.panel = nil
+        }
+    }
+}
+#endif
 
 /// The Fluent ComboBox's face: ControlFillColorDefault (Secondary under the pointer), ControlElevationBorder (the bottom
 /// a shade darker), corner radius 4, and the 2 pt focus ring outside it while it has the keyboard focus.
@@ -195,6 +397,7 @@ struct ChoiceCard<Content: View>: View {
     @Environment(\.ob) private var ob
     @State private var hover = false
     @FocusState private var focused
+    @State private var keyFocused = false
 
     var body: some View {
         Button(action: action) {
@@ -202,7 +405,7 @@ struct ChoiceCard<Content: View>: View {
                 .padding(10 + Ob.border) // Padding 10 inside the 1 px line
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(hover ? ob.subtle : .clear)
-                .overlay(Rectangle().strokeBorder(chosen ? ob.ink : focused ? ob.accent : ob.divider, lineWidth: 1))
+                .overlay(Rectangle().strokeBorder(chosen ? ob.ink : focused || keyFocused ? ob.accent : ob.divider, lineWidth: 1))
                 .overlay(alignment: .topTrailing) {
                     Group {
                         if chosen { Circle().fill(ob.ink) } else { Circle().strokeBorder(ob.muted, lineWidth: 1) }
@@ -213,6 +416,7 @@ struct ChoiceCard<Content: View>: View {
         }
         .buttonStyle(.plain)
         .focused($focused)
+        .tabStop(focused: $keyFocused, action: action)
         .onHover { hover = $0 }
         .handCursor()
         .accessibilityAddTraits(chosen ? .isSelected : [])
@@ -263,18 +467,20 @@ private struct PositionCell: View {
     @Environment(\.ob) private var ob
     @State private var hover = false
     @FocusState private var focused
+    @State private var keyFocused = false
 
     var body: some View {
         let chosen = place == position
         Button { position = place } label: {
             Capsule().fill(chosen ? ob.ink : .clear)
-                .overlay(Capsule().strokeBorder(focused ? ob.accent : chosen || hover ? ob.ink : ob.muted, lineWidth: 1))
-                .frame(width: focused ? 40 : 34, height: 10)
+                .overlay(Capsule().strokeBorder(focused || keyFocused ? ob.accent : chosen || hover ? ob.ink : ob.muted, lineWidth: 1))
+                .frame(width: focused || keyFocused ? 40 : 34, height: 10)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .focused($focused)
+        .tabStop(focused: $keyFocused) { position = place }
         .onHover { hover = $0 }
         .handCursor()
         .help(name)
@@ -432,21 +638,25 @@ struct TextCopyButton: View {
     var onDark = false
     var enabled = true
     @State private var label = "COPY"
+    @State private var keyFocused = false
     @Environment(\.ob) private var ob
 
     var body: some View {
-        Button {
-            let shown = text.isEmpty ? "NOTHING YET" : Clipboard.copy(text) ? "COPIED ✓" : "BUSY, TRY AGAIN"
-            label = shown
-            // Each click starts its own 1.5 s timer and none is stopped, so an earlier click's timer puts COPY back.
-            Task { try? await Task.sleep(for: .seconds(1.5)); label = "COPY" }
-        } label: {
+        Button(action: copy) {
             Text(label).font(Ob.mono(10.5)).foregroundStyle(onDark ? Color(hex: 0xE8E7E3) : ob.muted)
+                .underline(keyFocused, color: ob.accent)
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
+        .tabStop(focused: $keyFocused, action: copy)
         .opacity(enabled ? 1 : 0.35)
         .handCursor(enabled)
+    }
+
+    private func copy() {
+        label = text.isEmpty ? "NOTHING YET" : Clipboard.copy(text) ? "COPIED ✓" : "BUSY, TRY AGAIN"
+        // Each click starts its own 1.5 s timer and none is stopped, so an earlier click's timer puts COPY back.
+        Task { try? await Task.sleep(for: .seconds(1.5)); label = "COPY" }
     }
 }
 

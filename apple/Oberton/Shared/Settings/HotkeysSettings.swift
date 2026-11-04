@@ -110,23 +110,21 @@ private struct HotkeyBox: View {
     @ObservedObject private var status = HotkeyStatus.shared
     @Environment(\.ob) private var ob
     @State private var monitor: Any?
+    @FocusState private var focused: Bool
 
     private var recording: Bool { status.recording == id }
 
     var body: some View {
+        // A TextBox under the Fluent theme (14 pt, Padding 8,6 inside its edge, at least 32 tall, the ink line along the
+        // bottom while it records). It is a Tab stop: taking the focus starts recording, as the TextBox's GotFocus does.
         Text(hotkey.isEmpty ? (none.isEmpty ? " " : none) : hotkey)
-            .font(Ob.sans(Ob.body)).lineLimit(1)
-            .padding(.horizontal, 8).padding(.vertical, 6)
-            .frame(width: 240, alignment: .leading)
-            // Fluent's ControlFillColorDefault: a little lighter than the page (white 70% / 6%).
-            .background(RoundedRectangle(cornerRadius: 4).fill(Color.white.opacity(ob.dark ? 0.06 : 0.7)))
-            .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(ob.divider, lineWidth: 1))
-            .overlay(alignment: .bottom) {
-                Rectangle().fill(recording ? ob.ink : ob.muted).frame(height: recording ? 2 : 1).padding(.horizontal, 2)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 4))
+            .font(Ob.sans(14)).lineLimit(1)
+            .fluentBox(focused: recording, padding: EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8), width: 240)
             .contentShape(Rectangle())
-            .onTapGesture { start() }
+            .focusable()
+            .focused($focused)
+            .onChange(of: focused) { _, now in if now { start() } else { stop() } }
+            .onTapGesture { focused = true; start() }
             .onDisappear { stop() }
             .onChange(of: status.recording) { if status.recording != id { removeMonitor() } }
             .accessibilityElement()

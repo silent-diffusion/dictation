@@ -75,16 +75,16 @@ struct AppearanceSection: View {
     private var textSize: some View {
         let scale = TextSize.clamped(model.settings.uiScale)
         return HStack(spacing: 0) {
-            Button("A−") { model.settings.uiScale = TextSize.step(from: scale, -1) }
+            Button("A−") { TextSize.set(TextSize.step(from: scale, -1)) }
                 .buttonStyle(CapsuleButtonStyle(kind: .quiet, minWidth: 52))
                 .disabled(scale <= TextSize.min + 0.001)
                 .help("Smaller (⌘+minus)").accessibilityLabel("Make the text smaller")
             Text(Fmt.percent(scale)).font(Ob.mono(14, .bold)).frame(minWidth: 64).padding(.horizontal, 8)
-            Button("A+") { model.settings.uiScale = TextSize.step(from: scale, +1) }
+            Button("A+") { TextSize.set(TextSize.step(from: scale, +1)) }
                 .buttonStyle(CapsuleButtonStyle(kind: .quiet, minWidth: 52))
                 .disabled(scale >= TextSize.max - 0.001)
                 .help("Larger (⌘+plus)").accessibilityLabel("Make the text larger")
-            Button("Reset") { model.settings.uiScale = 1 }
+            Button("Reset") { TextSize.set(1) } // "TEXT SIZE 100%" even when it is already 100%
                 .buttonStyle(.quiet).padding(.leading, 12)
                 .help("Back to 100% (\(TextSize.resetKey))")
         }

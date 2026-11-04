@@ -219,6 +219,7 @@ struct OnboardingView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .keyTabStop(radius: 0, action: action)
     }
 
     // MARK: Running

@@ -426,6 +426,11 @@ struct NoteSessionView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .keyTabStop {
+                    title = session.title
+                    renaming = true
+                    DispatchQueue.main.async { titleFocused = true }
+                }
                 .help("Click to rename")
                 .accessibilityLabel("Session name; click to rename")
                 .textCursor()
@@ -1186,6 +1191,7 @@ struct Pill: View {
     @Environment(\.ob) private var ob
     @State private var hover = false
     @FocusState private var focused: Bool
+    @State private var keyFocused = false
 
     init(_ title: String, on: Bool, action: @escaping () -> Void) { self.title = title; self.on = on; self.action = action }
 
@@ -1197,11 +1203,12 @@ struct Pill: View {
                 .foregroundStyle(on ? ob.onInk : ob.ink)
                 .padding(.horizontal, 14).padding(.vertical, 7)
                 .background(Capsule().fill(on ? ob.ink : hover ? ob.subtle : .clear))
-                .overlay(Capsule().strokeBorder(focused && !on ? ob.accent : ob.ink, lineWidth: 1))
+                .overlay(Capsule().strokeBorder((focused || keyFocused) && !on ? ob.accent : ob.ink, lineWidth: 1))
                 .contentShape(Capsule())
         }
         .buttonStyle(PlainFaceStyle())
         .focused($focused)
+        .tabStop(focused: $keyFocused, action: action)
         .focusEffectDisabled()
         .onHover { hover = $0 }
         .handCursor()

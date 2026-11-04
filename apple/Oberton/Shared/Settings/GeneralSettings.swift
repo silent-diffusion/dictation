@@ -11,7 +11,6 @@ import ServiceManagement
 /// iPhone can't type into other apps: no "Type as you speak" either.
 struct GeneralSection: View {
     @EnvironmentObject var model: AppModel
-    @State private var maxSeconds = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -70,12 +69,12 @@ struct GeneralSection: View {
             #endif
 
             FieldLabel("Maximum length of one dictation (seconds)")
-            ObField("", text: Binding(get: { maxSeconds }, set: { text in
-                maxSeconds = text
-                // Any whole number, as Windows' box; a dictation always gets at least 10 s.
-                if let n = Int(text.trimmingCharacters(in: .whitespaces)) { model.settings.maxRecordingSeconds = Double(n) }
-            }), width: 120)
-            .onAppear { maxSeconds = String(Int(model.settings.maxRecordingSeconds)) }
+            // UpdateSourceTrigger=LostFocus: any whole number is taken when the box is left (a dictation still gets at
+            // least 10 s); anything else gets the red validation border and the setting stays.
+            CommitField(value: Binding(get: { String(Int(model.settings.maxRecordingSeconds)) },
+                                       set: { if let n = Int($0.trimmingCharacters(in: .whitespaces)) { model.settings.maxRecordingSeconds = Double(n) } }),
+                        width: 120, isValid: { Int($0.trimmingCharacters(in: .whitespaces)) != nil })
+                .accessibilityLabel("Maximum length of one dictation (seconds)")
         }
     }
 }
