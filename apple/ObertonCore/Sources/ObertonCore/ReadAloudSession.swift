@@ -9,12 +9,12 @@ import os
 /// longer pause rather than a gap at every sentence. Skipping works on the timeline of all sentences, using real
 /// durations where the audio exists and estimates elsewhere.
 ///
-/// Speed: each voice reads at its own pace for the speed (`SpeechVoices.nativeSpeed`: Kokoro and Piper between 0.5×
-/// and 2×, the system's voices at 1×) and an AVAudioUnitTimePitch stretches the rest without changing the pitch, so
-/// 0.25× to 4× are true multiples. A speed change within the same pace only changes the stretch; otherwise the audio
-/// is made again from the current sentence. Like Windows, the audio is pulled by the output (an AVAudioSourceNode), so
-/// pause and skips act at once, and silence is a faint dither with a quarter-second runway before speech, because
-/// Bluetooth headsets that power down on digital silence swallow the first word otherwise.
+/// Speed: the audio is made at the reading's speed (`SpeechVoices.synthesize`: each voice paces itself between 0.5×
+/// and 2× and Windows' WSOLA stretches the rest without changing the pitch, so 0.25× to 4× are true multiples). As on
+/// Windows, a change of speed makes the audio again from the current sentence, read on from the same point. Like
+/// Windows, the audio is pulled by the output (an AVAudioSourceNode), so pause and skips act at once, and silence is a
+/// faint dither with a quarter-second runway before speech, because Bluetooth headsets that power down on digital
+/// silence swallow the first word otherwise.
 /// Public members are safe to call from the main thread; the audio runs on Core Audio's thread.
 final class ReadAloudSession: @unchecked Sendable {
     static let bufferAheadSeconds = 30.0
@@ -38,8 +38,7 @@ final class ReadAloudSession: @unchecked Sendable {
     private let lock = OSAllocatedUnfairLock()
     private var audio: [SpeechAudio?]
     private var speed: Double
-    private var native: Double
-    private var generation = 0   // bumps when the voice's own pace changes; audio from an older one is dropped
+    private var generation = 0   // bumps when the speed changes; audio from an older one is dropped
     private var index = 0        // sentence being played
     private var pos = 0          // sample position in it
     private var resumeAt = -1.0  // fraction of the current sentence to start from once its audio arrives
@@ -56,7 +55,6 @@ final class ReadAloudSession: @unchecked Sendable {
     private var reported = false
 
     private let engine = AVAudioEngine()
-    private let pitch = AVAudioUnitTimePitch()
     private var source: AVAudioSourceNode?
     private var loop: Task<Void, Never>?
     private let wake: AsyncStream<Void>
@@ -75,7 +73,6 @@ final class ReadAloudSession: @unchecked Sendable {
         // The starting speed is clamped, not rounded (only a change of speed rounds), as Windows' constructor.
         let s = min(ReadAloudPlayer.maxSpeed, max(ReadAloudPlayer.minSpeed, speed))
         self.speed = s
-        native = SpeechVoices.nativeSpeed(voice: voice, speed: s)
         sentences = ReadAloudText.split(text)
         var spoken: [String] = [], maps: [[Int]] = []
         for span in sentences {
@@ -166,11 +163,7 @@ final class ReadAloudSession: @unchecked Sendable {
         }
         source = node
         engine.attach(node)
-        engine.attach(pitch)
-        engine.connect(node, to: pitch, format: format)
-        engine.connect(pitch, to: engine.mainMixerNode, format: format)
-        pitch.rate = Float(speed / native)
-        pitch.overlap = 16 // smoother at the far speeds
+        engine.connect(node, to: engine.mainMixerNode, format: format)
         if offline { try engine.enableManualRenderingMode(.offline, format: format, maximumFrameCount: 4096) }
         engine.prepare()
         try engine.start()
@@ -186,8 +179,8 @@ final class ReadAloudSession: @unchecked Sendable {
                 }
                 let started = Date()
                 do {
-                    let a = try await self.synthesize(self.speakable[job.index], self.voice, job.native)
-                    self.provide(job.index, a, generation: job.generation, native: job.native, seconds: Date().timeIntervalSince(started))
+                    let a = try await self.synthesize(self.speakable[job.index], self.voice, job.speed)
+                    self.provide(job.index, a, generation: job.generation, speed: job.speed, seconds: Date().timeIntervalSince(started))
                 } catch {
                     if Task.isCancelled { return }
                     let message = (error as? UserFacingError)?.message ?? "The voice engine stopped unexpectedly."
@@ -201,25 +194,13 @@ final class ReadAloudSession: @unchecked Sendable {
         }
     }
 
-    /// Pause at once, as Windows does: the time-stretch holds a moment of audio it has taken but not played yet, so
-    /// that is dropped and the place moves back by as much, to be heard on resume.
+    /// Pause at once, as Windows does.
     func togglePause() {
-        let pausing: Bool = lock.withLock {
-            guard !ended else { return false }
+        lock.withLock {
+            guard !ended else { return }
             paused.toggle()
-            if paused, audio[index] != nil, resumeAt < 0 {
-                pos = max(0, pos - Int(heldSeconds * Double(Self.rate) * speed / native))
-            }
-            return paused
         }
-        if pausing { flush() }
     }
-
-    /// What the time-stretch holds, in seconds of output (measured about 90 ms).
-    private var heldSeconds: Double { max(pitch.latency, 0.1) }
-
-    /// Drop the audio the time-stretch holds (after a pause or a jump, so the old place isn't heard).
-    private func flush() { pitch.reset() }
 
     /// Jump forwards or backwards in time, e.g. ±15 seconds.
     func skip(_ seconds: Double) {
@@ -240,7 +221,6 @@ final class ReadAloudSession: @unchecked Sendable {
                 start += d
             }
         }
-        flush()
         wakeUp.yield()
     }
 
@@ -253,28 +233,20 @@ final class ReadAloudSession: @unchecked Sendable {
             seekLocked(sentence, min(max(fraction, 0), 0.999))
             leadIn = leadInSamples // a small runway, so the first word isn't clipped
         }
-        flush()
         wakeUp.yield()
     }
 
-    /// Change the reading speed. Within the voice's own pace range only the stretch changes; otherwise the current
-    /// sentence is made again and read from the same point.
+    /// Change the reading speed: the current sentence is made again at the new pace and read from the same point.
     func setSpeed(_ s: Double) {
         let s = Self.clamp(s)
-        let rate: Float? = lock.withLock {
-            if abs(s - speed) < 0.001 || ended { return nil }
+        lock.withLock {
+            if abs(s - speed) < 0.001 || ended { return }
             let fraction = fractionLocked()
             speed = s
-            let n = SpeechVoices.nativeSpeed(voice: voice, speed: s)
-            if abs(n - native) > 0.001 {
-                native = n
-                generation += 1
-                audio = Array(repeating: nil, count: audio.count)
-                seekLocked(index, fraction)
-            }
-            return Float(speed / native)
+            generation += 1
+            audio = Array(repeating: nil, count: audio.count)
+            seekLocked(index, fraction)
         }
-        if let rate { pitch.rate = rate }
         wakeUp.yield()
     }
 
@@ -353,19 +325,20 @@ final class ReadAloudSession: @unchecked Sendable {
         }
     }
 
-    /// Tests: what the source gives the time-stretch for `count` samples (Windows' tests read the session directly).
+    /// Tests: what the source gives the output for `count` samples (Windows' tests read the session directly).
     func renderRaw(_ count: Int) -> [Float] {
         var out = [Float](repeating: .nan, count: count)
         out.withUnsafeMutableBufferPointer { render(into: $0.baseAddress!, count: count) }
         return out
     }
 
-    /// Tests: the voice's pace generation (audio made for an older one is dropped).
+    /// Tests: the speed's generation (audio made for an older one is dropped).
     var currentGeneration: Int { lock.withLock { generation } }
-    var currentNative: Double { lock.withLock { native } }
+    /// Tests: how many sentences have their audio.
+    var readySentences: Int { lock.withLock { audio.filter { $0 != nil }.count } }
     static var leadInAtOne: Int { rate / 4 }
 
-    /// Tests: pull `seconds` of output through the time-stretch, as the speakers would.
+    /// Tests: pull `seconds` of output, as the speakers would.
     func renderOffline(seconds: Double) throws -> [Float] {
         let format = engine.manualRenderingFormat
         let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: engine.manualRenderingMaximumFrameCount)!
@@ -382,7 +355,8 @@ final class ReadAloudSession: @unchecked Sendable {
 
     // MARK: Inside
 
-    private var leadInSamples: Int { Int(Double(Self.rate) / 4 * max(speed / native, 0.25)) }
+    /// A quarter second (LeadInSamples).
+    private var leadInSamples: Int { Self.rate / 4 }
 
     private func seekLocked(_ i: Int, _ fraction: Double) {
         index = i
@@ -401,16 +375,16 @@ final class ReadAloudSession: @unchecked Sendable {
     /// One sentence's duration in real time at the current speed.
     private func durationLocked(_ i: Int) -> Double {
         guard audio.indices.contains(i) else { return 0 }
-        if let a = audio[i] { return a.seconds * native / speed }
+        if let a = audio[i] { return a.seconds }
         return Double(speakable[i].utf16.count) * secondsPerChar / speed
     }
 
-    private struct Job { let index: Int; let generation: Int; let native: Double }
+    private struct Job { let index: Int; let generation: Int; let speed: Double }
 
     private func nextJob() -> Job? {
         lock.withLock {
             guard !ended, let i = nextToSynthesizeLocked() else { return nil }
-            return Job(index: i, generation: generation, native: native)
+            return Job(index: i, generation: generation, speed: speed)
         }
     }
 
@@ -442,15 +416,15 @@ final class ReadAloudSession: @unchecked Sendable {
         return ready >= min(rest * (1 - realTime), Self.maxCatchUpSeconds)
     }
 
-    /// Store a sentence's audio, unless the pace changed since it was asked for.
-    func provide(_ i: Int, _ a: SpeechAudio, generation g: Int, native n: Double, seconds: Double = 0) {
+    /// Store a sentence's audio, unless the speed changed since it was asked for.
+    func provide(_ i: Int, _ a: SpeechAudio, generation g: Int, speed sp: Double, seconds: Double = 0) {
         lock.withLock {
             guard g == generation, audio.indices.contains(i) else { return }
             audio[i] = a
-            // Seconds of output (at the reading's speed) made per second, as Windows learns it.
-            if seconds > 0.05, !a.samples.isEmpty { realTime = 0.7 * realTime + 0.3 * (a.seconds * n / speed / seconds) }
+            // Seconds of output made per second, and the voice's seconds per character at 1×, as Windows learns them.
+            if seconds > 0.05, !a.samples.isEmpty { realTime = 0.7 * realTime + 0.3 * (a.seconds / seconds) }
             let chars = speakable[i].utf16.count
-            if chars > 20 { secondsPerChar = 0.7 * secondsPerChar + 0.3 * (a.seconds * n / Double(chars)) }
+            if chars > 20 { secondsPerChar = 0.7 * secondsPerChar + 0.3 * (a.seconds * sp / Double(chars)) }
         }
         wakeUp.yield()
     }
@@ -484,7 +458,7 @@ final class ReadAloudSession: @unchecked Sendable {
                 a.samples.withUnsafeBufferPointer { src in (out + written).update(from: src.baseAddress! + pos, count: n) }
                 pos += n
                 written += n
-                spoken += Double(n) / Double(Self.rate) * native / speed
+                spoken += Double(n) / Double(Self.rate)
             }
             if pos >= a.samples.count {
                 index += 1

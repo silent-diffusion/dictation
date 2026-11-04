@@ -16,7 +16,7 @@ import Testing
     }
 
     private func provide(_ s: ReadAloudSession, _ i: Int, _ samples: [Float], generation: Int? = nil, seconds: Double = 0) {
-        s.provide(i, SpeechAudio(samples: samples), generation: generation ?? s.currentGeneration, native: 1, seconds: seconds)
+        s.provide(i, SpeechAudio(samples: samples), generation: generation ?? s.currentGeneration, speed: 1, seconds: seconds)
     }
 
     private func skipLeadIn(_ s: ReadAloudSession) { _ = s.renderRaw(ReadAloudSession.leadInAtOne) }

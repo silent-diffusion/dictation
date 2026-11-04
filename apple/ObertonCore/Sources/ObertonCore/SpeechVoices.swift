@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import os
 
 /// One sentence's audio: mono floats at `sampleRate`, and, for the system's voices, where each word starts (sample,
 /// and its range in the text that was spoken). Kokoro and Piper don't say where their words are; the player estimates
@@ -31,7 +32,8 @@ public struct SpeechAudio: Sendable {
 /// Speaks one short piece of text with any of Read aloud's voices (Windows' SpeechVoices): Kokoro and Piper on ONNX
 /// Runtime, the system's voices through AVSpeechSynthesizer, rendered to audio rather than played, so every voice
 /// goes through the same player (true speeds, ±15 s, immediate pause). One request at a time, off the main thread.
-/// The voices stay loaded until `unload()`.
+/// The voices stay loaded until `unload()`. Each sentence comes back at the reading's speed: the voice paces itself
+/// up to 2× either way and Windows' WSOLA stretch does the rest (the voice server's `speak`, WindowsSpeech).
 public final class SpeechVoices: @unchecked Sendable {
     public static let shared = SpeechVoices()
 
@@ -46,11 +48,17 @@ public final class SpeechVoices: @unchecked Sendable {
     /// When a voice was last asked to speak, for unloading it when idle (Windows' `Tts.LastUsed`).
     public var lastUsed: Date { lock.withLock { lastUsedAt } }
 
-    /// The pace a voice reads at itself for `speed`; the player stretches the rest without changing the pitch.
-    /// Kokoro and Piper pace themselves naturally between 0.5× and 2× (as on Windows); the system's voices read at
-    /// their normal pace, so every speed is an exact multiple of it.
-    public static func nativeSpeed(voice: String, speed: Double) -> Double {
-        VoiceCatalog.modelOf(voice) == VoiceCatalog.system ? 1 : min(max(speed, 0.5), 2)
+    /// The pace a voice reads at itself for `speed`: every voice paces itself between 0.5× and 2× (Kokoro and Piper
+    /// natively, the system's voices through their rate, as SAPI's Rate on Windows); the rest is stretched.
+    public static func nativeSpeed(voice: String, speed: Double) -> Double { min(max(speed, 0.5), 2) }
+
+    /// The voice's audio at its own pace `native`, stretched to `speed` without changing the pitch; a system voice's
+    /// word positions move with it.
+    static func stretched(_ a: SpeechAudio, native: Double, speed: Double, everySample: Bool) -> SpeechAudio {
+        let samples = TimeStretch.apply(a.samples, factor: speed / native, everySample: everySample)
+        guard samples.count != a.samples.count, !a.samples.isEmpty else { return SpeechAudio(samples: samples, words: a.words) }
+        let scale = Double(samples.count) / Double(a.samples.count)
+        return SpeechAudio(samples: samples, words: a.words.map { (Int(Double($0.sample) * scale), $0.range) })
     }
 
     /// Free the voices' memory; they load again on the next reading.
@@ -64,7 +72,7 @@ public final class SpeechVoices: @unchecked Sendable {
         }
     }
 
-    /// Speak one sentence at the voice's own pace for `speed` (`nativeSpeed`).
+    /// Speak one sentence at `speed` (0.25–4).
     public func synthesize(_ text: String, voice: String, speed: Double) async throws -> SpeechAudio {
         try await withCheckedThrowingContinuation { c in
             queue.async { [self] in
@@ -76,9 +84,20 @@ public final class SpeechVoices: @unchecked Sendable {
     }
 
     private func synthesizeNow(_ text: String, voice: String, speed: Double) throws -> SpeechAudio {
+        let speed = min(max(speed, 0.25), 4)
+        let native = Self.nativeSpeed(voice: voice, speed: speed)
+        if VoiceCatalog.modelOf(voice) == VoiceCatalog.system {
+            // TimeStretch.Apply(samples, speed / native) in WindowsSpeech; the voice's real pace at its rate is measured.
+            let (audio, paced) = try SystemSpeech.synthesize(text, voice: voice, pace: native)
+            return Self.stretched(audio, native: paced, speed: speed, everySample: false)
+        }
+        // The voice server's stretch(audio, speed / native).
+        return Self.stretched(try synthesizeLocal(text, voice: voice, speed: native), native: native, speed: speed, everySample: true)
+    }
+
+    /// Kokoro or Piper at its own pace.
+    private func synthesizeLocal(_ text: String, voice: String, speed: Double) throws -> SpeechAudio {
         switch VoiceCatalog.modelOf(voice) {
-        case VoiceCatalog.system:
-            return try SystemSpeech.synthesize(text, voice: voice)
         case VoiceCatalog.piper:
             let name = String(voice.dropFirst(VoiceCatalog.piperPrefix.count))
             // A voice in memory reads on even if its files went meanwhile (as the Windows server).
@@ -105,16 +124,54 @@ public final class SpeechVoices: @unchecked Sendable {
 
 /// The system's voices, rendered to audio with their word positions (AVSpeechSynthesizer.write).
 enum SystemSpeech {
-    static func synthesize(_ text: String, voice: String) throws -> SpeechAudio {
+    /// Speak `text` paced as close to `pace` (0.5–2) as the voice's rate goes (WindowsSpeech's SAPI Rate), and say how
+    /// fast that really is against the voice's normal rate, so the stretch makes the rest exact.
+    static func synthesize(_ text: String, voice: String, pace: Double = 1) throws -> (SpeechAudio, pace: Double) {
         // Gone since the reading started (the player checks before it starts): the default voice reads on, as SAPI's.
         var v = AVSpeechSynthesisVoice(identifier: voice)
         if v == nil {
             CoreLog.warn("\(VoiceCatalog.deviceNoun) voice \"\(voice)\" isn't installed; using the default one")
             v = AVSpeechSynthesisVoice(language: AVSpeechSynthesisVoice.currentLanguageCode())
         }
+        let rate = rate(for: pace)
+        let audio = try render(text, voice: v, rate: rate)
+        return (audio, measuredPace(v, rate: rate) ?? pace)
+    }
+
+    /// AVSpeechUtterance's rate for a pace: the Mac's standard voices read 0.56× at rate 0, 1× at 0.5 (the default) and
+    /// about 2.5× at 0.75 (measured; between the points it's interpolated). Other voices differ, which `measuredPace`
+    /// finds out.
+    static func rate(for pace: Double) -> Float {
+        let curve: [(rate: Double, pace: Double)] = [(0, 0.56), (0.1, 0.67), (0.25, 0.77), (0.3, 0.83), (0.4, 0.91), (0.5, 1),
+                                                     (0.55, 1.29), (0.6, 1.59), (0.65, 1.83), (0.7, 2.11), (0.75, 2.48)]
+        if abs(pace - 1) < 0.001 { return AVSpeechUtteranceDefaultSpeechRate }
+        guard pace > curve[0].pace else { return Float(curve[0].rate) }
+        for (a, b) in zip(curve, curve.dropFirst()) where pace <= b.pace {
+            return Float(a.rate + (b.rate - a.rate) * (pace - a.pace) / (b.pace - a.pace))
+        }
+        return Float(curve.last!.rate)
+    }
+
+    /// How fast `voice` reads at `rate` against its default rate, from a test sentence, once per voice and rate. Nil
+    /// when it couldn't be measured.
+    static func measuredPace(_ voice: AVSpeechSynthesisVoice?, rate: Float) -> Double? {
+        if rate == AVSpeechUtteranceDefaultSpeechRate { return 1 }
+        let key = "\(voice?.identifier ?? "") \(rate)"
+        if let known = paces.withLock({ $0[key] }) { return known }
+        let sample = "The quick brown fox jumps over the lazy dog, and then it runs far away into the forest to find its friends."
+        guard let normal = try? render(sample, voice: voice, rate: AVSpeechUtteranceDefaultSpeechRate).seconds,
+              let paced = try? render(sample, voice: voice, rate: rate).seconds, normal > 0, paced > 0 else { return nil }
+        let pace = normal / paced
+        paces.withLock { $0[key] = pace }
+        return pace
+    }
+
+    private static let paces = OSAllocatedUnfairLock(initialState: [String: Double]())
+
+    private static func render(_ text: String, voice: AVSpeechSynthesisVoice?, rate: Float) throws -> SpeechAudio {
         let utterance = AVSpeechUtterance(string: text)
-        utterance.voice = v
-        utterance.rate = AVSpeechUtteranceDefaultSpeechRate
+        utterance.voice = voice
+        utterance.rate = rate
         let synth = AVSpeechSynthesizer()
         let done = DispatchSemaphore(value: 0)
         let state = Collected()

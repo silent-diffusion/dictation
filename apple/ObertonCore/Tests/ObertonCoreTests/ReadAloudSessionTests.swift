@@ -1,24 +1,27 @@
+import AVFoundation
 import Foundation
 import Testing
 @testable import ObertonCore
 
 /// The player's audio (Windows' ReadAloudSessionTests, TimeStretchTests and ReadAloudJumpTests): rendered offline through
-/// the same AVAudioEngine and time-stretch the speakers get, with a stand-in voice that hums for 50 ms per character
-/// at 1× (and paces itself between 0.5× and 2×, as Kokoro does).
+/// the same AVAudioEngine the speakers get, with a stand-in voice that hums for 50 ms per character at 1× (and paces
+/// itself between 0.5× and 2×, as Kokoro does, the WSOLA stretch doing the rest, as the voice server).
 @Suite(.serialized) struct ReadAloudSessionTests {
     static let text = "One two three four five. Six seven eight nine ten."
 
-    /// A voice that hums: `chars × 50 ms ÷ pace` of a 220 Hz tone.
-    static let hum: @Sendable (String, String, Double) async throws -> SpeechAudio = { text, _, pace in
+    /// A voice that hums: `chars × 50 ms ÷ pace` of a 220 Hz tone, stretched to the speed.
+    static let hum: @Sendable (String, String, Double) async throws -> SpeechAudio = { text, voice, speed in
+        let pace = SpeechVoices.nativeSpeed(voice: voice, speed: speed)
         let n = Int(Double(text.utf16.count) * 0.05 / pace * Double(SpeechAudio.sampleRate))
-        return SpeechAudio(samples: (0..<n).map { Float(0.5 * sin(2 * Double.pi * 220 * Double($0) / Double(SpeechAudio.sampleRate))) })
+        let audio = SpeechAudio(samples: (0..<n).map { Float(0.5 * sin(2 * Double.pi * 220 * Double($0) / Double(SpeechAudio.sampleRate))) })
+        return SpeechVoices.stretched(audio, native: pace, speed: speed, everySample: true)
     }
 
     private func session(speed: Double) async throws -> ReadAloudSession {
         let s = ReadAloudSession(text: Self.text, voice: "af_heart", speed: speed, offline: true, synthesize: Self.hum)
         try s.start()
-        for _ in 0..<200 where s.isBuffering || s.progress == 0 && s.remaining == 0 { try await Task.sleep(for: .milliseconds(10)) }
-        try await Task.sleep(for: .milliseconds(50)) // the second sentence too
+        // Both sentences made (the stretch takes a moment at the far speeds in a debug build).
+        for _ in 0..<1000 where s.readySentences < s.sentences.count { try await Task.sleep(for: .milliseconds(10)) }
         return s
     }
 
@@ -86,16 +89,17 @@ import Testing
         s.stop()
     }
 
-    @Test func aSpeedChangeWithinTheVoicesPaceKeepsTheAudio() async throws {
-        let s = try await session(speed: 2.5) // the voice at 2×, stretched 1.25×
+    /// ReadAloudSession.SetSpeed: every change makes the audio again (a new generation) and reads on from the same place.
+    @Test(arguments: [4.0, 1.0])
+    func aSpeedChangeMakesTheAudioAgain(to new: Double) async throws {
+        let s = try await session(speed: 2.5)
         _ = try s.renderOffline(seconds: 0.4)
         let at = s.position
-        s.setSpeed(4) // still 2× from the voice: only the stretch changes
-        #expect(!s.isBuffering)
-        #expect(s.position.sentence == at.sentence && abs(s.position.fraction - at.fraction) < 0.001)
-        s.setSpeed(1) // the voice's own pace changes: made again, from the same place
+        let generation = s.currentGeneration
+        s.setSpeed(new)
+        #expect(s.currentGeneration == generation + 1)
         #expect(s.isBuffering)
-        #expect(abs(s.position.fraction - at.fraction) < 0.001)
+        #expect(s.position.sentence == at.sentence && abs(s.position.fraction - at.fraction) < 0.001)
         s.stop()
     }
 
@@ -137,11 +141,38 @@ import Testing
         #expect(SpeechVoices.nativeSpeed(voice: "af_heart", speed: 4) == 2)
         #expect(SpeechVoices.nativeSpeed(voice: "piper:en_US-amy-medium", speed: 0.25) == 0.5)
         #expect(SpeechVoices.nativeSpeed(voice: "af_heart", speed: 1.75) == 1.75)
-        #expect(SpeechVoices.nativeSpeed(voice: "com.apple.voice.compact.en-US.Samantha", speed: 3) == 1)
+        // The system's voices pace themselves too, as SAPI's Rate (READ-070).
+        #expect(SpeechVoices.nativeSpeed(voice: "com.apple.voice.compact.en-US.Samantha", speed: 3) == 2)
+        #expect(SpeechVoices.nativeSpeed(voice: "com.apple.voice.compact.en-US.Samantha", speed: 0.75) == 0.75)
+    }
+
+    /// A system voice's rate for a pace: the default at 1×, faster above, slower below, within 0…1.
+    @Test func systemVoicesRateFollowsThePace() {
+        #expect(SystemSpeech.rate(for: 1) == AVSpeechUtteranceDefaultSpeechRate)
+        #expect(SystemSpeech.rate(for: 2) > SystemSpeech.rate(for: 1.5) && SystemSpeech.rate(for: 1.5) > 0.5)
+        #expect(SystemSpeech.rate(for: 0.75) < 0.5 && SystemSpeech.rate(for: 0.5) == 0)
+        #expect(SystemSpeech.rate(for: 2) <= 0.75)
     }
 }
 
 @Suite struct VoiceCatalogTests {
+    /// READ-049/078: as Windows' ModelOf, an id that is neither Piper's nor a system voice's is Kokoro's (it reads as
+    /// Heart); a system voice id is one even when the voice is gone.
+    @Test func unknownIdsAreKokoros() {
+        #expect(VoiceCatalog.modelOf("Samantha") == VoiceCatalog.kokoro)
+        #expect(VoiceCatalog.modelOf("xx_unknown") == VoiceCatalog.kokoro)
+        #expect(VoiceCatalog.modelOf("com.apple.voice.premium.en-US.Gone") == VoiceCatalog.system)
+        #expect(!VoiceCatalog.isSystemVoice(""))
+    }
+
+    /// PROF-119/READ-015: every voice the system has, as Windows lists every enabled voice, sorted by label.
+    @Test func everySystemVoiceIsListed() {
+        let listed = VoiceCatalog.systemVoices()
+        #expect(listed.count == AVSpeechSynthesisVoice.speechVoices().count)
+        #expect(listed.map(\.name) == listed.map(\.name).sorted { VoiceCatalog.sortsBefore($0, $1) })
+        #expect(listed.allSatisfy { VoiceCatalog.modelOf($0.id) == VoiceCatalog.system })
+    }
+
     @Test func aVoiceSaysItsModel() {
         #expect(VoiceCatalog.modelOf(nil) == VoiceCatalog.kokoro)
         #expect(VoiceCatalog.modelOf("af_heart") == VoiceCatalog.kokoro)
