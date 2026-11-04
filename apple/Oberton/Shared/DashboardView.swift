@@ -22,14 +22,17 @@ struct DashboardView: View {
         // is 14 above the page's.
         .overlay(alignment: .bottom) {
             if let toast {
+                // As wide as its widest line once wrapped at 480 (a TextBlock with MaxWidth 480). The first one fades in
+                // as it is put in; later ones fade in through `toastShown`.
                 Text(toast).font(Ob.mono(12)).foregroundStyle(ob.onInk)
-                    .frame(width: min(TextFit.width(toast, font: Ob.monoFont(12)), 480), alignment: .leading)
+                    .frame(width: TextFit.wrappedWidth(toast, font: Ob.monoFont(12), max: 480), alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 18).padding(.vertical, 8)
                     .background(RoundedRectangle(cornerRadius: 17).fill(ob.ink))
                     .opacity(toastShown ? 1 : 0)
                     .padding(.bottom, 48)
                     .allowsHitTesting(false)
+                    .transition(.asymmetric(insertion: .opacity.animation(.linear(duration: 0.12)), removal: .identity))
             }
         }
         // Which AI models are in memory, asked every 3 s while the dashboard shows (Windows' LoadedModelsAsync).
@@ -66,7 +69,7 @@ struct DashboardView: View {
                     }
                     .frame(height: rows.0)
                     HStack(spacing: 0) {
-                        meters.frame(width: bottom.0)
+                        meters(width: bottom.0)
                         Cell(padding: EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12)) {
                             HistoryCell(last: model.lastEntry, now: now, toast: showToast)
                         }
@@ -135,8 +138,11 @@ struct DashboardView: View {
         .padding(.bottom, 14)
     }
 
-    private var meters: some View {
-        HStack(spacing: 0) { ForEach(0..<4, id: \.self) { meter($0) } }
+    /// Four equal cells (a UniformGrid of 4 columns): a cell too narrow for UNLOAD EVERYTHING clips it rather than
+    /// growing.
+    private func meters(width: CGFloat) -> some View {
+        HStack(spacing: 0) { ForEach(0..<4, id: \.self) { meter($0).frame(width: width / 4).clipped() } }
+            .frame(width: width)
     }
 
     /// The four meters. The figures come from the daily counts, which survive History being trimmed, cleared or off;
@@ -147,54 +153,69 @@ struct DashboardView: View {
         switch i {
         case 0:
             let best = days.map(\.words).max() ?? 0
+            let value = today.words.formatted(), sub = best > 0 ? "words · best day \(best.formatted())" : "no dictation yet"
             // The same figures over time: Analytics (DashboardPage.DialPage).
-            meterCell(to: .analytics) {
-                RingMeter(fraction: best > 0 ? Double(today.words) / Double(best) : 0, value: today.words.formatted(), label: "Dictated today",
-                          sub: best > 0 ? "words · best day \(best.formatted())" : "no dictation yet", accent: true)
+            meterCell(to: .analytics, tip: Self.tip("Dictated today", value, sub)) {
+                RingMeter(fraction: best > 0 ? Double(today.words) / Double(best) : 0, value: value, label: "Dictated today", sub: sub, accent: true)
             }
         case 1:
             let best = days.map(\.wordsRead).max() ?? 0
-            meterCell(to: .readAloud) {
-                RingMeter(fraction: best > 0 ? Double(today.wordsRead) / Double(best) : 0, value: today.wordsRead.formatted(),
-                          label: "Read aloud today", sub: best > 0 ? "words · best day \(best.formatted())" : "nothing read yet")
+            let value = today.wordsRead.formatted(), sub = best > 0 ? "words · best day \(best.formatted())" : "nothing read yet"
+            meterCell(to: .readAloud, tip: Self.tip("Read aloud today", value, sub)) {
+                RingMeter(fraction: best > 0 ? Double(today.wordsRead) / Double(best) : 0, value: value, label: "Read aloud today", sub: sub)
             }
         case 2:
             // The last three dictations with the current speech and AI models, leaving out any that had to load a model.
-            // The models by their ids, as Windows writes them ("large-v3-turbo + qwen2.5:3b").
+            // The models by their ids, as Windows writes them ("large-v3-turbo + qwen2.5:3b", "+ anthropic:claude-…").
             let p = model.activeProfile
             let ai = model.aiModelName(p)
             let (turn, count) = model.usage.recentTurnaround(speechModel: model.speechModelName, aiModel: ai)
-            meterCell(to: .analytics) {
-                FanMeter(fraction: min(max((turn ?? 0) / 10, 0), 1),
-                         value: turn.map { $0.formatted(.number.precision(.fractionLength(1)).grouping(.never)) + " s" } ?? "—",
-                         label: "Turnaround",
-                         sub: count == 0 ? "no runs yet with these models loaded"
-                             : "last \(count) · " + model.speechShortName + (ai.isEmpty ? ", no AI" : " + " + SignalPathCell.aiTitle(model.processor.model(for: p)))
-                                 + ", models already loaded")
+            let value = turn.map { Self.netFixed($0, places: 1...1) + " s" } ?? "—"
+            let sub = count == 0 ? "no runs yet with these models loaded"
+                : "last \(count) · " + model.speechShortName + (ai.isEmpty ? ", no AI" : " + " + SignalPathCell.aiTitle(model.processor.model(for: p)))
+                    + ", models already loaded"
+            meterCell(to: .analytics, tip: Self.tip("Turnaround", value, sub)) {
+                FanMeter(fraction: min(max((turn ?? 0) / 10, 0), 1), value: value, label: "Turnaround", sub: sub)
             }
         default:
             // The speech model (DashboardPage's speech dial): busy, off, on (kept or let go right after use), or the
             // minutes left until it unloads.
             let minutes = model.settings.unloadAfterMinutes
-            meterCell(settings: .unloading, footer: AnyView(unloadButton)) {
-                if model.phase.isBusy {
-                    RingMeter(fraction: 1, value: "busy", label: "Speech model", sub: "dictating now", accent: true)
-                } else if !model.speechLoaded {
-                    RingMeter(fraction: 0, value: "off", label: "Speech model", sub: "loads when you dictate")
-                } else if minutes > 0, let left = model.unloadCountdown {
-                    RingMeter(fraction: left / Double(minutes * 60), value: left >= 60 ? "\(Int((left / 60).rounded(.up))) min" : "<1 min",
-                              label: "Speech model", sub: "until it unloads", accent: true,
+            let busy = model.phase.isBusy, loaded = model.speechLoaded
+            let left = !busy && loaded && minutes > 0 ? model.unloadCountdown : nil
+            let value = busy ? "busy" : !loaded ? "off" : left.map { $0 >= 60 ? "\(Int(($0 / 60).rounded(.up))) min" : "<1 min" } ?? "on"
+            let sub = busy ? "dictating now" : !loaded ? "loads when you dictate" : left != nil ? "until it unloads"
+                : minutes < 0 ? "unloads right after use" : "stays loaded"
+            meterCell(settings: .unloading, tip: Self.tip("Speech model", value, sub), footer: AnyView(unloadButton)) {
+                if busy {
+                    RingMeter(fraction: 1, value: value, label: "Speech model", sub: sub, accent: true)
+                } else if !loaded {
+                    RingMeter(fraction: 0, value: value, label: "Speech model", sub: sub)
+                } else if let left {
+                    RingMeter(fraction: left / Double(minutes * 60), value: value, label: "Speech model", sub: sub, accent: true,
                               valueAction: unloadSpeechNow, valueTip: "Click to unload the speech model now")
                 } else {
-                    RingMeter(fraction: 1, value: "on", label: "Speech model", sub: minutes < 0 ? "unloads right after use" : "stays loaded",
+                    RingMeter(fraction: 1, value: value, label: "Speech model", sub: sub,
                               valueAction: unloadSpeechNow, valueTip: "Click to unload the speech model now")
                 }
             }
         }
     }
 
+    /// A meter's tooltip, on its whole cell (DashboardPage.Dial: the ToolTip is on the card).
+    private static func tip(_ label: String, _ value: String, _ sub: String) -> String { "\(label): \(value) (\(sub))" }
+
+    /// A number as .NET's custom format writes it ("0.0", "0.#"): 15 significant digits, then rounded half away from
+    /// zero (1.25 → "1.3", 2.05 → "2.1"), in the user's decimal sign, without grouping.
+    static func netFixed(_ x: Double, places: ClosedRange<Int>) -> String {
+        var exact = Decimal(string: String(format: "%.15g", x), locale: Locale(identifier: "en_US_POSIX")) ?? Decimal(x)
+        var rounded = Decimal()
+        NSDecimalRound(&rounded, &exact, places.upperBound, .plain)
+        return rounded.formatted(.number.precision(.fractionLength(places)).grouping(.never))
+    }
+
     /// UNLOAD EVERYTHING, at the bottom of the speech meter: the speech model, the AI model and the voice. A QuietButton
-    /// with FontSize 10 and Padding 12,4, never cut short.
+    /// with FontSize 10 and Padding 12,4 at its full width; a meter cell too narrow for it cuts it off.
     private var unloadButton: some View {
         Button("Unload everything") {
             Task {
@@ -214,7 +235,7 @@ struct DashboardView: View {
         Task { _ = await model.unloadNow(speech: true, ai: false, voice: false) }
     }
 
-    private func meterCell<C: View>(to section: Section? = nil, settings: SettingsSection? = nil, footer: AnyView? = nil,
+    private func meterCell<C: View>(to section: Section? = nil, settings: SettingsSection? = nil, tip: String, footer: AnyView? = nil,
                                     @ViewBuilder _ content: () -> C) -> some View {
         Cell(link: true, padding: EdgeInsets(top: 6, leading: 6, bottom: 6, trailing: 6)) {
             VStack(spacing: 0) {
@@ -222,6 +243,7 @@ struct DashboardView: View {
                 if let footer { footer }
             }
         }
+        .help(tip)
         .handCursor()
         .onTapGesture {
             if let settings { nav.goSettings(settings) } else if let section { nav.go(section) }
@@ -251,7 +273,7 @@ struct DashboardView: View {
         parts.append("\(model.settings.cycleProfileHotkey) switches profile")
         #endif
         let m = model.settings.unloadAfterMinutes
-        let unload = m < 0 ? "right after each use" : m == 0 ? "never" : m >= 60 ? "\((Double(m) / 60).formatted(.number.precision(.fractionLength(0...1)))) h" : "\(m) min"
+        let unload = m < 0 ? "right after each use" : m == 0 ? "never" : m >= 60 ? "\(Self.netFixed(Double(m) / 60, places: 0...1)) h" : "\(m) min"
         parts.append("models unload " + (m < 0 ? unload : "after \(unload) unused"))
         return parts.joined(separator: "  //  ")
     }
@@ -297,20 +319,30 @@ struct SignalPathCell: View {
             }
             GeometryReader { geo in
                 SignalPathDrawing(nodes: nodes, voice: voice, readsAloud: model.activeProfile.readAloudAfterInsert, size: geo.size)
+                    // Windows draws the path anew at each 3-s refresh, each change of state and 1.6 s after it, and a
+                    // busy core's pulse starts again from full each time.
+                    .environment(\.pathBeat, "\(now.timeIntervalSinceReferenceDate)|\(model.phase)|\(held)")
             }
-            HStack {
-                #if os(macOS)
-                Readout("Click a node to open its settings", size: 12).lineLimit(1)
-                #else
-                Readout("Tap a node", size: 12).lineLimit(1)
-                #endif
-                Spacer()
+            // The unload note is docked at the right at its full width; the hint takes what is left and is cut off
+            // there, without "…" (a TextBlock without trimming).
+            HStack(spacing: 0) {
+                Group {
+                    #if os(macOS)
+                    Readout("Click a node to open its settings", size: 12)
+                    #else
+                    Readout("Tap a node", size: 12)
+                    #endif
+                }
+                .lineLimit(1).fixedSize()
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                .clipped()
                 // When the models unload ("UNLOAD IN 12:34" in the accent), redrawn with the page every 3 s.
                 let note = unloadNote
                 Text(note.uppercased())
                     .font(Ob.mono(12, .bold))
                     .foregroundStyle(note.hasPrefix("Unload in") ? ob.accent : ob.muted)
                     .lineLimit(1)
+                    .fixedSize()
             }
         }
         .onChange(of: model.phase, initial: true) { old, phase in
@@ -345,13 +377,9 @@ struct SignalPathCell: View {
         return false
     }
 
-    /// The AI model as Windows names it on the dashboard: its id ("qwen2.5:3b", "claude-sonnet-4-5"); Apple
-    /// Intelligence, which has no id, by name.
-    static func aiTitle(_ id: ModelID) -> String { id.provider == .apple ? id.shortName : id.name }
-
-    /// Whether the next dictation with this profile types while you speak (Windows: the General switch on and the
-    /// profile without a preview).
-    private func typesWhileSpeaking(_ p: Profile) -> Bool { model.typesWhileSpeaking(p) }
+    /// The AI model as Windows names it on the dashboard: its stored id ("qwen2.5:3b", "anthropic:claude-sonnet-4-5");
+    /// Apple Intelligence, which has no id, by name.
+    static func aiTitle(_ id: ModelID) -> String { id.provider == .apple ? id.shortName : id.windowsForm }
 
     private var nodes: [PathNode] {
         let p = model.activeProfile
@@ -360,7 +388,9 @@ struct SignalPathCell: View {
         let aiOn = !p.isRaw && lit("ai")
         let insertOn = lit("insert")
         let id = model.processor.model(for: p)
-        let cloud = !id.isLocal || id.isOllamaCloud
+        // Windows' CloudModels.IsCloud: Anthropic and OpenAI only. An Ollama cloud model goes through the local Ollama,
+        // so it reads "loaded"/"not loaded" like any Ollama model.
+        let cloud = id.isCloud
         let offline = model.settings.cloud.keepOffline
         let aiLoaded = id.provider == .apple ? AppleIntelligenceBackend.unavailableReason == nil : model.aiInMemory(id)
         let aiStatus = aiOn ? (cloud || aiLoaded ? "editing" : "loading, then editing")
@@ -371,19 +401,21 @@ struct SignalPathCell: View {
         let lastApp = model.lastEntry?.appLabel
         #if os(macOS)
         let s = model.settings
+        // " // live" follows the General switch alone, as on Windows (whether macOS lets Oberton type yet is said on
+        // the General page).
         let insertTitle = (s.insertion == .typing ? "Type" : s.insertion == .clipboard ? "Paste" : "Paste or type")
-            + (typesWhileSpeaking(p) ? " // live" : p.showPreview ? " // preview" : "")
+            + (s.typeWhileSpeaking && !p.showPreview ? " // live" : p.showPreview ? " // preview" : "")
         let insertRest = lastApp.map { "last → \($0)" } ?? "at the cursor"
         #else
         let insertTitle = "Copy" + (p.showPreview ? " // preview" : "")
         let insertRest = "to the clipboard"
         #endif
         return [
-            PathNode(label: "MIC", title: model.settings.microphoneName ?? "Default microphone", status: micOn ? "Recording" : "Ready", state: micOn ? .busy : .ok) {
+            PathNode(label: "MIC", title: Self.micTitle(model.settings.microphoneName), status: micOn ? "Recording" : "Ready", state: micOn ? .busy : .ok) {
                 nav.goSettings(.microphone)
             },
             PathNode(label: "SPEECH", title: model.speechShortName,
-                     status: "on-device // " + (model.phase == .transcribing ? "transcribing" : speechOn ? "listening" : model.speechModelLoaded ? "loaded" : "not loaded"),
+                     status: speechDevice + " // " + (model.phase == .transcribing ? "transcribing" : speechOn ? "listening" : model.speechModelLoaded ? "loaded" : "not loaded"),
                      state: speechOn ? .busy : model.speechModelLoaded ? .ok : .off) { nav.goSettings(.models) },
             p.isRaw
                 ? PathNode(label: "AI", title: "No AI", status: p.name + " // raw words", state: .off) { nav.goProfile(p.id) }
@@ -396,11 +428,21 @@ struct SignalPathCell: View {
         ]
     }
 
+    /// The microphone by name; none, empty or blank is the default one.
+    static func micTitle(_ name: String?) -> String {
+        guard let name, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "Default microphone" }
+        return name
+    }
+
+    /// Where the speech model runs: Windows' default device setting "auto" reads "GPU if available"; Whisper here runs
+    /// on the GPU and Neural Engine through CoreML. Apple's own recognizer (Mac only) runs on the device.
+    private var speechDevice: String { model.activeSpeech.whisperModel == nil ? "on-device" : "GPU if available" }
+
     /// The profile's voice (App.VoiceFor): its short name ("Heart"), or "Not installed" when it isn't downloaded (or
     /// that system voice is gone). System voices are always "ready", as Windows' own are; Kokoro and Piper are
     /// "loaded" while the voice engine holds them, "idle" when downloaded, else "downloads on first use".
     private var voice: PathNode {
-        let id = model.activeProfile.voice ?? model.settings.ttsVoice
+        let id = Profile.readVoice(model.activeProfile.voice, fallback: model.settings.ttsVoice)
         let system = VoiceCatalog.isSystemVoice(id)
         let installed = VoiceCatalog.isInstalled(id)
         let loaded = SpeechVoices.shared.isLoaded
@@ -560,22 +602,35 @@ struct PathStep: View {
     }
 }
 
+extension EnvironmentValues {
+    /// Changes whenever Windows would build the signal path again (DashboardPage.Build), restarting the pulses.
+    @Entry var pathBeat = ""
+}
+
 /// A node's core: hollow when off, filled ink when ready, the accent and breathing (1 ↔ 0.25 every 0.6 s, linear, as
-/// Windows' DoubleAnimation) while at work.
+/// Windows' DoubleAnimation) while at work. The breathing starts again from full at each rebuild of the path.
 struct NodeCore: View {
     var state: DotState
     var size: CGFloat
     @Environment(\.ob) private var ob
-    @State private var pulse = false
+    @Environment(\.pathBeat) private var beat
 
     var body: some View {
         switch state {
         case .off: Circle().strokeBorder(ob.muted, lineWidth: 1).frame(width: size, height: size)
         case .ok: Circle().fill(ob.ink).frame(width: size, height: size)
-        case .busy:
-            Circle().fill(ob.accent).frame(width: size, height: size).opacity(pulse ? 0.25 : 1)
-                .onAppear { withAnimation(.linear(duration: 0.6).repeatForever(autoreverses: true)) { pulse = true } }
-                .onDisappear { pulse = false }
+        case .busy: Pulse(color: ob.accent, size: size).id(beat)
+        }
+    }
+
+    private struct Pulse: View {
+        var color: Color
+        var size: CGFloat
+        @State private var dim = false
+
+        var body: some View {
+            Circle().fill(color).frame(width: size, height: size).opacity(dim ? 0.25 : 1)
+                .onAppear { withAnimation(.linear(duration: 0.6).repeatForever(autoreverses: true)) { dim = true } }
         }
     }
 }
@@ -599,7 +654,8 @@ struct VoicePill: View {
             Text("\(node.label) // \(node.title) // \(node.status)".uppercased()).font(Ob.mono(12.5 * font)).lineLimit(1)
                 .foregroundStyle(hover ? ob.accent : ob.ink)
         }
-        .padding(.horizontal, 14).padding(.vertical, 4)
+        // Windows' Padding 14,4 inside its 1-px border.
+        .padding(.horizontal, 15).padding(.vertical, 5)
         .background(RoundedRectangle(cornerRadius: 11 * font).fill(ob.paper))
         .overlay(RoundedRectangle(cornerRadius: 11 * font).strokeBorder(hover ? ob.accent : ob.ink, lineWidth: 1))
         .contentShape(RoundedRectangle(cornerRadius: 11 * font))
@@ -623,7 +679,10 @@ struct NotesCell: View {
     @Environment(\.ob) private var ob
     @State private var draft = ""
     @State private var renaming = false
+    /// The session whose name is being edited (still renamed if it stops meanwhile, as Windows commits on focus loss).
+    @State private var renamed: NoteSession?
     @State private var title = ""
+    @State private var boxFocused = false
     @State private var problem: String?
     @State private var saved: String?
     @State private var starting = false
@@ -633,7 +692,7 @@ struct NotesCell: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
+            HStack(spacing: 0) {
                 if let s = notes.current { live(s) } else { startButton }
                 Spacer(minLength: 0)
                 Button("⤢ Full screen") {
@@ -645,18 +704,25 @@ struct NotesCell: View {
                     #endif
                 }
                 .buttonStyle(.quietSmall)
+                .padding(.leading, 8)
             }
             box
         }
         .onAppear { draft = notes.store.draft }
+        // A stop (the dot or the hotkey) while the name is being edited keeps the typed name, and the next session
+        // starts with its own.
+        .onChange(of: notes.current?.id) { if renaming { commitRename() } }
         .onChange(of: notes.isRecording) { was, now in
             if was && !now, let last = notes.store.sessions.first { saved = last.title }
             draft = notes.store.draft
         }
+        // On iPhone and iPad; the Mac shows a warning alert of its own (MessageBoxImage.Warning).
         .alert("Oberton", isPresented: Binding(get: { problem != nil }, set: { if !$0 { problem = nil } })) {
             Button("OK") { problem = nil }
         } message: { Text(problem ?? "") }
     }
+
+    private func warn(_ message: String) { NotesDialog.warn(message) { problem = $0 } }
 
     /// A QuietButton with FontSize 11 and Padding 10,4,12,4; off while the session starts, so it can't start twice.
     private var startButton: some View {
@@ -664,10 +730,10 @@ struct NotesCell: View {
             starting = true
             Task {
                 do { try await notes.start(source: model.settings.notesSource) } catch let error as UserFacingError {
-                    problem = error.message
+                    warn(error.message)
                 } catch {
                     Log.error("Starting extended notes failed", error)
-                    problem = "Extended notes couldn't start. See the log for details."
+                    warn("Extended notes couldn't start. See the log for details.")
                 }
                 starting = false
                 draft = notes.store.draft
@@ -687,37 +753,46 @@ struct NotesCell: View {
 
     private func live(_ s: NoteSession) -> some View {
         HStack(spacing: 6) {
-            Button { Task { await notes.stop() } } label: {
+            Button {
+                if renaming { commitRename() }
+                Task { await notes.stop() }
+            } label: {
                 Circle().strokeBorder(ob.record, lineWidth: 1.5).background(Circle().fill(!notes.isPaused && !notes.isFinishing ? ob.record : .clear))
                     .frame(width: 10, height: 10).frame(width: 22, height: 22).contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .handCursor()
+            .handCursor(!notes.isFinishing)
             .disabled(notes.isFinishing)
             .help(notes.isFinishing ? "Finishing…" : "Stop the session")
             .accessibilityLabel("Stop the extended notes session")
             if renaming {
-                // A standard text box (Windows' Fluent TextBox), all of the name selected.
+                // A standard text box (Windows' Fluent TextBox: padding 10,5,6,6 inside its edge, at least 32 tall), all
+                // of the name selected.
                 TextField("", text: $title).textFieldStyle(.plain).font(Ob.mono(13, .bold)).focused($titleFocused)
-                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .padding(EdgeInsets(top: 6, leading: 11, bottom: 7, trailing: 7))
+                    .frame(minHeight: 32)
                     .modifier(FluentField(focused: titleFocused))
-                    .onSubmit { commit(s) }
-                    .onKeyPress(.escape) { title = s.title; commit(s); return .handled } // Esc puts the name back
-                    .onChange(of: titleFocused) { if !titleFocused { commit(s) } }
+                    .onSubmit { commitRename() }
+                    .onKeyPress(.escape) { title = s.title; commitRename(); return .handled } // Esc puts the name back
+                    .onChange(of: titleFocused) { if !titleFocused { commitRename() } }
                     .accessibilityLabel("Session name")
             } else {
-                Text(s.title.uppercased()).font(Ob.mono(13, .bold)).lineLimit(1).padding(.vertical, 1)
-                    .overlay(alignment: .bottom) { Hairline() }
-                    .contentShape(Rectangle())
-                    .iBeamCursor()
-                    .onTapGesture { startRenaming(s) }
-                    .help("Click to rename")
+                // A button (a Tab stop with Full Keyboard Access; Space starts renaming), named by the title.
+                Button { startRenaming(s) } label: {
+                    Text(s.title.uppercased()).font(Ob.mono(13, .bold)).lineLimit(1).padding(.vertical, 1)
+                        .overlay(alignment: .bottom) { Hairline() }
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .iBeamCursor()
+                .help("Click to rename")
             }
         }
     }
 
     private func startRenaming(_ s: NoteSession) {
         title = s.title
+        renamed = s
         renaming = true
         titleFocused = true
         #if os(macOS)
@@ -725,10 +800,11 @@ struct NotesCell: View {
         #endif
     }
 
-    private func commit(_ s: NoteSession) {
+    private func commitRename() {
         guard renaming else { return }
-        if !title.trimmed.isEmpty && title.trimmed != s.title { s.title = title.trimmed; notes.store.save(s) }
+        if let s = renamed, !title.trimmed.isEmpty && title.trimmed != s.title { s.title = title.trimmed; notes.store.save(s) }
         renaming = false
+        renamed = nil
     }
 
     /// Always editable: the live transcript, or the draft between sessions; a hint while it's empty.
@@ -761,14 +837,16 @@ struct NotesCell: View {
         Group {
             if PageScroll<EmptyView>.flat {
                 MarkdownReadingView(text: value, size: 13).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .padding(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8)).clipped()
+                    .padding(EdgeInsets(top: 7, leading: 11, bottom: 7, trailing: 11)).clipped()
             } else {
                 // The session's transcript and the draft are different texts: a fresh view for each.
-                MarkdownEditor(text: value, size: 13, label: "Extended notes", inset: CGSize(width: 8, height: 6), onEdit: edit)
+                // Windows' Padding 8,6 sits inside the box's 1-px edge, and the text view adds 2 more at each side.
+                MarkdownEditor(text: value, size: 13, label: "Extended notes", inset: CGSize(width: 11, height: 7), onEdit: edit,
+                               onFocus: { boxFocused = $0 })
                     .id(notes.current?.id ?? "draft")
             }
         }
-        .modifier(FluentField(focused: false))
+        .modifier(FluentField(focused: boxFocused))
         .overlay(alignment: .topLeading) {
             if value.isEmpty {
                 Text(hint).font(Ob.sans(12.5)).foregroundStyle(ob.muted).padding(EdgeInsets(top: 9, leading: 12, bottom: 0, trailing: 12)).allowsHitTesting(false)
@@ -782,15 +860,17 @@ struct NotesCell: View {
 struct FluentField: ViewModifier {
     var focused: Bool
     @Environment(\.ob) private var ob
+    @State private var hover = false
 
     func body(content: Content) -> some View {
         content.background {
             let shape = RoundedRectangle(cornerRadius: 4)
             ZStack(alignment: .bottom) {
+                // ControlFillColorDefault; Secondary under the pointer; InputActive while typing.
                 if ob.dark {
-                    shape.fill(focused ? Color(hex: 0x1E1E1E, alpha: 0.7) : Color.white.opacity(0.06))
+                    shape.fill(focused ? Color(hex: 0x1E1E1E, alpha: 0.7) : Color.white.opacity(hover ? 0.083 : 0.06))
                 } else {
-                    shape.fill(Color.white.opacity(focused ? 1 : 0.7))
+                    shape.fill(focused ? Color.white : hover ? Color(hex: 0xF9F9F9, alpha: 0.5) : Color.white.opacity(0.7))
                 }
                 shape.strokeBorder(ob.dark ? Color.white.opacity(0.07) : Color.black.opacity(0.06), lineWidth: 1)
                 Rectangle().fill(focused ? ob.accent : ob.dark ? Color.white.opacity(0.55) : Color.black.opacity(0.45))
@@ -798,6 +878,7 @@ struct FluentField: ViewModifier {
             }
             .clipShape(shape)
         }
+        .onHover { hover = $0 }
     }
 }
 
@@ -826,14 +907,21 @@ struct HistoryCell: View {
     @State private var done: String?
     @State private var doneShown = false
     @State private var dones = 0
+    /// The insert button's label: the longest that fits beside COPY, picked again only when the row's width changes
+    /// (DashboardPage.FitInsertLabel on `bottom.SizeChanged`), so while COPY flashes a wider label it trims instead.
+    @State private var insertLabel = Self.insertLabels[0]
+    @State private var rowWidth: CGFloat = 0
+    @State private var copyWidth: CGFloat = 0
 
-    static let insertLabel = "Insert transcription into the last app"
+    static let insertLabels = ["INSERT TRANSCRIPTION INTO THE LAST APP", "INSERT INTO LAST APP", "INSERT"]
 
     var body: some View {
-        let text = last.map(Self.shown) ?? "Nothing dictated yet. Your last dictation shows here."
+        let shownText = last.map(Self.shown)
+        let text = shownText ?? "Nothing dictated yet. Your last dictation shows here."
         VStack(alignment: .leading, spacing: 0) {
             header.padding(.bottom, 6)
-            FittedText(text: text, color: last == nil ? ob.muted : ob.ink, resetKey: last?.id)
+            // Back to the top when the last dictation changes, or its text does (a rerun, the earlier result put back).
+            FittedText(text: text, color: last == nil ? ob.muted : ob.ink, resetKey: last.map { "\($0.id)|\(shownText ?? "")" })
 
             // Where the text went, for 5 s, fading in and out (DashboardPage.History.ShowHistoryDone).
             VStack(alignment: .leading, spacing: 0) {
@@ -841,27 +929,43 @@ struct HistoryCell: View {
                     Text(done).font(Ob.mono(11)).foregroundStyle(ob.accent).lineLimit(1).truncationMode(.tail).help(done)
                         .opacity(doneShown ? 1 : 0)
                         .padding(.bottom, 6)
+                        .transition(.asymmetric(insertion: .opacity.animation(.linear(duration: 0.15)), removal: .identity))
                 }
-                HStack(spacing: 8) {
+                // COPY keeps its place at the right, 8 from the insert button, which takes what is left.
+                HStack(spacing: 0) {
                     #if os(macOS)
-                    Button { insert() } label: {
-                        ViewThatFits {
-                            Text(Self.insertLabel)
-                            Text("Insert into last app")
-                            Text("Insert")
-                        }
-                    }
-                    .buttonStyle(CapsuleButtonStyle(kind: .quiet, size: 10, padding: 12))
-                    .disabled(last?.transcription.isEmpty != false)
-                    .help("Insert the last dictation's transcription (the words as heard) into the app it went to; this window stays in front")
-                    .accessibilityLabel(Self.insertLabel)
+                    Button { insert() } label: { Text(insertLabel).truncationMode(.tail) }
+                        .buttonStyle(CapsuleButtonStyle(kind: .quiet, size: 10, padding: 12))
+                        .disabled(last?.transcription.isEmpty != false)
+                        .help("Insert the last dictation's transcription (the words as heard) into the app it went to; this window stays in front")
+                        .accessibilityLabel(Self.insertLabels[0])
                     #endif
                     Spacer(minLength: 0)
-                    HistoryCopyButton(text: last.map(Self.shown) ?? "")
+                    HistoryCopyButton(text: shownText ?? "")
+                        .background(GeometryReader { g in Color.clear.preference(key: CopyWidthKey.self, value: g.size.width) })
+                        .padding(.leading, 8)
+                }
+                .background(GeometryReader { g in
+                    Color.clear.onChange(of: g.size.width, initial: true) { rowWidth = g.size.width; fitInsertLabel() }
+                })
+                .onPreferenceChange(CopyWidthKey.self) { w in
+                    // The first measure of COPY only (its later flashes don't re-pick the label).
+                    let first = copyWidth == 0
+                    copyWidth = w
+                    if first { fitInsertLabel() }
                 }
             }
             .padding(.top, 8)
         }
+    }
+
+    /// The longest label that fits in the row beside COPY, the gap and the button's own padding; the shortest (which
+    /// then trims) when none does.
+    private func fitInsertLabel() {
+        guard rowWidth > 0 else { return }
+        let room = rowWidth - copyWidth - 8 - 24
+        let font = Ob.monoFont(10)
+        insertLabel = Self.insertLabels.first { TextFit.width($0, font: font) - 1 <= room } ?? Self.insertLabels[Self.insertLabels.count - 1]
     }
 
     /// HISTORY (opens the page as it was) and how many are kept, both in the accent under the pointer.
@@ -869,16 +973,19 @@ struct HistoryCell: View {
         HStack(alignment: .top, spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
                 Text("HISTORY").font(Ob.mono(13, .bold)).foregroundStyle(hover ? ob.accent : ob.ink)
-                Readout(last == nil || last?.aiEdit?.isEmpty == false ? "Last AI edit" : "Last dictation // No AI edit", size: 10).padding(.top, 6)
-                if let last {
-                    Text(meta(last)).font(Ob.mono(11)).foregroundStyle(ob.muted).lineLimit(1).truncationMode(.tail)
-                }
+                Readout(last == nil || last?.aiOutput?.isEmpty == false ? "Last AI edit" : "Last dictation // No AI edit", size: 10).lineLimit(1).padding(.top, 6)
+                // With nothing dictated the line stays, empty, one line tall (an empty TextBlock still measures a line).
+                Text(last.map(meta) ?? " ").font(Ob.mono(11)).foregroundStyle(ob.muted).lineLimit(1).truncationMode(.tail)
+                    .accessibilityHidden(last == nil)
             }
-            Spacer(minLength: 8)
+            Spacer(minLength: 0)
+            // Docked at the right at its full width, 8 from the titles; only the meta line gives way.
             VStack(alignment: .trailing, spacing: 0) {
                 Text(model.history.count.formatted()).font(Ob.mono(28, .bold)).foregroundStyle(hover ? ob.accent : ob.ink)
-                Readout(kept, size: 10)
+                Readout(kept, size: 10).lineLimit(1)
             }
+            .fixedSize()
+            .padding(.leading, 8)
         }
         .contentShape(Rectangle())
         .onHover { hover = $0 }
@@ -915,9 +1022,10 @@ struct HistoryCell: View {
             : s.historyDays > 0 ? "kept · last \(HistoryStore.daysLabel(s.historyDays))" : "kept, no limit"
     }
 
-    /// What the cell shows of a dictation: the AI's edit; without one, what went in (or what was heard).
+    /// What the cell shows of a dictation: the AI's edit (AiOutput: not an old entry's failed edit); without one, what
+    /// went in (or what was heard).
     static func shown(_ e: HistoryEntry) -> String {
-        if let ai = e.aiEdit, !ai.isEmpty { return ai }
+        if let ai = e.aiOutput, !ai.isEmpty { return ai }
         return e.inserted.isEmpty ? e.transcription : e.inserted
     }
 
@@ -933,6 +1041,11 @@ struct HistoryCell: View {
         if let yesterday = cal.date(byAdding: .day, value: -1, to: now), cal.isDate(d, inSameDayAs: yesterday) { return "Yesterday " + DateText.time(d) }
         return DateText.dayMonthTime(d)
     }
+}
+
+private struct CopyWidthKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
 /// COPY (a QuietButton with FontSize 10 and Padding 12,4): greyed out with nothing to copy, otherwise flashes COPIED ✓
@@ -960,7 +1073,7 @@ struct HistoryCopyButton: View {
 struct FittedText: View {
     var text: String
     var color: Color
-    var resetKey: UUID?
+    var resetKey: String?
 
     static let smallest: CGFloat = 11, largest: CGFloat = 30
 
@@ -1013,6 +1126,18 @@ enum TextFit {
 
     static func width(_ text: String, font: PlatformFont) -> CGFloat {
         NSAttributedString(string: text, attributes: [.font: font]).size().width.rounded(.up) + 1
+    }
+
+    /// The width of a text wrapped at `max`: its widest line (a TextBlock with MaxWidth and wrapping sizes to that).
+    static func wrappedWidth(_ text: String, font: PlatformFont, max: CGFloat) -> CGFloat {
+        let one = width(text, font: font)
+        guard one > max else { return one }
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byWordWrapping
+        let s = NSAttributedString(string: text, attributes: [.font: font, .paragraphStyle: paragraph])
+        let used = s.boundingRect(with: CGSize(width: max, height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading],
+                                  context: nil).width.rounded(.up) + 1
+        return min(used, max)
     }
 }
 
