@@ -177,21 +177,34 @@ final class MarkdownEditorController: NSObject {
         refreshCaret()
     }
 
-    /// The cursor moved: its line opens (a selection across lines shows them all read).
+    /// The cursor moved: its line opens (a selection across lines shows them all read). The Play button starts from
+    /// the open line's cursor (MarkdownPresenter sets the box's caret only when a line opens, is edited, or its cursor
+    /// moves); a selection made over the text read leaves it where it was.
     func selectionChanged() {
-        guard !applying, !clicking else { return }
+        guard !applying, !clicking, !closed else { return }
         let sel = selectedRange
-        onCaret?(sel.location)
-        guard !closed else { return }
         let line = lineIndex(sel.location)
-        if sel.length == 0 || line == lineIndex(NSMaxRange(sel)) { setOpen(line) } else { setOpen(nil) }
+        if sel.length == 0 || line == lineIndex(NSMaxRange(sel)) {
+            setOpen(line)
+            onCaret?(sel.location)
+        } else {
+            setOpen(nil)
+        }
     }
 
     func willClick() { clicking = true }
 
-    /// After a click (or a drag that selected text): a plain click opens the line there.
+    /// After a click: a plain click opens the line there. A drag over the text read selects it to copy: it stays
+    /// rendered (MarkdownPresenter's mouse-up returns while the viewer has a selection), and typing still goes on at the end.
     func didClick() {
         clicking = false
+        let editing = !closed && open != nil
+        if !editing && selectedRange.length > 0 {
+            closed = true
+            setOpen(nil)
+            refreshCaret()
+            return
+        }
         closed = false
         selectionChanged()
         refreshCaret()
@@ -228,24 +241,29 @@ final class MarkdownEditorController: NSObject {
         refreshCaret()
     }
 
-    /// Enter: a list goes on (the next bullet, the next number); Enter on an empty list item ends the list. Returns
-    /// whether it was handled here.
-    func newline() -> Bool {
-        beforeTyping()
+    /// Return (MarkdownPresenter.OnKey / Split). On the open line: it splits at the cursor and the cursor goes to the
+    /// new line; a list goes on (the next bullet, the next number); Return on an empty list item ends the list. The
+    /// line break is the text's own ("\r\n" in a text that has one). With ⌥ or ⌃ (or ⌘) nothing happens: Windows splits
+    /// only on Enter without modifiers (Shift aside), and the line box doesn't take a Return of its own. While nothing
+    /// is open, Return goes to the read view as typing does: the last line opens with the cursor at its end, and no line
+    /// is added.
+    func returnKey(modified: Bool) {
+        if closed { beforeTyping(); return }
+        if modified { return }
         let sel = selectedRange
+        let ns = storage.string as NSString
+        let newline = ns.range(of: "\r\n").location != NSNotFound ? "\r\n" : "\n"
         let ls = lines
         let i = lineIndex(sel.location)
         let content = ls[i].content
-        let line = (storage.string as NSString).substring(with: content)
-        switch NotesMarkdown.enter(line: line, caret: sel.location - content.location) {
+        switch NotesMarkdown.enter(line: ns.substring(with: content), caret: sel.location - content.location) {
         case .plain:
-            return false
+            replace(sel, with: newline)
         case .endList:
             replace(content, with: "")
         case .continue(let prefix):
-            replace(sel, with: "\n" + prefix)
+            replace(sel, with: newline + prefix)
         }
-        return true
     }
 
     private func refreshCaret() {
@@ -325,11 +343,8 @@ final class MarkdownEditorController: NSObject {
 
     // MARK: The menu
 
-    /// The right-click (long-press) menu's Jump item at `offset`; the cursor goes there unless that is inside the selection.
-    func jumpItem(at offset: Int) -> MarkdownJump? {
-        onCaret?(offset)
-        return jump?(offset)
-    }
+    /// The right-click (long-press) menu's Jump item at `offset`.
+    func jumpItem(at offset: Int) -> MarkdownJump? { jump?(offset) }
 
     // MARK: Platform
 
@@ -387,6 +402,29 @@ final class MarkdownEditorController: NSObject {
 
     private func focus() { textView?.window?.makeFirstResponder(textView) }
 
+    /// A click elsewhere in the window (▶, a pill, ⚑ MARK, the slider, EXPORT ▾, the title) takes the keyboard from
+    /// the text, as WPF's buttons take the focus on mouse-down: the open line is rendered again (MarkdownPresenter's
+    /// LostKeyboardFocus) and typing no longer goes into the text. The view's own scroll bar keeps it.
+    private var clickWatch: Any?
+
+    func watchClicks() {
+        guard clickWatch == nil else { return }
+        clickWatch = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] event in
+            MainActor.assumeIsolated {
+                guard let self, let tv = self.textView, let window = tv.window, event.window === window,
+                      window.firstResponder === tv, let scroll = tv.enclosingScrollView else { return }
+                if scroll.bounds.contains(scroll.convert(event.locationInWindow, from: nil)) { return }
+                window.makeFirstResponder(nil)
+            }
+            return event
+        }
+    }
+
+    func stopWatchingClicks() {
+        if let clickWatch { NSEvent.removeMonitor(clickWatch) }
+        clickWatch = nil
+    }
+
     private func replace(_ range: NSRange, with s: String) {
         guard let tv = textView, tv.shouldChangeText(in: range, replacementString: s) else { return }
         tv.textStorage?.replaceCharacters(in: range, with: NSAttributedString(string: s, attributes: tv.typingAttributes))
@@ -395,15 +433,27 @@ final class MarkdownEditorController: NSObject {
     }
 
     /// Right-click: Jump to this moment, then Cut / Copy / Paste on the open line, or Copy / Edit here on the text read.
+    /// On the open line (a text box of its own on Windows) the cursor moves there unless the click was inside the
+    /// selection, and Play follows the cursor. Elsewhere the open line stays as it is and the text read gets its own
+    /// menu; Play then starts from the place right-clicked (NotesPage.AttachJumpView sets the box's caret there).
     func menu(for event: NSEvent) -> NSMenu? {
         guard let tv = textView else { return nil }
         let at = tv.characterIndexForInsertion(at: tv.convert(event.locationInWindow, from: nil))
         let sel = tv.selectedRange()
-        let editing = !closed && open != nil
-        if editing && !(sel.length > 0 && at >= sel.location && at <= NSMaxRange(sel)) { tv.setSelectedRange(NSRange(location: at, length: 0)) }
+        let ls = lines
+        let editing: Bool
+        if !closed, let o = open, o < ls.count, at >= ls[o].content.location, at <= NSMaxRange(ls[o].content) { editing = true } else { editing = false }
+        let place: Int
+        if editing {
+            if !(sel.length > 0 && at >= sel.location && at <= NSMaxRange(sel)) { tv.setSelectedRange(NSRange(location: at, length: 0)) }
+            place = tv.selectedRange().location
+        } else {
+            onCaret?(at)
+            place = at
+        }
         let menu = NSMenu()
         menu.autoenablesItems = false
-        if let j = jumpItem(at: at) {
+        if let j = jumpItem(at: place) {
             let item = MenuAction(title: j.title, action: j.action)
             item.isEnabled = j.enabled
             menu.addItem(item)
@@ -419,9 +469,10 @@ final class MarkdownEditorController: NSObject {
                 menu.addItem(item)
             }
         } else {
+            // Copy copies the text read's selection (none while a line is open: the open line holds the cursor).
             let copy = NSMenuItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
             copy.target = tv
-            copy.isEnabled = sel.length > 0
+            copy.isEnabled = closed && sel.length > 0
             menu.addItem(copy)
             menu.addItem(MenuAction(title: "Edit here") { [weak self] in self?.edit(at: at) })
         }
@@ -517,9 +568,20 @@ final class MarkdownTextView: NSTextView {
         super.insertText(string, replacementRange: replacementRange)
     }
 
+    /// Return splits the open line; ⌥Return (`insertNewlineIgnoringFieldEditor:`), ⌃Return (`insertLineBreak:`) and
+    /// ⌘Return do nothing there (`returnKey`).
     override func insertNewline(_ sender: Any?) {
-        if controller?.newline() != true { super.insertNewline(sender) }
+        let mods = NSApp.currentEvent.map { $0.type == .keyDown ? $0.modifierFlags.intersection([.command, .control, .option]) : [] } ?? []
+        controller?.returnKey(modified: !mods.isEmpty)
     }
+    override func insertNewlineIgnoringFieldEditor(_ sender: Any?) { controller?.returnKey(modified: true) }
+    override func insertLineBreak(_ sender: Any?) { controller?.returnKey(modified: true) }
+    override func insertParagraphSeparator(_ sender: Any?) { controller?.returnKey(modified: true) }
+
+    /// While nothing is open the text is read only, as Windows' viewer: ⌘V and ⌘X do nothing (⌘C copies).
+    override func paste(_ sender: Any?) { if controller?.closed != true { super.paste(sender) } }
+    override func pasteAsPlainText(_ sender: Any?) { if controller?.closed != true { super.pasteAsPlainText(sender) } }
+    override func cut(_ sender: Any?) { if controller?.closed != true { super.cut(sender) } }
 
     override func cancelOperation(_ sender: Any?) { controller?.escape() }
 
@@ -561,6 +623,7 @@ extension MarkdownEditorController: NSTextViewDelegate {
 extension MarkdownEditor: NSViewRepresentable {
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = context.coordinator.makeView()
+        context.coordinator.watchClicks()
         context.coordinator.textView.textContainerInset = inset
         context.coordinator.textView.setAccessibilityLabel(label + ", formatted for reading; click a line to edit it")
         update(context.coordinator, palette: context.environment.ob)
@@ -569,7 +632,10 @@ extension MarkdownEditor: NSViewRepresentable {
 
     func updateNSView(_ scroll: NSScrollView, context: Context) { update(context.coordinator, palette: context.environment.ob) }
 
-    static func dismantleNSView(_ scroll: NSScrollView, coordinator: MarkdownEditorController) { coordinator.setPlayback(nil) }
+    static func dismantleNSView(_ scroll: NSScrollView, coordinator: MarkdownEditorController) {
+        coordinator.setPlayback(nil)
+        coordinator.stopWatchingClicks()
+    }
 }
 #else
 final class MarkdownUITextView: UITextView {
@@ -594,11 +660,13 @@ extension MarkdownEditorController: UITextViewDelegate {
 
     func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
         if text == "\t" { return false } // Tab doesn't type a tab (Windows' AcceptsTab="False")
-        return text == "\n" ? !newline() : true
+        if text == "\n" { returnKey(modified: false); return false }
+        return true
     }
 
     /// The long-press menu: Jump to this moment first, then the usual items.
     func textView(_ textView: UITextView, editMenuForTextIn range: NSRange, suggestedActions: [UIMenuElement]) -> UIMenu? {
+        onCaret?(range.location)
         guard let j = jumpItem(at: range.location) else { return nil }
         let jump = UIAction(title: j.title, attributes: j.enabled ? [] : .disabled) { _ in j.action() }
         return UIMenu(children: [jump] + suggestedActions)
