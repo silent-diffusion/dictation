@@ -30,3 +30,30 @@ public enum SpeechModelChoice {
         #endif
     }
 }
+
+/// A new install's speech model while it downloads (Windows' RuntimeInstaller.ChooseModels at setup, ModelsChosen):
+/// picked once, when there was no settings.json at launch, and kept in speech-setup.json until it is downloaded and in
+/// use, so the launch's own settings save (or quitting before the download ends) can't lose it.
+public struct FirstRunSpeech: Sendable {
+    struct Setup: Codable { var model: String }
+    private let file: JSONFile<Setup>
+
+    public init(file url: URL = AppPaths.dataDir.appending(path: "speech-setup.json")) { file = JSONFile(url: url) }
+
+    /// The model still to set up at launch: a new install's pick (`pick`, written down at once), else the one an earlier
+    /// launch picked and didn't finish.
+    public func atLaunch(newInstall: Bool, pick: () -> String) -> String? {
+        guard newInstall else { return pending }
+        let model = pick()
+        pending = model
+        return model
+    }
+
+    /// The model waiting to be set up; nil when none (setting nil forgets it).
+    public var pending: String? {
+        get { file.load()?.model }
+        nonmutating set {
+            if let newValue { _ = file.save(Setup(model: newValue)) } else { try? FileManager.default.removeItem(at: file.url) }
+        }
+    }
+}

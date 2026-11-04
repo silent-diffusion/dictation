@@ -203,14 +203,10 @@ final class AppModel: ObservableObject {
     /// The Whisper model a new install picked for this device (Windows' RuntimeInstaller.ChooseModels), while it
     /// downloads: until it is in, dictation uses Apple Speech, then it switches over by itself. Kept across launches.
     /// In the data folder (speech-setup.json), next to the settings it belongs with.
-    @Published private(set) var pendingSpeechModel: String? = AppModel.speechSetupFile.load()?.model {
-        didSet {
-            if let model = pendingSpeechModel { Self.speechSetupFile.save(SpeechSetup(model: model)) }
-            else { try? FileManager.default.removeItem(at: Self.speechSetupFile.url) }
-        }
+    @Published private(set) var pendingSpeechModel: String? = nil {
+        didSet { if !Self.snapshotMode { firstRunSpeech.pending = pendingSpeechModel } }
     }
-    private struct SpeechSetup: Codable { var model: String }
-    private static let speechSetupFile = JSONFile<SpeechSetup>("speech-setup.json")
+    private let firstRunSpeech = FirstRunSpeech()
     /// The AI status line (Windows' LlmService status: "Starting AI runtime…", "Loading qwen3:8b…", "Ready · …", "AI
     /// model 'x' not installed"), set by the warm-up; `aiStatusOK` is false while loading or when it failed.
     @Published private(set) var aiStatus = "AI: starting…"
@@ -329,9 +325,13 @@ final class AppModel: ObservableObject {
             // A new install's AI model (`LocalAISetup`): Windows' qwen2.5:3b on Oberton's own runtime in the direct
             // download, Apple Intelligence in the App Store version.
             if !Self.snapshotMode { LocalAISetup.newInstall(&settings) }
-            // The speech model for this device, as Windows' setup picks it: downloaded during setup
-            // (`startDefaultSpeechDownload`); Apple Speech until it is in.
-            if !Self.snapshotMode { pendingSpeechModel = Self.recommendedSpeechModel(language: settings.language) }
+        }
+        // The speech model for this device, as Windows' setup picks it: downloaded during setup
+        // (`startDefaultSpeechDownload`); Apple Speech until it is in. Written down at once (property observers don't run
+        // in init), so quitting before the download ends doesn't lose it.
+        if !Self.snapshotMode {
+            let language = settings.language
+            pendingSpeechModel = firstRunSpeech.atLaunch(newInstall: settingsOnDisk == nil) { Self.recommendedSpeechModel(language: language) }
         }
         if movesNotepad { settings.notepad = "" }
         startProfiles(fresh: freshProfiles)
