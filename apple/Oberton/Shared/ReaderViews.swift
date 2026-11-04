@@ -877,11 +877,12 @@ struct ReaderPositionPicker: View {
     var stroke: Color? = nil
     var fill: Color? = nil
     var radius: CGFloat = 2
+    /// The grid's name: "Player position" on the Read aloud page, "Read aloud player position" in Settings › Layout.
+    var name = "Player position"
 
     var body: some View {
-        PositionPicker(position: Binding(get: { place }, set: { model.settings.readerPosition = .at($0) }), radius: radius,
-                       stroke: stroke, fill: fill)
-            .accessibilityElement(children: .contain).accessibilityLabel("Player position")
+        PositionPicker(position: Binding(get: { place }, set: { model.settings.readerPosition = .at($0) }),
+                       name: name, describe: Self.describe, radius: radius, stroke: stroke, fill: fill)
             .disabled(samePlace)
             .opacity(samePlace ? 0.45 : 1)
     }

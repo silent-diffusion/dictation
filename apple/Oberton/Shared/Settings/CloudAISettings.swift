@@ -19,8 +19,7 @@ struct CloudSection: View {
             SwitchCard {
                 ObSwitch("Keep everything offline",
                          detail: "While this is on, nothing is ever sent to a cloud model, whatever a profile selects: such a profile inserts your words as spoken and says why.",
-                         isOn: $model.settings.cloud.keepOffline)
-                    .padding(.vertical, 4)
+                         titleWeight: .semibold, isOn: $model.settings.cloud.keepOffline)
             }
             label("Anthropic (Claude)", top: 26)
             keyCard(text: $anthropic, provider: .anthropic, name: "Anthropic API key") { EmptyView() }

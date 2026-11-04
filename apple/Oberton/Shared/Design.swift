@@ -87,9 +87,15 @@ enum Ob {
     static func sans(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font { .system(size: size, weight: weight) }
     /// The window's own text size: WPF draws text without a size of its own at 12 (MainWindow sets none).
     static let body: CGFloat = 12
-    /// Extra space between lines for text set at `size` to land on a WPF LineHeight of `lineHeight`.
-    static func lineSpacing(_ size: CGFloat, lineHeight: CGFloat) -> CGFloat { max(0, lineHeight - size * 1.2) }
+    /// Extra space between lines for text set at `size` to land on a WPF LineHeight of `lineHeight`. The natural line
+    /// is the face's own: about 1.2× for the sans, 1.162× for Cascadia Mono ((1900 + 480) / 2048, its hhea).
+    static func lineSpacing(_ size: CGFloat, lineHeight: CGFloat, mono: Bool = false) -> CGFloat {
+        max(0, lineHeight - size * (mono && hasCascadia ? 1.162 : 1.2))
+    }
     static func jp(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font { .custom("Hiragino Sans", size: size).weight(weight) }
+    /// A WPF Border's 1 px line. WPF lays a Border's Padding out INSIDE its BorderThickness, so content sits padding + 1
+    /// from the outer edge, where SwiftUI's overlaid stroke would sit on the padding: the shared boxes add it.
+    static let border: CGFloat = 1
 }
 
 /// Applies the paper, the palette and the Japanese setting from Settings to everything inside.
@@ -131,10 +137,44 @@ enum TextSize {
         return direction > 0 ? steps.first { $0 > now + 0.001 } ?? max : steps.last { $0 < now - 0.001 } ?? min
     }
 
-    // The shortcuts as tooltips and captions name them (Windows: Ctrl+0, Ctrl+B, Alt+Left).
-    static let resetKey = "⌘0"
-    static let menuKey = "⌘B"
-    static let backKey = "⌘["
+    // The shortcuts as tooltips and captions name them (Windows: Ctrl+0, Ctrl+B, Alt+Left; Ctrl → ⌘, the "+" kept).
+    static let resetKey = "⌘+0"
+    static let menuKey = "⌘+B"
+    static let backKey = "⌘+["
+}
+
+/// Numbers as Windows formats them: in the user's region ("1,75", "125 %"), a half rounded away from zero (.NET's
+/// format strings); `Fmt.banker` is Math.Round's default, half to even, for counts Windows rounds in code.
+enum Fmt {
+    private static func formatter(_ style: NumberFormatter.Style, _ digits: Int) -> NumberFormatter {
+        let f = NumberFormatter()
+        f.locale = .current
+        f.numberStyle = style
+        f.minimumFractionDigits = digits
+        f.maximumFractionDigits = digits
+        f.roundingMode = .halfUp
+        return f
+    }
+
+    /// "P0": 0.9 → "90%" (or "90 %").
+    static func percent(_ value: Double, digits: Int = 0) -> String {
+        formatter(.percent, digits).string(from: NSNumber(value: value)) ?? "\(Int((value * 100).rounded()))%"
+    }
+
+    /// "N0", "N1"…: grouped, with the region's decimal mark.
+    static func number(_ value: Double, digits: Int = 0) -> String {
+        formatter(.decimal, digits).string(from: NSNumber(value: value)) ?? String(value)
+    }
+
+    /// "F2": no grouping, the region's decimal mark ("1,75").
+    static func fixed(_ value: Double, digits: Int) -> String {
+        let f = formatter(.decimal, digits)
+        f.usesGroupingSeparator = false
+        return f.string(from: NSNumber(value: value)) ?? String(format: "%.\(digits)f", value)
+    }
+
+    /// Math.Round(x): a half goes to the even neighbour (2.5 → 2, 3.5 → 4).
+    static func banker(_ value: Double) -> Double { value.rounded(.toNearestOrEven) }
 }
 
 /// Lays the window out at 1/scale of its size and scales it up to fill (WPF's LayoutTransform on the root), so
@@ -165,17 +205,20 @@ struct Readout: View {
     var size: CGFloat = 10.5
     var color: Color?
     var weight: Font.Weight = .regular
+    /// Capitals (the Windows XAML writes its labels in capitals); false shows a text as it is (a MonoLabel set from code).
+    var caps = true
     @Environment(\.ob) private var ob
 
-    init(_ text: String, size: CGFloat = 10.5, color: Color? = nil, weight: Font.Weight = .regular) {
+    init(_ text: String, size: CGFloat = 10.5, color: Color? = nil, weight: Font.Weight = .regular, caps: Bool = true) {
         self.text = text
         self.size = size
         self.color = color
         self.weight = weight
+        self.caps = caps
     }
 
     var body: some View {
-        Text(text.uppercased())
+        Text(caps ? text.uppercased() : text)
             .font(Ob.mono(size, weight))
             .foregroundStyle(color ?? ob.muted)
     }
@@ -217,17 +260,75 @@ struct PageTitle<Trailing: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Decor.cs PageHeader: a long title is cut with "…" (the readout keeps its room), the decor 2 above the
-            // baseline, the readout right-aligned 6 above the rule.
-            HStack(alignment: .bottom, spacing: 0) {
+            // Decor.cs PageHeader: the title at the top of the row, cut with "…"; the decor 14 after it and 2 above the
+            // row's bottom; the readout right-aligned, 16 from the rest and 6 above the bottom.
+            HeaderRow(decorGap: 14, decorBottom: 2, trailingGap: 16, trailingBottom: 6) {
                 Text(title.uppercased()).font(Ob.mono(size, .bold)).lineLimit(1).truncationMode(.tail)
-                if let japanese { Decor(japanese, size: size - 4, color: ob.divider, weight: .bold).fixedSize().padding(.leading, 14).padding(.bottom, 2) }
-                Spacer(minLength: 16)
-                trailing.multilineTextAlignment(.trailing).fixedSize().padding(.bottom, 6).layoutPriority(1)
+                    .layoutValue(key: HeaderRow.RoleKey.self, value: .title)
+                if let japanese {
+                    Decor(japanese, size: size - 4, color: ob.divider, weight: .bold).noWrap()
+                        .layoutValue(key: HeaderRow.RoleKey.self, value: .decor)
+                }
+                VStack(alignment: .trailing, spacing: 0) { trailing }.multilineTextAlignment(.trailing).fixedSize()
+                    .layoutValue(key: HeaderRow.RoleKey.self, value: .trailing)
             }
             Rule().padding(.top, 6)
             if let summary {
                 Caption(summary).padding(.top, 14)
+            }
+        }
+    }
+}
+
+/// A page header's row as Windows lays it out (Decor.cs PageHeader's DockPanel, and the horizontal StackPanels of the
+/// Dashboard, Analytics and Extended Notes headers): the readout docked right is measured first, then the title takes what
+/// it needs of the rest, and the decor gets what is left (squeezed out before the title is cut). The title sits at the TOP
+/// of the row (a TextBlock left at Stretch); the decor and the readout sit at its bottom.
+struct HeaderRow: Layout {
+    enum Role { case title, decor, trailing }
+    struct RoleKey: LayoutValueKey { static let defaultValue = Role.title }
+    var decorGap: CGFloat
+    var decorBottom: CGFloat
+    var trailingGap: CGFloat
+    var trailingBottom: CGFloat
+
+    private struct Frames { var title: CGSize = .zero, decor: CGSize = .zero, trailing: CGSize = .zero, height: CGFloat = 0 }
+
+    private func measure(_ width: CGFloat?, _ subviews: Subviews) -> Frames {
+        var f = Frames()
+        var room = width ?? .infinity
+        func fit(_ v: LayoutSubview, _ gap: CGFloat) -> CGSize {
+            let avail = max(0, room - gap)
+            var size = v.sizeThatFits(ProposedViewSize(width: avail.isFinite ? avail : nil, height: nil))
+            size.width = min(size.width, avail)
+            room = max(0, room - (size.width > 0 ? size.width + gap : 0))
+            return size
+        }
+        for v in subviews where v[RoleKey.self] == .trailing { f.trailing = fit(v, trailingGap) }
+        for v in subviews where v[RoleKey.self] == .title { f.title = fit(v, 0) }
+        for v in subviews where v[RoleKey.self] == .decor { f.decor = fit(v, decorGap) }
+        f.height = max(f.title.height, f.decor.height > 0 ? f.decor.height + decorBottom : 0,
+                       f.trailing.height > 0 ? f.trailing.height + trailingBottom : 0)
+        return f
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let f = measure(proposal.width, subviews)
+        let used = f.title.width + (f.decor.width > 0 ? decorGap + f.decor.width : 0) + (f.trailing.width > 0 ? trailingGap + f.trailing.width : 0)
+        return CGSize(width: proposal.width ?? used, height: f.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let f = measure(bounds.width, subviews)
+        for v in subviews {
+            switch v[RoleKey.self] {
+            case .title:
+                v.place(at: CGPoint(x: bounds.minX, y: bounds.minY), anchor: .topLeading, proposal: ProposedViewSize(f.title))
+            case .decor:
+                v.place(at: CGPoint(x: bounds.minX + f.title.width + decorGap, y: bounds.maxY - decorBottom), anchor: .bottomLeading,
+                        proposal: ProposedViewSize(f.decor))
+            case .trailing:
+                v.place(at: CGPoint(x: bounds.maxX, y: bounds.maxY - trailingBottom), anchor: .bottomTrailing, proposal: ProposedViewSize(f.trailing))
             }
         }
     }
@@ -244,12 +345,13 @@ struct FieldLabel: View {
     var text: String
     init(_ text: String) { self.text = text }
     var body: some View {
-        Text(text.uppercased()).font(Ob.mono(12, .bold)).padding(.top, 20).padding(.bottom, 6)
+        // NoWrap: a label too long for its column is cut off, not wrapped (WPF's TextBlock default).
+        Text(text.uppercased()).font(Ob.mono(12, .bold)).noWrap().padding(.top, 20).padding(.bottom, 6)
     }
 }
 
-/// Helper prose under a control (App.xaml's Caption): the window's 12, muted, wrapping, lines 19 apart, and 12 below it
-/// unless the Windows page sets its own margin (`bottom: 0`).
+/// Helper prose under a control (App.xaml's Caption): the window's 12, muted, wrapping, every line 19 tall, and 12 below
+/// it unless the Windows page sets its own margin (`bottom: 0`).
 struct Caption: View {
     var text: String
     var size: CGFloat = Ob.body
@@ -257,8 +359,37 @@ struct Caption: View {
     @Environment(\.ob) private var ob
     init(_ text: String, size: CGFloat = Ob.body, bottom: CGFloat = 12) { self.text = text; self.size = size; self.bottom = bottom }
     var body: some View {
-        Text(text).font(Ob.sans(size)).foregroundStyle(ob.muted).lineSpacing(Ob.lineSpacing(size, lineHeight: 19))
+        Text(text).font(Ob.sans(size)).foregroundStyle(ob.muted).wpfLineHeight(19, size: size)
             .fixedSize(horizontal: false, vertical: true).padding(.bottom, bottom)
+    }
+}
+
+extension View {
+    /// Text set on a WPF LineHeight: every line `lineHeight` tall, the first and last included. WPF's TextBlock (the
+    /// default MaxHeight stacking) draws each line at the top of its line box, so the extra space falls below each line;
+    /// `.lineSpacing` gives it between lines only, so the last line's share is added under the block.
+    func wpfLineHeight(_ lineHeight: CGFloat, size: CGFloat, mono: Bool = false) -> some View {
+        let extra = Ob.lineSpacing(size, lineHeight: lineHeight, mono: mono)
+        return self.lineSpacing(extra).padding(.bottom, extra)
+    }
+
+    /// A WPF TextBlock without TextTrimming (NoWrap): one line at its own width, cut off where the room ends, no "…".
+    func noWrap() -> some View {
+        NoWrapLine { self.lineLimit(1) }.clipped()
+    }
+}
+
+/// Lays its one subview out at its ideal width and reports no more than the width offered, so the overflow can be cut.
+private struct NoWrapLine: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let v = subviews.first else { return .zero }
+        let ideal = v.sizeThatFits(.unspecified)
+        return CGSize(width: min(ideal.width, proposal.width ?? ideal.width), height: ideal.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let v = subviews.first else { return }
+        v.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(v.sizeThatFits(.unspecified)))
     }
 }
 
@@ -280,7 +411,8 @@ struct Hairline: View {
 }
 
 /// A cell of the instrument panel. Cells share hairline edges instead of floating as cards: the panel draws its top and
-/// left edge, each cell its right and bottom edge. A cell that is a link gets the accent wash on hover.
+/// left edge, each cell its right and bottom edge. A cell that is a link gets the accent wash on hover. `padding` is the
+/// Windows Padding; the right and bottom lines (BorderThickness 0,0,1,1) sit outside it, as in WPF.
 struct Cell<Content: View>: View {
     var link = false
     var padding = EdgeInsets(top: 12, leading: 16, bottom: 10, trailing: 16)
@@ -291,6 +423,7 @@ struct Cell<Content: View>: View {
     var body: some View {
         content
             .padding(padding)
+            .padding(.trailing, Ob.border).padding(.bottom, Ob.border)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(link && hover ? ob.accentWash : .clear)
             .overlay(alignment: .trailing) { Hairline(vertical: true) }
@@ -300,7 +433,7 @@ struct Cell<Content: View>: View {
     }
 }
 
-/// A hairline box (the Windows "Card"): no fill, no shadow, square corners.
+/// A hairline box (the Windows "Card"): no fill, no shadow, square corners. `padding` is the Windows Padding, inside the line.
 struct Box<Content: View>: View {
     var padding: CGFloat = 16
     @ViewBuilder var content: Content
@@ -308,9 +441,9 @@ struct Box<Content: View>: View {
 
     var body: some View {
         content
-            .padding(padding)
+            .padding(padding + Ob.border)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
+            .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: Ob.border))
     }
 }
 
@@ -328,13 +461,15 @@ struct CapsuleButtonStyle: ButtonStyle {
     var padding: CGFloat?
     /// Windows' MinHeight: 34, or 40 in the setup window.
     var height: CGFloat = 34
+    /// Windows' MinWidth on the button itself (the capsule grows to it).
+    var minWidth: CGFloat? = nil
     @Environment(\.ob) private var ob
     @Environment(\.isEnabled) private var enabled
     @Environment(\.isFocused) private var focused
 
     func makeBody(configuration: Configuration) -> some View {
-        Face(configuration: configuration, kind: kind, size: size, padding: padding ?? (compact ? 10 : 16), height: height, ob: ob,
-             enabled: enabled, focused: focused)
+        Face(configuration: configuration, kind: kind, size: size, padding: padding ?? (compact ? 10 : 16), height: height,
+             minWidth: minWidth, ob: ob, enabled: enabled, focused: focused)
     }
 
     private struct Face: View {
@@ -343,6 +478,7 @@ struct CapsuleButtonStyle: ButtonStyle {
         var size: CGFloat
         var padding: CGFloat
         var height: CGFloat
+        var minWidth: CGFloat?
         var ob: Palette
         var enabled: Bool
         var focused: Bool
@@ -355,8 +491,9 @@ struct CapsuleButtonStyle: ButtonStyle {
                 .lineLimit(1)
                 .foregroundStyle(kind == .primary ? ob.onInk : kind == .dashed && !hover ? ob.muted : ob.ink)
                 // The small ones are Windows' QuietButton with FontSize 10 and Padding 10,3: smaller text, same height.
-                .padding(.horizontal, padding)
-                .frame(minHeight: height)
+                // The Padding sits inside the 1 px border (the dashed one has none: its template ignores Padding).
+                .padding(.horizontal, kind == .dashed ? padding : padding + Ob.border)
+                .frame(minWidth: minWidth, minHeight: height)
                 .background {
                     switch kind {
                     case .primary: Capsule().fill(ob.ink)
@@ -372,9 +509,11 @@ struct CapsuleButtonStyle: ButtonStyle {
                     }
                 }
                 .contentShape(Capsule())
-                .opacity(!enabled ? 0.4 : configuration.isPressed ? (kind == .quiet ? 0.7 : 0.66) : kind == .primary && hover ? 0.82 : 1)
+                // App.xaml's triggers: hover .82 / pressed .66 (primary), pressed .7 (quiet), disabled .4; the dashed
+                // template has only its hover colour.
+                .opacity(kind == .dashed ? 1 : !enabled ? 0.4 : configuration.isPressed ? (kind == .quiet ? 0.7 : 0.66) : kind == .primary && hover ? 0.82 : 1)
                 .onHover { hover = $0 }
-                .handCursor()
+                .handCursor(enabled) // WPF shows no hand over a disabled control
         }
     }
 }
@@ -412,8 +551,8 @@ struct KeyChips: View {
                 if i > 0 { Readout("+").padding(.horizontal, 4) }
                 Text(part.trimmingCharacters(in: .whitespaces).uppercased())
                     .font(Ob.mono(size))
-                    .padding(.horizontal, 8).padding(.vertical, 1)
-                    .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(ob.ink, lineWidth: 1))
+                    .padding(.horizontal, 8 + Ob.border).padding(.vertical, 1 + Ob.border)
+                    .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(ob.ink, lineWidth: Ob.border))
             }
         }
     }
@@ -426,23 +565,26 @@ struct KeyChips: View {
 struct ObSwitch: View {
     var title: String
     var detail: String?
+    /// The title's weight (Cloud's "Keep everything offline" is SemiBold).
+    var titleWeight: Font.Weight = .regular
     @Binding var isOn: Bool
     @Environment(\.ob) private var ob
     @Environment(\.isEnabled) private var enabled
     @State private var hover = false
     @FocusState private var focused
 
-    init(_ title: String, detail: String? = nil, isOn: Binding<Bool>) {
+    init(_ title: String, detail: String? = nil, titleWeight: Font.Weight = .regular, isOn: Binding<Bool>) {
         self.title = title
         self.detail = detail
+        self.titleWeight = titleWeight
         _isOn = isOn
     }
 
     var body: some View {
-        Button { withAnimation(.easeOut(duration: 0.15)) { isOn.toggle() } } label: {
+        Button { isOn.toggle() } label: { // the knob jumps, as the template has no animation
             HStack(spacing: 16) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(Ob.sans(Ob.body)).fixedSize(horizontal: false, vertical: true)
+                    Text(title).font(Ob.sans(Ob.body, titleWeight)).fixedSize(horizontal: false, vertical: true)
                     if let detail { Text(detail).font(Ob.sans(12)).foregroundStyle(ob.muted).fixedSize(horizontal: false, vertical: true) }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -452,7 +594,7 @@ struct ObSwitch: View {
                     Group {
                         if isOn { Circle().fill(ob.onInk) } else { Circle().strokeBorder(ob.muted, lineWidth: 1) }
                     }
-                    .frame(width: 12, height: 12).padding(.horizontal, 4)
+                    .frame(width: 12, height: 12).padding(.horizontal, 4 + Ob.border) // Margin 4,0 inside the track's line
                 }
                 .frame(width: 42, height: 22)
             }
@@ -463,7 +605,7 @@ struct ObSwitch: View {
         .focused($focused)
         .opacity(enabled ? 1 : 0.45)
         .onHover { hover = $0 }
-        .handCursor()
+        .handCursor(enabled)
         .accessibilityRepresentation { Toggle(title, isOn: $isOn) }
     }
 }
@@ -488,23 +630,27 @@ struct RingMeter: View {
         DesignSize(width: 150, height: 150) {
             ZStack(alignment: .top) {
                 Canvas { ctx, _ in
-                    let n = 32, lit = Int((min(max(fraction, 0), 1) * Double(n)).rounded())
+                    // Math.Round: a half goes to the even count, as Windows rounds it.
+                    let n = 32, lit = Int(Fmt.banker(min(max(fraction, 0), 1) * Double(n)))
                     for i in 0..<n {
                         let a = -Double.pi / 2 + Double(i) * 2 * .pi / Double(n)
                         let on = i < lit, d = on ? 6.0 : 3.6
                         let rect = CGRect(x: 75 + 52 * cos(a) - d / 2, y: 64 + 52 * sin(a) - d / 2, width: d, height: d)
                         if on { ctx.fill(Path(ellipseIn: rect), with: .color(accent ? ob.accent : ob.ink)) }
-                        else { ctx.stroke(Path(ellipseIn: rect), with: .color(ob.muted), lineWidth: 0.9) }
+                        // WPF keeps an Ellipse's stroke inside its 3.6 box.
+                        else { ctx.stroke(Path(ellipseIn: rect.insetBy(dx: 0.45, dy: 0.45)), with: .color(ob.muted), lineWidth: 0.9) }
                     }
                 }
                 VStack(spacing: 2) {
                     if let valueAction {
+                        // Only the number itself is the button (a centred TextBlock), not the room beside it.
                         Text(value).font(Ob.mono(21, .bold)).underline().foregroundStyle(accent || valueHover ? ob.accent : ob.ink).lineLimit(1)
-                            .minimumScaleFactor(0.5).frame(maxWidth: 92)
+                            .minimumScaleFactor(0.5).fixedSize(horizontal: value.count <= 7, vertical: false)
                             .contentShape(Rectangle())
                             .onHover { valueHover = $0 }
                             .onTapGesture { valueAction() }
                             .help(valueTip ?? "")
+                            .frame(maxWidth: 92)
                     } else {
                         Text(value).font(Ob.mono(21, .bold)).foregroundStyle(accent ? ob.accent : ob.ink).lineLimit(1).minimumScaleFactor(0.5)
                             .frame(maxWidth: 92)

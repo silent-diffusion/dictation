@@ -62,6 +62,7 @@ struct ObMenu<Value: Hashable>: View {
         }
         .focused($focused)
         .handCursor()
+        .accessibilityValue(options.first { $0.0 == selection }?.1 ?? "") // a label set on the menu still reads its choice
         .menuStyle(.button)
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
@@ -69,24 +70,25 @@ struct ObMenu<Value: Hashable>: View {
     }
 }
 
-/// A hairline-boxed group of switch rows with hairlines between them (the Windows "Card" around switches, each
-/// switch with Margin 18,4).
+/// A hairline-boxed group of switch rows with hairlines between them (the Windows "Card" around switches). A single
+/// switch has Margin 18,4; several share a StackPanel with Margin 18,0. Both inside the card's 1 px line.
 struct SwitchCard<Content: View>: View {
+    var horizontal: CGFloat = 18
     @ViewBuilder var content: Content
     @Environment(\.ob) private var ob
 
     var body: some View {
-        VStack(spacing: 0) {
-            Group(subviews: content) { rows in
+        Group(subviews: content) { rows in
+            VStack(spacing: 0) {
                 ForEach(Array(rows.enumerated()), id: \.offset) { i, row in
                     if i > 0 { Hairline() }
                     row
                 }
             }
+            .padding(.horizontal, horizontal + Ob.border)
+            .padding(.vertical, (rows.count > 1 ? 0 : 4) + Ob.border)
+            .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: Ob.border))
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 4)
-        .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
     }
 }
 
@@ -101,7 +103,8 @@ struct Badge: View {
         Text(text.uppercased())
             .font(Ob.mono(10))
             .foregroundStyle(kind == .active ? ob.onInk : kind == .cloud ? ob.accent : kind == .outline ? ob.muted : ob.ink)
-            .padding(.horizontal, 9).padding(.vertical, 2) // App.xaml's Chip
+            // ModelsPage.Badge: CornerRadius 9, Padding 8,1, inside a 1 px line (text + 18 by text + 4).
+            .padding(.horizontal, 8 + Ob.border).padding(.vertical, 1 + Ob.border)
             .background(Capsule().fill(kind == .active ? ob.ink : kind == .plain ? ob.subtle : .clear))
             .overlay(Capsule().strokeBorder(kind == .cloud ? ob.accent : kind == .plain ? ob.divider : ob.ink, lineWidth: 1))
     }
@@ -119,7 +122,7 @@ struct ChoiceCard<Content: View>: View {
     var body: some View {
         Button(action: action) {
             content
-                .padding(10)
+                .padding(10 + Ob.border) // Padding 10 inside the 1 px line
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(hover ? ob.subtle : .clear)
                 .overlay(Rectangle().strokeBorder(chosen ? ob.ink : focused ? ob.accent : ob.divider, lineWidth: 1))
@@ -140,9 +143,14 @@ struct ChoiceCard<Content: View>: View {
 }
 
 /// Nine spots on a miniature screen, for where the overlay or player appears (LayoutPage's UniformGrid of PositionCells,
-/// 4 in from the frame, each pill centred in its cell).
+/// Margin 4 inside the frame's 1 px line, each pill centred in its cell).
 struct PositionPicker: View {
     @Binding var position: OverlayPosition
+    /// The grid's accessible name ("Overlay position", "Read aloud player position").
+    var name: String = "Position"
+    /// Each spot's tooltip and name: LayoutPage's overlay grid says "Center"; the player grids use Describe ("Center
+    /// of the screen").
+    var describe: (OverlayPosition) -> String = { $0.title }
     var radius: CGFloat = 2
     /// The frame's line and ground: ink and none by default; the Read aloud page's is a rounded Border on Window.
     var stroke: Color? = nil
@@ -155,15 +163,17 @@ struct PositionPicker: View {
             ForEach(0..<3, id: \.self) { row in
                 HStack(spacing: 0) {
                     ForEach(0..<3, id: \.self) { col in
-                        PositionCell(place: all[row * 3 + col], position: $position)
+                        PositionCell(place: all[row * 3 + col], position: $position, name: describe(all[row * 3 + col]))
                     }
                 }
             }
         }
-        .padding(4)
+        .padding(4 + Ob.border)
         .frame(width: 220, height: 124)
         .background(RoundedRectangle(cornerRadius: radius).fill(fill ?? .clear))
         .overlay(RoundedRectangle(cornerRadius: radius).strokeBorder(stroke ?? ob.ink, lineWidth: 1))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(name)
     }
 }
 
@@ -172,6 +182,7 @@ struct PositionPicker: View {
 private struct PositionCell: View {
     var place: OverlayPosition
     @Binding var position: OverlayPosition
+    var name: String
     @Environment(\.ob) private var ob
     @State private var hover = false
     @FocusState private var focused
@@ -189,8 +200,8 @@ private struct PositionCell: View {
         .focused($focused)
         .onHover { hover = $0 }
         .handCursor()
-        .help(ReaderPositionPicker.describe(place)) // "Center of the screen" (LayoutPage.Describe)
-        .accessibilityLabel(ReaderPositionPicker.describe(place))
+        .help(name)
+        .accessibilityLabel(name)
         .accessibilityAddTraits(chosen ? .isSelected : [])
     }
 }
@@ -288,7 +299,7 @@ struct ThreeBoxes: View {
                    copyHelp: "Copy the AI's own output, before it was fitted into the surrounding text",
                    copyEnabled: !(aiEdit ?? "").isEmpty, meta: editMeta) {
                 if let aiEdit {
-                    DiffText(original: transcription, edited: aiEdit, size: Self.size, lineSpacing: Self.spacing)
+                    DiffText(original: transcription, edited: aiEdit, size: Self.size, lineSpacing: Self.spacing).padding(.bottom, Self.spacing)
                 } else {
                     box(Text(safetyNet ? "The safety net rejected the AI's edit, so your words went in as spoken." : editPlaceholder), muted: true)
                 }
@@ -301,8 +312,9 @@ struct ThreeBoxes: View {
         .overlay(Rectangle().strokeBorder(boxed ? ob.divider : .clear, lineWidth: 1))
     }
 
+    /// LineHeight 21: every line 21 tall, the last included.
     private func box(_ text: Text, muted: Bool = false) -> some View {
-        text.font(Ob.sans(Self.size)).foregroundStyle(muted ? ob.muted : ob.ink).lineSpacing(Self.spacing).fixedSize(horizontal: false, vertical: true)
+        text.font(Ob.sans(Self.size)).foregroundStyle(muted ? ob.muted : ob.ink).wpfLineHeight(21, size: Self.size).fixedSize(horizontal: false, vertical: true)
     }
 
     /// The text with `range` in the accent (only the colour, so nothing moves).
@@ -324,7 +336,7 @@ struct ThreeBoxes: View {
                                  meta: String? = nil, @ViewBuilder content: () -> C) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 0) {
-                Readout(title).lineLimit(1)
+                Readout(title).noWrap() // cut at the column, no "…"
                 if let meta { Readout(meta, size: 10).lineLimit(1).padding(.leading, 8) }
                 Spacer(minLength: 0)
                 TextCopyButton(text: copy, enabled: copyEnabled).padding(.leading, 10).help(copyHelp).accessibilityLabel(copyName)
@@ -349,7 +361,8 @@ struct TextCopyButton: View {
         Button {
             let shown = text.isEmpty ? "NOTHING YET" : Clipboard.copy(text) ? "COPIED ✓" : "BUSY, TRY AGAIN"
             label = shown
-            Task { try? await Task.sleep(for: .seconds(1.5)); if label == shown { label = "COPY" } }
+            // Each click starts its own 1.5 s timer and none is stopped, so an earlier click's timer puts COPY back.
+            Task { try? await Task.sleep(for: .seconds(1.5)); label = "COPY" }
         } label: {
             Text(label).font(Ob.mono(10.5)).foregroundStyle(onDark ? Color(hex: 0xE8E7E3) : ob.muted)
         }
@@ -367,6 +380,8 @@ struct ObSlider: View {
     var step: Double?
     var format: (Double) -> String
     var width: CGFloat = 300
+    /// The slider's accessible name (AutomationProperties.Name); the readout beside it keeps its own text.
+    var name: String? = nil
 
     var body: some View {
         HStack(spacing: 12) {
@@ -374,6 +389,8 @@ struct ObSlider: View {
                 if let step { Slider(value: $value, in: range, step: step) } else { Slider(value: $value, in: range) }
             }
             .frame(width: width)
+            .accessibilityLabel(name ?? "")
+            .accessibilityValue(format(value)) // the value itself ("1.75×"), not a percentage of the range
             Text(format(value)).font(Ob.mono(12)).monospacedDigit().frame(width: 60, alignment: .leading)
         }
     }

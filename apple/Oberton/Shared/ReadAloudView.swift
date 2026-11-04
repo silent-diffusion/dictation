@@ -48,16 +48,14 @@ private struct ReadAloudPage: View {
 
                 FieldLabel("Base speed")
                 ObSlider(value: snapped($model.settings.ttsBaseSpeed, 0.05), range: 0.25...4, step: nil,
-                         format: { String(format: "%.2f×", $0) }, width: sizeClass == .compact ? 200 : 300)
-                    .accessibilityLabel("Base speed")
+                         format: { Fmt.fixed($0, digits: 2) + "×" }, width: sizeClass == .compact ? 200 : 300, name: "Base speed")
                 Caption("Every reading starts at this speed. The − and + buttons in the reader, and the menu that opens when you click the speed there, change it too, and the next reading starts where you left it.",
                         bottom: 0).padding(.top, 6)
 
                 #if os(macOS)
                 FieldLabel("Player opacity")
                 ObSlider(value: snapped($model.settings.readerOpacity, 0.02), range: 0.3...1, step: nil,
-                         format: { "\(Int(($0 * 100).rounded()))%" })
-                    .accessibilityLabel("Player opacity")
+                         format: { Fmt.percent($0) }, name: "Player opacity")
                 Caption("How much of the player's dark background shows; the text stays solid. The dictation pill has its own setting under Settings › Layout.",
                         bottom: 0).padding(.top, 6)
 

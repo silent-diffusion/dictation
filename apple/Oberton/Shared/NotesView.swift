@@ -175,7 +175,7 @@ struct NotesLanding: View {
                     .padding(.top, 6)
             }
             // Padding 18,14 inside the card's 1-px border.
-            .padding(EdgeInsets(top: 15, leading: 19, bottom: 15, trailing: 19))
+            .padding(EdgeInsets(top: 14, leading: 18, bottom: 14, trailing: 18)) // Padding 18,14; Box adds the line
         }
     }
 

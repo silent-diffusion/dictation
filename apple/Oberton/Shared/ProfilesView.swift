@@ -594,7 +594,8 @@ private struct Chip: View {
     var body: some View {
         Text(text).font(Ob.mono(11))
             .foregroundStyle(filled ? ob.onInk : ob.ink)
-            .padding(.horizontal, 9).padding(.vertical, 2)
+            // Padding 9,2; DEFAULT keeps the Chip's 1 px line outside it, ACTIVE has BorderThickness 0 (2 smaller).
+            .padding(.horizontal, filled ? 9 : 9 + Ob.border).padding(.vertical, filled ? 2 : 2 + Ob.border)
             .background(Capsule().fill(filled ? ob.ink : .clear))
             .overlay(Capsule().strokeBorder(filled ? .clear : ob.ink, lineWidth: 1)) // Windows' Chip border: Ob.Border, the ink
     }
