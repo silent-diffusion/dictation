@@ -64,7 +64,7 @@ private struct DirectUpdates: View {
             Text(updater.notes.isEmpty ? " " : updater.notes).font(Ob.sans(Ob.body)).opacity(0.75).textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxHeight: 220, alignment: .topLeading).clipped().padding(.top, 8)
-            SwitchCard {
+            SwitchCard(horizontal: 16) { // UpdatesPage: the switch's Margin is 16,4
                 ObSwitch("Check for updates when Oberton starts",
                          detail: "Checking contacts github.com only to read the list of releases. Nothing about you or your dictation is sent. Updating keeps your settings, profiles and downloaded models.",
                          isOn: $model.settings.checkUpdatesOnStartup)

@@ -60,6 +60,7 @@ struct MainWindowContent: View {
             } message: {
                 Text(model.startupProblem ?? "")
             }
+            .dialogLook(.warning, shown: model.startupProblem != nil) // App.Controller_NoticeBridge: MessageBoxImage.Warning
     }
 }
 
