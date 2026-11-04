@@ -7,16 +7,22 @@ struct SpeechSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Caption("Speech is transcribed on this \(Device.noun): by Apple's speech recognizer, which downloads each language once through the system, or by a Whisper model you download here. A change applies at once.")
+            Caption("Speech is transcribed on this \(Device.noun): by Apple's speech recognizer, which downloads each language once through the system, or by a Whisper model you download under Settings › Models. A change applies at once.")
             Text(model.speechStatus).font(Ob.sans(13.5, .semibold)).foregroundStyle(model.speechOK ? ob.ink : ob.accent)
                 .padding(.top, 8)
             if let load = model.whisperLoad { LoadClock(load: load).padding(.top, 4) }
+            // Windows' MODEL combo (260 wide) with the models by id, and whether the one chosen is on this device. The
+            // Mac runs only the CoreML builds made for these models, so there is no free text to type.
             FieldLabel("Model")
-            SpeechModelList().frame(maxWidth: 640)
+            ObMenu(options: [("", "Apple Speech")] + WhisperModels.all.map { ($0.id, $0.id) },
+                   selection: Binding(get: { model.settings.speechModel }, set: { model.useSpeechModel($0) }), width: 260)
+                .accessibilityLabel("Speech model")
+            Caption(modelNote, bottom: 0).padding(.top, 4).frame(maxWidth: 560, alignment: .leading)
             FieldLabel("Language")
-            ObMenu(options: [("", "Auto-detect")] + ["en-US", "en-GB", "en-AU", "en-IN", "de-DE", "fr-FR", "es-ES", "it-IT", "pt-BR", "ja-JP", "zh-CN", "ko-KR"]
-                .map { ($0, Locale.current.localizedString(forIdentifier: $0) ?? $0) }, selection: $model.settings.language, width: 260)
-            Caption(languageNote, bottom: 0).padding(.top, 4).frame(maxWidth: 560, alignment: .leading)
+            // Windows' 120-wide box with a language code, taken when it is left.
+            CommitField(value: $model.settings.language, width: 120).accessibilityLabel("Language")
+            Caption("Two-letter code such as en, de, es. Leave empty to auto-detect (slightly slower, less reliable for short phrases).", bottom: 0)
+                .padding(.top, 4)
             FieldLabel("Quiet speech")
             // A bare switch on the page, as Windows' (no card around it).
             ObSwitch("Even out the volume before transcribing",
@@ -27,27 +33,29 @@ struct SpeechSection: View {
             // Taken when the box is left (Windows' LostFocus binding), not on every keystroke.
             CommitField(value: $model.settings.vocabularyHint).frame(maxWidth: 560).accessibilityLabel("Vocabulary hint")
             Caption("Optional names and jargon to bias recognition, e.g. Kubernetes, Dr. Nguyen, Acme Corp.", bottom: 0).padding(.top, 4)
-            // Loads the speech model again now: a change already applies at once, but a model that failed to load can be
-            // retried here (Windows' save-and-restart button).
-            Button("Apply and restart speech engine") { model.warmUp() }
+            // Windows' save-and-restart: the speech model loads again from scratch, even one that works.
+            Button("Apply and restart speech engine") { model.warmUp(restart: true) }
                 .buttonStyle(.quiet).padding(.top, 16)
         }
     }
 
-    /// Windows: "Leave empty to auto-detect (slightly slower, less reliable for short phrases)."
-    private var languageNote: String {
-        if let id = model.settings.whisperModel, WhisperModels.model(id)?.englishOnly == true {
-            return "\(WhisperModels.name(of: id)) hears only English, so this applies to Apple Speech and the multilingual Whisper models."
-        }
-        return "Auto-detect works with the multilingual Whisper models (slightly slower, less reliable for short phrases); Apple Speech then uses this \(Device.noun)'s language."
+    /// SpeechPage.UpdateNote: whether the chosen model is on this device (the Mac downloads it under Settings › Models,
+    /// where Windows names its setup script).
+    private var modelNote: String {
+        guard let id = model.settings.whisperModel, !WhisperModels.isDownloaded(id) else { return "Installed locally." }
+        return "Not downloaded yet. Download it once under Settings › Models (needs internet; after that it works offline)."
     }
 }
 
-/// The speech models as rows, on Settings › Speech recognition and Models (ModelsPage.xaml.cs's SpeechList): Apple
-/// Speech, then Windows' Whisper models with ACTIVE / LOADED / DOWNLOADED, Download (progress, Cancel) and Use this.
+/// The speech models as rows on Settings › Models (ModelsPage.xaml.cs's SpeechList): Apple Speech, then Windows'
+/// Whisper models with ACTIVE / LOADED / DOWNLOADED, Download (progress, Cancel) and Use this. As on Windows every
+/// button stays usable while a download runs; a second Download does nothing until it is done (`busy`).
 struct SpeechModelList: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.ob) private var ob
+    /// Another download runs on the page (a local AI model, a voice): Download does nothing (Windows' `if (Busy) return;`).
+    /// Asked at the click.
+    var busy: () -> Bool = { false }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -55,7 +63,7 @@ struct SpeechModelList: View {
             ModelRow(name: "Apple Speech",
                      badges: (apple ? [("Active", .active)] : []) + (apple && LiveTranscriber.modelRetained ? [("Loaded", .ok)] : []) + [("Installed", .plain)],
                      detail: "Apple's on-device speech recognizer. Downloads its language once, through the system.",
-                     action: apple ? nil : ("Use this", { model.useSpeechModel("") }), primary: true, enabled: model.whisperDownload == nil)
+                     action: apple ? nil : ("Use this", { model.useSpeechModel("") }), primary: true)
             ForEach(WhisperModels.all) { row($0) }
         }
         // A failed download is a message box on Windows, with its own words or "The download failed. See the log…".
@@ -73,17 +81,16 @@ struct SpeechModelList: View {
         var badges: [(String, Badge.Kind)] = []
         if active { badges.append(("Active", .active)) }
         if active && WhisperEngine.loadedModel == m.id { badges.append(("Loaded", .ok)) }
-        if model.whisperLoad?.model == m.id { badges.append((model.whisperLoad!.firstTime ? "Preparing…" : "Loading…", .cloud)) }
         badges.append(downloaded ? ("Downloaded", .plain) : ("Not downloaded", .outline))
-        if !runs && !downloaded { badges.append(("Too big for this \(Device.noun)", .outline)) }
-        // One download at a time; meanwhile every other row's button is there but disabled (ModelsPage.Row).
+        // A model this device can't run (an iPhone without the memory for a large one) can't be downloaded here: it
+        // says so in its line instead of offering a download that would never work.
+        let detail = "\(m.description) · \(m.size)" + (runs || downloaded ? "" : " · too big for this \(Device.noun)")
         let action: (String, () -> Void)? =
             fetching ? ("Cancel", { model.cancelWhisperDownload() })
-            : !downloaded ? (runs ? ("Download", { model.downloadWhisper(m.id) }) : nil)
+            : !downloaded ? (runs ? ("Download", { if ModelDownloads.mayStart(busy: busy()) { model.downloadWhisper(m.id) } }) : nil)
             : active ? nil : ("Use this", { model.useSpeechModel(m.id) })
-        return ModelRow(name: m.name, badges: badges, detail: "\(m.description) · \(m.size)", action: action,
-                        progress: fetching ? .some(model.whisperDownload?.fraction) : nil,
-                        primary: downloaded, enabled: fetching || model.whisperDownload == nil)
+        return ModelRow(name: m.name, badges: badges, detail: detail, action: action,
+                        progress: fetching ? .some(model.whisperDownload?.fraction) : nil, primary: downloaded)
     }
 }
 

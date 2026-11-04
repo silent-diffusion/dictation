@@ -47,8 +47,8 @@ struct CloudSection: View {
         VStack(alignment: .leading, spacing: 0) {
             Text("API key").font(Ob.sans(Ob.body)).padding(.bottom, 6)
             HStack(spacing: 8) {
+                // Return does nothing here, as in Windows' PasswordBox (the page has no default button): SAVE KEY saves.
                 ObField("", text: text, secure: true, padding: EdgeInsets(top: 5, leading: 6, bottom: 5, trailing: 6)).accessibilityLabel(name)
-                    .onSubmit { save(text, provider) }
                 Button("Save key") { save(text, provider) }.buttonStyle(.primary)
                 Button("Remove") {
                     KeyStore.set(provider, nil)
@@ -78,8 +78,10 @@ struct CloudSection: View {
     }
 }
 
-/// A text box that hands its text over when it is left or Return is pressed (WPF's UpdateSourceTrigger=LostFocus).
-/// With `isValid`, text it refuses isn't handed over and the box gets WPF's red validation border until fixed.
+/// A text box that hands its text over when it is left (WPF's UpdateSourceTrigger=LostFocus): not on Return, which a
+/// single-line WPF TextBox ignores. Leaving the page counts as leaving the box, as the click that leaves a Windows page
+/// takes the focus with it. With `isValid`, text it refuses isn't handed over and the box gets WPF's red validation
+/// border until fixed.
 struct CommitField: View {
     @Binding var value: String
     var width: CGFloat?
@@ -103,7 +105,6 @@ struct CommitField: View {
             .onAppear { text = value }
             .onChange(of: value) { if !focused { text = value; invalid = false } }
             .onChange(of: focused) { if !focused { commit() } }
-            .onSubmit(commit)
             .onDisappear(perform: commit)
     }
 

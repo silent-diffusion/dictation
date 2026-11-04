@@ -20,7 +20,7 @@ struct MicrophoneSection: View {
             ObMenu(options: [(Self.systemDefault, "(System default microphone)")] + devices.map { ($0, $0) }, selection: choice, width: 400)
             FieldLabel("Input level")
             // While a dictation records, its own level shows; otherwise the page's meter (as Windows' AudioPage).
-            ProgressBar(fraction: Double(model.phase == .recording ? model.level : meterLevel)).frame(width: 400, height: 10)
+            FluentMeter(fraction: Double(model.phase == .recording ? model.level : meterLevel)).frame(width: 400, height: 10)
                 .accessibilityLabel("Input level")
             Caption(problem ?? "Speak to see the meter move. If it stays flat, choose another microphone or check \(privacyPlace).", bottom: 0)
                 .padding(.top, 8)
@@ -52,7 +52,12 @@ struct MicrophoneSection: View {
 
     private func startMeter() {
         stopMeter()
-        guard !model.phase.isBusy, !model.notes.needsModels else { return } // don't fight a dictation or Extended Notes
+        // Don't fight an active dictation (Windows checks only that). On iPhone and iPad also not Extended Notes: there the
+        // app has one audio session, and a second recorder would reset the one Notes records with.
+        guard !model.phase.isBusy else { return }
+        #if os(iOS)
+        guard !model.notes.needsModels else { return }
+        #endif
         let m = MicrophoneMeter()
         m.onLevel = { meterLevel = $0 }
         do {
@@ -68,5 +73,30 @@ struct MicrophoneSection: View {
         meter?.stop()
         meter = nil
         meterLevel = 0
+    }
+}
+
+/// WPF's Fluent ProgressBar at Height 10 (AudioPage's level): inside a 1-pt margin, a square track in
+/// ControlStrongStroke (#72000000 / dark #8BFFFFFF), and over it the indicator, a ControlStroke-tinted strip
+/// (#0F000000 / #12FFFFFF) holding a rounded bar (radius 6, so fully round at 8 tall) in the system accent.
+struct FluentMeter: View {
+    var fraction: Double
+    @Environment(\.ob) private var ob
+
+    var body: some View {
+        GeometryReader { g in
+            let inner = CGSize(width: max(0, g.size.width - 2), height: max(0, g.size.height - 2))
+            let w = inner.width * min(1, max(0, fraction))
+            ZStack(alignment: .leading) {
+                Rectangle().fill(ob.dark ? Color.white.opacity(0.545) : Color.black.opacity(0.447))
+                ZStack {
+                    Rectangle().fill(ob.dark ? Color.white.opacity(0.07) : Color.black.opacity(0.059))
+                    RoundedRectangle(cornerRadius: min(6, inner.height / 2, w / 2)).fill(SystemAccent.fill(dark: ob.dark))
+                }
+                .frame(width: w)
+            }
+            .frame(width: inner.width, height: inner.height)
+            .offset(x: 1, y: 1)
+        }
     }
 }

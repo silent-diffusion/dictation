@@ -28,7 +28,7 @@ struct ModelsSection: View {
             Caption("Download the models you want and choose which one is active. Local models run on this \(Device.noun); downloading is the only time they use the internet.")
             heading("Speech recognition", top: 18)
             // Each Windows row card has 8 below it, the last one too.
-            SpeechModelList().padding(.bottom, 8)
+            SpeechModelList(busy: { download != nil || localAI.isRunning || model.reader.install != nil }).padding(.bottom, 8)
             HStack {
                 Readout("AI cleanup · on this \(Device.noun)")
                 Spacer()
@@ -47,9 +47,10 @@ struct ModelsSection: View {
                 #endif
             }
             .padding(.bottom, 8)
-            // Windows' second sentence is about a PC's graphics card ("With 6 GB of GPU memory, 3–4B models run fully on the
-            // GPU…"); a Mac's GPU shares its memory, so only the first one holds here.
-            Caption("The active model is the default for profiles that don't pick their own.", bottom: 0).padding(.top, 2)
+            // Windows' second sentence names a PC's graphics card memory; a Mac's GPU works in the shared memory, of which
+            // 8 GB holds a 3–4B model beside the speech model.
+            Caption("The active model is the default for profiles that don't pick their own. With 8 GB of memory, 3–4B models run fully on the GPU alongside speech recognition.", bottom: 0)
+                .padding(.top, 2)
             heading("Extended notes · AI", top: 22)
             NotesModelMenu(width: 528)
             Caption(notesExplanation, bottom: 0).padding(.top, 6)
@@ -65,8 +66,8 @@ struct ModelsSection: View {
             }
             .padding(.bottom, 8)
             heading("Read aloud voice", top: 22)
-            // As on Windows, the other rows' buttons stay usable while a download runs (a second download waits its turn).
-            ReadAloudVoiceRows(busy: false).padding(.bottom, 8)
+            // As on Windows, the other rows' buttons stay usable while a download runs; a second Download does nothing.
+            ReadAloudVoiceRows(busy: busy).padding(.bottom, 8)
             #if os(macOS)
             advanced.padding(.top, 24)
             #endif
@@ -88,9 +89,9 @@ struct ModelsSection: View {
         Readout(text).padding(.top, top).padding(.bottom, 8)
     }
 
-    /// One download at a time on the page: another Download waits (Windows' `if (Busy) return;`). Windows leaves the
-    /// other rows' buttons as they were when the download began, so they look and stay usable; Use this still works.
-    private var busy: Bool { download != nil || model.whisperDownload != nil || localAI.isRunning }
+    /// One download at a time on the page: another Download does nothing (Windows' `if (Busy) return;`). Windows leaves
+    /// the other rows' buttons as they were when the download began, so they look and stay usable; Use this still works.
+    private var busy: Bool { download != nil || model.whisperDownload != nil || localAI.isRunning || model.reader.install != nil }
 
     /// The active model, matched as Windows does (`string.Equals(…, OrdinalIgnoreCase)`).
     private func isDefault(_ id: ModelID) -> Bool {
@@ -127,14 +128,16 @@ struct ModelsSection: View {
     #if os(macOS)
     @ViewBuilder private var localRows: some View {
         if let installed {
-            // Windows puts this first whenever nothing is listed, with the AI status line after it.
-            if OllamaRuntime.canManage && !OllamaRuntime.isInstalled && !runtimeUp {
-                runtimeRow
-            } else if installed.isEmpty {
+            // Windows puts this first whenever nothing is listed, with the AI status line after it. The status line
+            // speaks of the active model; where that isn't a local one (Apple Intelligence, in the App Store build),
+            // it is what Windows' line says then: that the runtime isn't running.
+            if installed.isEmpty {
                 Caption("The local AI runtime isn't answering, so downloaded models can't be listed. " +
-                        (OllamaRuntime.canManage ? model.aiStatus
-                            : "Install Ollama from ollama.com and start it; the models here then download through it."))
+                        (model.settings.defaultModel.provider == .ollama ? model.aiStatus : "AI: " + OllamaBackend.notRunning))
             }
+            // The direct download without its runtime yet: Windows' setup installs it ("Run scripts\setup.ps1"); here
+            // this row does, as the setup does.
+            if OllamaRuntime.canManage && !OllamaRuntime.isInstalled && !runtimeUp { runtimeRow }
             ForEach(catalogue(installed), id: \.id) { m in localRow(m, installed: installed) }
         } else {
             Caption("Checking…")
@@ -178,9 +181,10 @@ struct ModelsSection: View {
 
     private func rebuild() async {
         guard let endpoint = try? OllamaBackend.validated(model.settings.ollamaEndpoint) else { installed = []; return }
-        // Starts Oberton's own runtime if it is installed and nothing answers (Windows lists through EnsureRunning).
-        runtimeUp = (try? await OllamaRuntime.ensureRunning(settings: model.settings)) != nil
-        installed = runtimeUp ? await OllamaBackend.installedModels(endpoint: endpoint) : []
+        // Windows' ListModelsAsync: starts Oberton's own runtime if it is installed and nothing answers, and logs a
+        // listing that fails.
+        installed = await OllamaBackend.listModels(settings: model.settings)
+        runtimeUp = await OllamaBackend.ping(endpoint: endpoint)
         loaded = runtimeUp ? await OllamaBackend.loadedModels(endpoint: endpoint) : []
         await model.refreshOllama()
         await loadNotesModels()
@@ -197,7 +201,7 @@ struct ModelsSection: View {
 
     /// Install Oberton's own runtime, start it, and download the default model, as Windows' setup does.
     private func installRuntime() {
-        guard !busy else { return }
+        guard ModelDownloads.mayStart(busy: busy) else { return }
         localAI.start(model) { error in
             failure = (error as? UserFacingError)?.message ?? "The download failed. See the log for details."
             if !(error is UserFacingError) { Log.error("Model download failed: \(error)") }
@@ -208,7 +212,7 @@ struct ModelsSection: View {
     private func progress(_ id: String, _ f: Double?) { if download?.id == id { download = (id, f) } }
 
     private func run(_ id: String, _ work: @escaping @MainActor () async throws -> Void) {
-        guard !busy else { return }
+        guard ModelDownloads.mayStart(busy: busy) else { return }
         download = (id, nil)
         downloadTask = Task {
             do { try await work() } catch is CancellationError {
@@ -267,33 +271,37 @@ struct ModelsSection: View {
     #if os(macOS)
     @State private var showAdvanced = false
 
+    /// Windows' Expander "Advanced: local AI runtime" (the Fluent one), its StackPanel at Margin 0,8,0,0.
     private var advanced: some View {
-        DisclosureGroup("Advanced: local AI runtime", isExpanded: $showAdvanced) {
+        FluentExpander(header: "Advanced: local AI runtime", isExpanded: $showAdvanced) {
             VStack(alignment: .leading, spacing: 0) {
                 FieldLabel("Runtime endpoint")
                 CommitField(value: Binding(get: { model.settings.ollamaEndpoint }, set: { new in
-                    // Checked when the address is done, not on every keystroke (a half-typed address isn't local yet).
-                    model.settings.ollamaEndpoint = new
-                    model.settings.enforceLocalEndpoint()
+                    // Checked when the address is done, and before it is kept (Windows enforces inside Save): an
+                    // address that isn't local never reaches settings.json.
+                    var s = model.settings
+                    s.ollamaEndpoint = new
+                    s.enforceLocalEndpoint()
+                    model.settings = s
                 }), width: 300)
                 Caption("Must be a local address (127.0.0.1 / localhost); other addresses are rejected.", bottom: 0).padding(.top, 4)
+                // Only the direct download has a runtime of its own to start; the App Store build can't run one.
                 if OllamaRuntime.canManage {
-                    Toggle("Start the bundled Ollama automatically", isOn: $model.settings.startOllama)
-                        .toggleStyle(.checkbox).font(Ob.sans(Ob.body)).padding(.top, 10)
+                    FluentCheckBox(title: "Start the bundled Ollama automatically", isOn: $model.settings.startOllama).padding(.top, 10)
                 }
                 FieldLabel("Give up after (seconds)")
                 // Windows binds an int: any whole number is taken (0 and below too, which then means the 10 s floor);
-                // anything else is refused with a red border and the setting stays.
+                // anything else, a number past Int32 included, is refused with a red border and the setting stays.
                 CommitField(value: Binding(get: { String(Int(model.settings.aiTimeoutSeconds)) },
-                                           set: { if let v = Int($0.trimmingCharacters(in: .whitespaces)) { model.settings.aiTimeoutSeconds = Double(v) } }),
-                            width: 100, isValid: { Int($0.trimmingCharacters(in: .whitespaces)) != nil })
+                                           set: { if let v = AppSettings.wholeNumber($0) { model.settings.aiTimeoutSeconds = Double(v) } }),
+                            width: 100, isValid: { AppSettings.wholeNumber($0) != nil })
             }
             .padding(.top, 8)
         }
-        .font(Ob.sans(Ob.body))
-        .tint(ob.ink)
     }
     #endif
+
+
 }
 
 /// A model as a row in a hairline box: its name in mono with badges (wrapping), a line about it, and one button at the
@@ -370,5 +378,135 @@ private struct BadgeFlow: Layout {
             rows[rows.count - 1] = r
         }
         return rows
+    }
+}
+
+#if os(macOS)
+/// WPF's Fluent Expander (ThemeMode System): a header card with the title at the left and a chevron at the right that
+/// turns when it opens, and below it the content in a card of its own. The header is a Tab stop; Space or Return opens
+/// and closes it.
+struct FluentExpander<Content: View>: View {
+    var header: String
+    @Binding var isExpanded: Bool
+    @ViewBuilder var content: Content
+    @Environment(\.ob) private var ob
+    @State private var hover = false
+    @State private var focused = false
+
+    var body: some View {
+        // CardStrokeColorDefault (#0F000000 / dark #19000000), CardBackgroundFillColorDefault (#B3FFFFFF / #0DFFFFFF)
+        // for the header and CardBackgroundFillColorSecondary (#80F6F6F6 / #08FFFFFF) for the content.
+        let stroke = ob.dark ? Color.black.opacity(0.1) : Color.black.opacity(0.06)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 0) {
+                Text(header).font(Ob.sans(14)).foregroundStyle(ob.ink)
+                Spacer(minLength: 8)
+                Chevron().stroke(ob.ink, style: StrokeStyle(lineWidth: 1.2, lineCap: .round, lineJoin: .round))
+                    .frame(width: 10, height: 5)
+                    .rotationEffect(.degrees(isExpanded ? 180 : 0))
+                    .frame(width: 32, height: 32)
+                    .background(RoundedRectangle(cornerRadius: 4).fill(hover ? (ob.dark ? Color.white.opacity(0.06) : Color.black.opacity(0.04)) : .clear))
+            }
+            .padding(.leading, 16).padding(.trailing, 8)
+            .frame(minHeight: 48)
+            .background {
+                let shape = UnevenRoundedRectangle(topLeadingRadius: 4, bottomLeadingRadius: isExpanded ? 0 : 4,
+                                                   bottomTrailingRadius: isExpanded ? 0 : 4, topTrailingRadius: 4)
+                shape.fill(ob.dark ? Color.white.opacity(hover ? 0.083 : 0.05) : Color.white.opacity(hover ? 0.5 : 0.7))
+                    .overlay(shape.strokeBorder(focused ? ob.ink : stroke, lineWidth: focused ? 2 : 1))
+            }
+            .contentShape(Rectangle())
+            .onTapGesture { isExpanded.toggle() }
+            .onHover { hover = $0 }
+            .tabStop(focused: $focused) { isExpanded.toggle() }
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+            if isExpanded {
+                content
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background {
+                        let shape = UnevenRoundedRectangle(bottomLeadingRadius: 4, bottomTrailingRadius: 4)
+                        shape.fill(ob.dark ? Color.white.opacity(0.03) : Color(hex: 0xF6F6F6, alpha: 0.5))
+                            .overlay(shape.strokeBorder(stroke, lineWidth: 1).padding(.top, -1).clipped())
+                    }
+            }
+        }
+    }
+
+    private struct Chevron: Shape {
+        func path(in r: CGRect) -> Path {
+            Path { p in
+                p.move(to: CGPoint(x: r.minX, y: r.minY))
+                p.addLine(to: CGPoint(x: r.midX, y: r.maxY))
+                p.addLine(to: CGPoint(x: r.maxX, y: r.minY))
+            }
+        }
+    }
+}
+
+/// WPF's Fluent CheckBox: a 20-pt box with 4-pt corners, an outline when off (ControlStrongStroke on ControlAltFill)
+/// and filled with the system accent with a check when on (CheckBoxCheckBackgroundFillChecked, which Oberton's theme
+/// leaves to the system), its text at 8, 5 at 14 pt, the whole at least 32 tall. A Tab stop; Space toggles it.
+struct FluentCheckBox: View {
+    var title: String
+    @Binding var isOn: Bool
+    @Environment(\.ob) private var ob
+    @Environment(\.isEnabled) private var enabled
+    @State private var hover = false
+    @State private var focused = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            let box = RoundedRectangle(cornerRadius: 4)
+            ZStack {
+                if isOn {
+                    box.fill(SystemAccent.fill(dark: ob.dark).opacity(hover ? 0.9 : 1))
+                    Check().stroke(ob.dark ? Color.black : Color.white, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
+                        .frame(width: 10, height: 8)
+                } else {
+                    box.fill(ob.dark ? (hover ? Color.white.opacity(0.043) : Color.black.opacity(0.1)) : Color.black.opacity(hover ? 0.059 : 0.024))
+                    box.strokeBorder(ob.dark ? Color.white.opacity(0.545) : Color.black.opacity(0.447), lineWidth: 1)
+                }
+            }
+            .frame(width: 20, height: 20)
+            Text(title).font(Ob.sans(14)).foregroundStyle(ob.ink).padding(.top, 5)
+        }
+        .frame(minHeight: 32)
+        .overlay { if focused { RoundedRectangle(cornerRadius: 6).strokeBorder(ob.ink, lineWidth: 2).padding(-3) } }
+        .opacity(enabled ? 1 : 0.4)
+        .contentShape(Rectangle())
+        .onTapGesture { if enabled { isOn.toggle() } }
+        .onHover { hover = $0 }
+        .tabStop(focused: $focused) { isOn.toggle() }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(.isToggle)
+        .accessibilityValue(isOn ? "On" : "Off")
+    }
+
+    private struct Check: Shape {
+        func path(in r: CGRect) -> Path {
+            Path { p in
+                p.move(to: CGPoint(x: r.minX, y: r.midY))
+                p.addLine(to: CGPoint(x: r.minX + r.width * 0.38, y: r.maxY))
+                p.addLine(to: CGPoint(x: r.maxX, y: r.minY))
+            }
+        }
+    }
+}
+#endif
+
+/// The Fluent controls' system accent (SystemAccentColorDark1 on light, Light2 on dark), which Oberton's theme leaves as
+/// it is for check boxes and progress bars: the Mac's own accent color here.
+enum SystemAccent {
+    static func fill(dark: Bool) -> Color {
+        #if os(macOS)
+        let base = NSColor.controlAccentColor.usingColorSpace(.sRGB) ?? .systemBlue
+        return Color(nsColor: dark ? base.blended(withFraction: 0.45, of: .white) ?? base : base.blended(withFraction: 0.2, of: .black) ?? base)
+        #else
+        return Color(uiColor: .tintColor)
+        #endif
     }
 }

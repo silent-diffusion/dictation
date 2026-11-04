@@ -2,10 +2,12 @@ import ObertonCore
 import SwiftUI
 
 /// Settings › Models › READ ALOUD VOICE (ModelsPage.RebuildAsync): Kokoro v1.0 with Download, each Piper voice with
-/// Download or Use this, and the system's voices. A download shows its progress in the row and can be cancelled.
+/// Download or Use this, and the system's voices. A download shows its progress in the row and can be cancelled. As on
+/// Windows every button stays usable while a download runs, but only one download runs at a time: another Download
+/// does nothing until it is done (ModelsPage's `if (Busy) return;`).
 struct ReadAloudVoiceRows: View {
     @EnvironmentObject var model: AppModel
-    /// Another download runs on the page (Windows allows one at a time).
+    /// Another download runs on the page (a speech or local AI model): Download waits.
     var busy = false
 
     var body: some View { Rows(reader: model.reader, busy: busy) }
@@ -30,7 +32,8 @@ struct ReadAloudVoiceRows: View {
 
         private var voice: String { model.settings.ttsVoice ?? VoiceCatalog.defaultVoice }
         private var activeModel: String { VoiceCatalog.modelOf(voice) }
-        private var disabled: Bool { busy || reader.install != nil }
+        /// One download at a time, the page's or a voice's.
+        private var downloading: Bool { busy || reader.install != nil }
 
         private var kokoroRow: some View {
             let installed = VoiceInstaller.kokoroInstalled
@@ -71,12 +74,12 @@ struct ReadAloudVoiceRows: View {
             let fetching = reader.install.map { VoiceCatalog.findPiper($0.voice)?.id ?? VoiceCatalog.defaultVoice == id } ?? false
             let action: (String, () -> Void)?
             if fetching { action = ("Cancel", { reader.cancelInstall() }) }
-            else if !installed { action = ("Download", { download(id) }) }
+            else if !installed { action = ("Download", { if ModelDownloads.mayStart(busy: downloading) { download(id) } }) }
             else if canUse { action = ("Use this", { model.settings.ttsVoice = id }) }
             else { action = nil }
             return ModelRow(name: name, badges: badges, detail: detail, action: action,
                             progress: fetching ? .some(reader.install?.progress.fraction) : nil,
-                            primary: canUse && installed, enabled: fetching || !disabled)
+                            primary: canUse && installed)
         }
 
         private func download(_ id: String) {
@@ -108,6 +111,8 @@ struct ProfileVoicePicker: View {
             ObMenu(options: voices.isEmpty ? [("", "No voices downloaded")] : voices, selection: voiceBinding, width: 260, maxListHeight: 420)
                 .disabled(currentModel.isEmpty).accessibilityLabel("Read aloud voice")
         }
+        .onAppear(perform: writeBack)
+        .onChange(of: own) { writeBack() }
     }
 
     private var own: String { voice ?? "" }
@@ -139,7 +144,16 @@ struct ProfileVoicePicker: View {
         })
     }
 
+    /// The voice as listed, matched in any case as Windows' Select does ("AF_HEART" is Heart).
+    private var shown: String { voices.first { $0.0.caseInsensitiveCompare(own) == .orderedSame }?.0 ?? own }
+
     private var voiceBinding: Binding<String> {
-        Binding(get: { currentModel.isEmpty ? "" : own }, set: { if !$0.isEmpty { voice = $0 } })
+        Binding(get: { currentModel.isEmpty ? "" : shown }, set: { if !$0.isEmpty { voice = $0 } })
+    }
+
+    /// A voice stored in another case is written back as the catalog spells it (ProfilePage.FillVoicesOf).
+    private func writeBack() {
+        guard !currentModel.isEmpty, !own.isEmpty, shown != own, shown.caseInsensitiveCompare(own) == .orderedSame else { return }
+        voice = shown
     }
 }
