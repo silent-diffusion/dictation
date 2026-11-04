@@ -177,3 +177,26 @@ extension BrokenFileTests {
         #expect(lines.contains { $0.hasPrefix("ERROR Could not read ") && $0.contains("entry.json; keeping a .bad copy") })
     }
 }
+
+/// .NET's culture number formats (SYS-010), as History settings and Analytics use them.
+@Suite struct NetNumberTests {
+    let us = Locale(identifier: "en_US"), de = Locale(identifier: "de_DE")
+
+    @Test func customFormatsRoundAt15DigitsHalfAwayFromZero() {
+        #expect(NetNumber.fixed(5220.0 / 3600, digits: 1, locale: us) == "1.5")
+        #expect(NetNumber.fixed(1.4, digits: 1, locale: de) == "1,4")
+        #expect(NetNumber.fixed(2.0, digits: 1, optional: true, locale: us) == "2")
+        #expect(NetNumber.fixed(2.25, digits: 1, optional: true, locale: us) == "2.3")
+        #expect(NetNumber.fixed(0.04, digits: 1, optional: true, locale: us) == "0")
+        #expect(NetNumber.fixed(12345.6, digits: 1, locale: us) == "12345.6")
+    }
+
+    @Test func percentAndGroupingFollowTheRegion() {
+        #expect(NetNumber.percent(0.06, locale: us) == "6%")
+        #expect(NetNumber.percent(0.125, locale: us) == "13%")
+        #expect(NetNumber.percent(0.06, locale: de).hasPrefix("6") && NetNumber.percent(0.06, locale: de).hasSuffix("%")
+                && NetNumber.percent(0.06, locale: de).count == 3)
+        #expect(NetNumber.n0(1234, locale: us) == "1,234")
+        #expect(NetNumber.n0(1234, locale: de) == "1.234")
+    }
+}

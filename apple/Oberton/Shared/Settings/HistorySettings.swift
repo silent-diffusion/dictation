@@ -37,31 +37,37 @@ struct HistorySettingsSection: View {
             // One grid (Margin 18,12): the two rows with a hairline straight between them.
             VStack(spacing: 0) {
                 row("Text", detail: "The dictation itself: what was heard, the AI's edit, and where it went.") {
+                    // While "Go ahead?" is up the box already shows the new choice; No puts the old one back (RevertKeep).
                     KeepMenu(audio: false, selection: Binding(get: { Keep(count: model.settings.historyLimit, days: model.settings.historyDays) },
-                                                              set: chooseText))
-                        .accessibilityLabel("How long to keep the text of dictations")
+                                                              set: chooseText),
+                             pending: shorter?.keep, name: "How long to keep the text of dictations")
                 }
                 Hairline()
                 row("Recordings", detail: "The audio, for playing a dictation back. Never kept longer than its text.") {
                     KeepMenu(audio: true, selection: Binding(get: { Keep(count: model.settings.audioLimit, days: model.settings.audioDays) },
-                                                             set: { model.settings.audioLimit = $0.count; model.settings.audioDays = $0.days; changed() }))
+                                                             set: { model.settings.audioLimit = $0.count; model.settings.audioDays = $0.days; changed() }),
+                             name: "How long to keep the recordings of dictations")
                         .disabled(!model.settings.saveHistoryAudio)
-                        .accessibilityLabel("How long to keep the recordings of dictations")
                 }
             }
-            .padding(EdgeInsets(top: 12, leading: 18, bottom: 12, trailing: 18))
+            // Margin 18,12 inside the card's 1 px line.
+            .padding(EdgeInsets(top: 13, leading: 19, bottom: 13, trailing: 19))
             .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
             Caption("Keep a number of the newest, or everything from a recent stretch of time. Older ones are deleted as new ones come in, every hour, and right away when you choose less. A recording deleted this way leaves its dictation's text in History.", bottom: 0)
                 .padding(.top, 6)
             label("Stored in", top: 18)
-            Text(model.historyFolder.path(percentEncoded: false)).font(Ob.mono(12)).fixedSize(horizontal: false, vertical: true)
+            Text(Self.folderText(model.historyFolder)).font(Ob.mono(12)).fixedSize(horizontal: false, vertical: true)
             Caption("\(model.history.count) dictations, \(Self.megabytes(size)) MB.", bottom: 0)
                 .padding(.top, 4)
             HStack(spacing: 8) {
                 #if os(macOS)
                 Button("Open folder") {
-                    try? FileManager.default.createDirectory(at: model.historyFolder, withIntermediateDirectories: true)
-                    NSWorkspace.shared.open(model.historyFolder)
+                    do {
+                        try FileManager.default.createDirectory(at: model.historyFolder, withIntermediateDirectories: true)
+                        if !NSWorkspace.shared.open(model.historyFolder) { throw CocoaError(.fileReadUnknown) }
+                    } catch {
+                        Log.warn("Opening the history folder failed: " + error.localizedDescription)
+                    }
                 }
                 .buttonStyle(.quiet)
                 #endif
@@ -107,10 +113,14 @@ struct HistorySettingsSection: View {
         } message: { Text("Reset the dashboard's daily counts (words per day, streaks, apps)? History itself is not touched.") }
     }
 
-    /// "{mb:0.#}": one decimal at most, none when it is .0.
-    static func megabytes(_ bytes: Int64) -> String {
-        let mb = (Double(bytes) / 1_048_576 * 10).rounded() / 10
-        return mb == mb.rounded() ? String(Int(mb)) : String(format: "%.1f", mb)
+    /// "{mb:0.#}": one decimal at most, none when it is .0, in the region's decimal separator.
+    static func megabytes(_ bytes: Int64) -> String { NetNumber.fixed(Double(bytes) / 1_048_576, digits: 1, optional: true) }
+
+    /// The folder as Windows shows it (Path.Combine): no separator at its end.
+    static func folderText(_ url: URL) -> String {
+        var path = url.path(percentEncoded: false)
+        while path.count > 1, path.hasSuffix("/") { path.removeLast() }
+        return path
     }
 
     /// A FieldLabel with the top margin the Windows page gives it.
@@ -150,19 +160,33 @@ struct HistorySettingsSection: View {
 }
 
 /// A keep box: everything (text) or as long as the text (recordings), then THE NEWEST and FROM THE LAST under headings
-/// (HistorySettingsPage.FillKeep). Drawn like `ObMenu`.
+/// (HistorySettingsPage.FillKeep). Drawn like `ObMenu`. As Windows' list, built once per page: a value outside the usual
+/// ones that was saved when the page opened stays in the list after another is chosen.
 private struct KeepMenu: View {
     var audio: Bool
     @Binding var selection: HistorySettingsSection.Keep
+    /// A choice waiting for "Go ahead?": shown in the box meanwhile, as Windows' combo has already taken it.
+    var pending: HistorySettingsSection.Keep?
+    var name: String
     @Environment(\.ob) private var ob
     @Environment(\.isEnabled) private var enabled
     @FocusState private var focused
+    /// What was saved when the page opened (FillKeep's `count` and `days`).
+    @State private var opened: HistorySettingsSection.Keep?
 
     private typealias Keep = HistorySettingsSection.Keep
 
-    private var counts: [Int] { Array(Set([10, 25, 50, 100, 200, 500] + (selection.count > 0 ? [selection.count] : []))).sorted() }
-    private var ages: [Int] { Array(Set([1, 3, 7, 14, 30, 90, 365] + (selection.days > 0 ? [selection.days] : []))).sorted() }
+    private var start: Keep { opened ?? selection }
+    private var counts: [Int] { Array(Set([10, 25, 50, 100, 200, 500] + (start.count > 0 ? [start.count] : []))).sorted() }
+    private var ages: [Int] { Array(Set([1, 3, 7, 14, 30, 90, 365] + (start.days > 0 ? [start.days] : []))).sorted() }
     private var first: String { audio ? "As long as the text" : "Everything (never delete)" }
+
+    /// The item the box shows: the one that matches (a hand-edited file keeping both by number and by age matches
+    /// none, so the first, as Windows' `?? box.Items[0]`).
+    private var shown: Keep {
+        let k = pending ?? selection
+        return k.count > 0 && k.days > 0 ? Keep() : k
+    }
 
     private func label(_ k: Keep) -> String {
         k.count > 0 ? "The newest \(k.count) dictations" : k.days > 0 ? "The last \(HistoryStore.daysLabel(k.days))" : first
@@ -176,7 +200,7 @@ private struct KeepMenu: View {
             SwiftUI.Section("FROM THE LAST") { ForEach(ages, id: \.self) { item(Keep(days: $0)) } }
         } label: {
             HStack {
-                Text(label(selection)).font(Ob.sans(Ob.body)).lineLimit(1)
+                Text(label(shown)).font(Ob.sans(Ob.body)).lineLimit(1)
                 Spacer(minLength: 8)
                 Image(systemName: "chevron.down").font(.system(size: 10, weight: .medium)).foregroundStyle(ob.muted)
             }
@@ -193,11 +217,16 @@ private struct KeepMenu: View {
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
         .fixedSize()
+        // A ComboBox reads its name and the item shown.
+        .accessibilityLabel(name)
+        .accessibilityValue(label(shown))
+        .onAppear { if opened == nil { opened = selection } }
     }
 
     private func item(_ k: Keep) -> some View {
-        Button { selection = k } label: {
-            if k == selection { Label(label(k), systemImage: "checkmark") } else { Text(label(k)) }
+        // Picking the item already shown changes nothing (no SelectionChanged).
+        Button { if k != shown { selection = k } } label: {
+            if k == shown { Label(label(k), systemImage: "checkmark") } else { Text(label(k)) }
         }
     }
 }

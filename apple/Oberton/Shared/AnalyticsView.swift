@@ -129,10 +129,10 @@ struct AnalyticsView: View {
         let cells: [AnyView] = [
             AnyView(ReadoutCell(label: "Words dictated", value: words.formatted(), sub: "in \(dictations.formatted()) dictation\(dictations == 1 ? "" : "s")", accent: true)),
             AnyView(ReadoutCell(label: "Speaking pace", value: pace.map { "\(Int($0.rounded())) wpm" } ?? "—", sub: paceSub)),
-            AnyView(ReadoutCell(label: "Time saved", value: words == 0 ? "—" : saved >= 60 ? String(format: "%.1f h", saved / 60) : "\(Int(saved.rounded())) min") {
+            AnyView(ReadoutCell(label: "Time saved", value: words == 0 ? "—" : saved >= 60 ? NetNumber.fixed(saved / 60, digits: 1) + " h" : NetNumber.fixed(saved, digits: 0) + " min") {
                 TypingSpeed(wpm: $model.settings.typingWPM)
             }),
-            AnyView(ReadoutCell(label: "Turnaround", value: turnN > 0 ? String(format: "%.1f s", turn / Double(turnN)) : "—", sub: "stop → text in place")),
+            AnyView(ReadoutCell(label: "Turnaround", value: turnN > 0 ? NetNumber.fixed(turn / Double(turnN), digits: 1) + " s" : "—", sub: "stop → text in place")),
             AnyView(ReadoutCell(label: "AI edits kept", value: edits > 0 ? percent(Double(kept) / Double(edits)) : "—",
                                 sub: edits > 0 ? "safety net rejected \(percent(Double(edits - kept) / Double(edits)))" : "no AI edits yet")),
             AnyView(ReadoutCell(label: "Read aloud", value: "\(wordsRead.formatted()) w",
@@ -241,14 +241,27 @@ struct WeightedRow: Layout {
     enum Column { case fixed(CGFloat), flex(Double) }
     var columns: [Column]
 
+    /// Each column's exact width (stars share what the fixed columns leave).
     private func widths(_ total: CGFloat, count: Int) -> [CGFloat] {
         let cols = (0..<count).map { $0 < columns.count ? columns[$0] : .flex(1) }
         var fixed: CGFloat = 0, shares = 0.0
         for c in cols { switch c { case .fixed(let w): fixed += w; case .flex(let s): shares += s } }
         let rest = max(0, total - fixed)
         return cols.map { c in
-            switch c { case .fixed(let w): w; case .flex(let s): shares > 0 ? (rest * s / shares).rounded(.down) : 0 }
+            switch c { case .fixed(let w): w; case .flex(let s): shares > 0 ? rest * s / shares : 0 }
         }
+    }
+
+    /// Where each column starts and ends, rounded to whole points as WPF's layout rounding does: equal stars come out
+    /// within a point of each other, the rounding spread over the row rather than all given to the last column.
+    private func edges(_ bounds: CGRect, count: Int) -> [(x: CGFloat, width: CGFloat)] {
+        var at = bounds.minX, out: [(x: CGFloat, width: CGFloat)] = []
+        for (i, w) in widths(bounds.width, count: count).enumerated() {
+            let start = at.rounded(), end = i == count - 1 ? bounds.maxX : (at + w).rounded()
+            out.append((start, max(0, end - start)))
+            at += w
+        }
+        return out
     }
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
@@ -259,13 +272,8 @@ struct WeightedRow: Layout {
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        var x = bounds.minX
-        let w = widths(bounds.width, count: subviews.count)
-        for (i, s) in subviews.enumerated() {
-            // The last column takes what rounding left over.
-            let width = i == subviews.count - 1 ? bounds.maxX - x : w[i]
-            s.place(at: CGPoint(x: x, y: bounds.midY), anchor: .leading, proposal: ProposedViewSize(width: width, height: bounds.height))
-            x += width
+        for (s, e) in zip(subviews, edges(bounds, count: subviews.count)) {
+            s.place(at: CGPoint(x: e.x, y: bounds.midY), anchor: .leading, proposal: ProposedViewSize(width: e.width, height: bounds.height))
         }
     }
 }
@@ -329,10 +337,10 @@ private struct TypingSpeed: View {
                     .accessibilityLabel("Typing speed, words per minute")
                 Text(" wpm").font(Ob.sans(11)).foregroundStyle(ob.muted)
             }
-            .onAppear { text = "\(wpm)"; focused = true }
+            .onAppear { text = "\(max(1, wpm))"; focused = true }
         } else {
             Button { editing = true } label: {
-                Text("vs typing at \(wpm) wpm ✎").font(Ob.sans(11)).foregroundStyle(ob.muted).underline().lineLimit(2)
+                Text("vs typing at \(max(1, wpm)) wpm ✎").font(Ob.sans(11)).foregroundStyle(ob.muted).underline().lineLimit(2)
                     .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
             }
             .buttonStyle(.plain)
@@ -362,8 +370,9 @@ private struct Head<Key: View>: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 0) {
-            Text(title.uppercased()).font(Ob.mono(11, .bold)).lineLimit(1)
-            Spacer(minLength: 0)
+            // No "…": a title the right-hand label leaves no room for is cut off, as Windows' TextBlock.
+            Text(title.uppercased()).font(Ob.mono(11, .bold)).lineLimit(1).fixedSize()
+                .frame(maxWidth: .infinity, alignment: .leading).clipped()
             key
             if !right.isEmpty { Readout(right).lineLimit(1).fixedSize().padding(.leading, 12) }
         }
@@ -502,11 +511,13 @@ private struct AppRow: View {
         let compact = sizeClass == .compact
         let color = on ? ob.accent : site ? ob.muted : ob.ink
         let row = WeightedRow(columns: compact ? [.flex(1.2), .flex(2), .fixed(44)] : [.flex(0.8), .flex(2.4), .fixed(52)]) {
+            // The name's tooltip covers its whole column (a stretched TextBlock), inside its margins.
             Text((on ? "▸ " : "") + text.uppercased()).font(Ob.mono(site ? 10 : 11, on ? .bold : .regular))
-                .foregroundStyle(color).lineLimit(1).truncationMode(.tail).padding(.leading, site ? 12 : 0).padding(.trailing, 10)
-                .help(tip)
-            BlockBar(fraction: Double(count) / Double(total), blocks: compact ? 20 : 30, color: color, height: site ? 7 : 10)
-                .help("\(tip): \(count.formatted()) dictation\(count == 1 ? "" : "s")")
+                .foregroundStyle(color).lineLimit(1).truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle()).help(tip)
+                .padding(.leading, site ? 12 : 0).padding(.trailing, 10)
+            BlockBar(fraction: Double(count) / Double(total), blocks: compact ? 20 : 30, color: color, height: site ? 7 : 10,
+                     tip: "\(tip): \(count.formatted()) dictation\(count == 1 ? "" : "s")")
             Text(count.formatted()).font(Ob.mono(site ? 10 : 11)).foregroundStyle(color)
                 .frame(maxWidth: .infinity, alignment: .trailing)
         }
@@ -528,25 +539,43 @@ private struct AppRow: View {
     }
 }
 
-/// A bar of square-cornered blocks, filled up to a fraction, the rest outlined.
+/// A bar of square-cornered blocks, filled up to a fraction, the rest outlined: Windows' one-row UniformGrid, each block
+/// a cell's width less its 2 px right margin (so the bar ends 2 px short of its column). Its tooltip shows over the
+/// filled blocks only; the empty ones are bare outlines on Windows, and the gaps show the row's own tooltip.
 private struct BlockBar: View {
     var fraction: Double
     var blocks: Int
     var color: Color
     var height = 10.0
+    var tip: String?
     @Environment(\.ob) private var ob
+
+    /// Math.Round: halves to the even block count.
+    private var filled: Int { max(1, Int((fraction * Double(blocks)).rounded(.toNearestOrEven))) }
+
+    private func block(_ b: Int, _ size: CGSize) -> CGRect {
+        let cell = size.width / Double(blocks)
+        return CGRect(x: Double(b) * cell, y: 0, width: max(0, cell - 2), height: size.height)
+    }
 
     var body: some View {
         Canvas { ctx, size in
-            let gap = 2.0, w = (size.width - gap * Double(blocks - 1)) / Double(blocks)
-            // Math.Round: halves to the even block count.
-            let filled = max(1, Int((fraction * Double(blocks)).rounded(.toNearestOrEven)))
             for b in 0..<blocks {
-                let r = CGRect(x: Double(b) * (w + gap), y: 0, width: w, height: size.height)
+                let r = block(b, size)
                 if b < filled { ctx.fill(Path(r), with: .color(color)) } else { ctx.stroke(Path(r.insetBy(dx: 0.5, dy: 0.5)), with: .color(ob.divider), lineWidth: 1) }
             }
         }
         .frame(height: height)
+        .overlay {
+            if let tip {
+                GeometryReader { g in
+                    ForEach(0..<min(filled, blocks), id: \.self) { b in
+                        let r = block(b, g.size)
+                        Color.clear.contentShape(Rectangle()).frame(width: r.width, height: r.height).position(x: r.midX, y: r.midY).help(tip)
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -561,9 +590,10 @@ private struct CorrectionsCell: View {
     @Environment(\.ob) private var ob
 
     var body: some View {
-        let top = WordTally.top(tally, \.corrections, 8).compactMap { pair -> (String, String, Int)? in
+        // Keyed by the whole "heard → written" pair: one heard word can have been written two ways.
+        let top = WordTally.top(tally, \.corrections, 8).compactMap { pair -> (key: String, heard: String, written: String, count: Int)? in
             let parts = pair.key.components(separatedBy: WordTally.arrow)
-            return parts.count == 2 ? (parts[0], parts[1], pair.count) : nil
+            return parts.count == 2 ? (pair.key, parts[0], parts[1], pair.count) : nil
         }
         PanelCell {
             VStack(alignment: .leading, spacing: 0) {
@@ -573,8 +603,9 @@ private struct CorrectionsCell: View {
                 if !on || top.isEmpty {
                     Empty(on: on, text: hint("Corrections show up here once the AI has fixed the same words a few times."))
                 } else {
-                    ForEach(top, id: \.0) { heard, written, n in
-                        Ruled { CorrectionRow(heard: heard, written: written, count: n) }
+                    let stamp = top.map { "\($0.key)\u{0}\($0.count)" }.joined(separator: "\u{1}")
+                    ForEach(top, id: \.key) { row in
+                        Ruled { CorrectionRow(heard: row.heard, written: row.written, count: row.count, stamp: stamp) }
                     }
                 }
             }
@@ -586,8 +617,13 @@ private struct CorrectionRow: View {
     var heard: String
     var written: String
     var count: Int
+    /// Changes when the section is drawn again (new counts): each row then looks at the vocabulary afresh.
+    var stamp: String
     @EnvironmentObject var model: AppModel
     @Environment(\.ob) private var ob
+    /// "ADDED ✓" as this row last looked (Windows' ShowState: when the row is drawn and when its own button is
+    /// clicked), so adding a word turns only the row clicked, not another with the same written word.
+    @State private var added: Bool?
 
     var body: some View {
         // One line: the pair cut with "…" when the cell is narrow, then ×N and the button (a DockPanel).
@@ -613,14 +649,19 @@ private struct CorrectionRow: View {
     private var times: some View { Text("×\(count.formatted())").font(Ob.mono(11)).foregroundStyle(ob.muted) }
 
     private var button: some View {
-        let added = model.inVocabulary(written)
+        let added = self.added ?? model.inVocabulary(written)
         let tip = added ? "\"\(written)\" is in the speech vocabulary (Settings › Speech recognition)"
             : "Add \"\(written)\" to the speech vocabulary, so the recognizer expects it"
-        return Button(added ? "Added ✓" : "Add to vocabulary") { model.addToVocabulary(written) }
-            .buttonStyle(.quietSmall)
-            .disabled(added)
-            .help(tip)
-            .accessibilityLabel(tip)
+        return Button(added ? "Added ✓" : "Add to vocabulary") {
+            model.addToVocabulary(written)
+            self.added = model.inVocabulary(written)
+        }
+        .buttonStyle(.quietSmall)
+        .disabled(added)
+        .help(tip)
+        .accessibilityLabel(tip)
+        .onAppear { self.added = model.inVocabulary(written) }
+        .onChange(of: stamp) { self.added = model.inVocabulary(written) }
     }
 }
 
@@ -676,7 +717,8 @@ private struct PhrasesCell: View {
                 } else {
                     ForEach(top, id: \.phrase) { p in
                         Ruled {
-                            HStack(spacing: 8) {
+                            // A DockPanel: ×N docked at the right, the phrase filling the rest right up to it.
+                            HStack(spacing: 0) {
                                 Text("“\(p.phrase)”").font(Ob.sans(13)).lineLimit(1).truncationMode(.tail).help(p.phrase)
                                 Spacer(minLength: 0)
                                 Text("×\(p.count.formatted())").font(Ob.mono(11)).foregroundStyle(ob.muted)
@@ -855,13 +897,16 @@ private struct HeatmapCell: View {
                                 Text(Self.names[r]).font(Ob.mono(10)).foregroundStyle(ob.muted).frame(width: 36, alignment: .leading)
                                 ForEach(0..<12, id: \.self) { c in
                                     let v = blocks[r][c]
+                                    let tip = "\(Self.names[r]) \(String(format: "%02d:00–%02d:00", 2 * c, 2 * c + 2)) · \(v.formatted()) dictation\(v == 1 ? "" : "s")"
+                                    // Only a filled block takes the pointer (an empty one is a bare outline on Windows,
+                                    // so its tooltip practically never shows).
                                     Group {
-                                        if v > 0 { Rectangle().fill(ob.ink.opacity(0.15 + 0.85 * Double(v) / Double(max))) }
-                                        else { Rectangle().strokeBorder(ob.divider, lineWidth: 1) }
+                                        if v > 0 { Rectangle().fill(ob.ink.opacity(0.15 + 0.85 * Double(v) / Double(max))).help(tip) }
+                                        else { Rectangle().strokeBorder(ob.divider, lineWidth: 1).allowsHitTesting(false) }
                                     }
+                                    .frame(minHeight: 14)
                                     .padding(1.5)
                                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                    .help("\(Self.names[r]) \(String(format: "%02d:00–%02d:00", 2 * c, 2 * c + 2)) · \(v.formatted()) dictation\(v == 1 ? "" : "s")")
                                 }
                             }
                         }
@@ -913,7 +958,7 @@ private struct ProfilesCell: View {
                             cell(p.dictations.formatted())
                             cell(p.aiEdited == 0 || p.wordsHeard == 0 ? "—" : percent(min(1, Double(p.wordsChanged) / Double(p.wordsHeard))))
                             cell(p.aiEdited == 0 ? "—" : percent(Double(p.aiKept) / Double(p.aiEdited)))
-                            cell(p.turnaroundCount > 0 ? String(format: "%.1f s", p.turnaroundSeconds / Double(p.turnaroundCount)) : "—")
+                            cell(p.turnaroundCount > 0 ? NetNumber.fixed(p.turnaroundSeconds / Double(p.turnaroundCount), digits: 1) + " s" : "—")
                         }
                         .font(Ob.mono(12))
                         .padding(.vertical, 5)
@@ -991,7 +1036,7 @@ private struct NotesSourcesCell: View {
                         WeightedRow(columns: [.flex(1), .flex(1.4), .fixed(96)]) {
                             Text(label.uppercased()).font(Ob.mono(11)).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
                             Meter(fraction: (v?.seconds ?? 0) / most)
-                            Text(v.map { "\($0.sessions) · \(duration($0.seconds))" } ?? "—").font(Ob.mono(11)).frame(maxWidth: .infinity, alignment: .trailing)
+                            Text(v.map { "\(NetNumber.n0($0.sessions)) · \(duration($0.seconds))" } ?? "—").font(Ob.mono(11)).frame(maxWidth: .infinity, alignment: .trailing)
                         }
                         .frame(height: 28)
                     }
@@ -1003,9 +1048,12 @@ private struct NotesSourcesCell: View {
 
 // MARK: - Formatting
 
-private func percent(_ x: Double) -> String { "\(Int((x * 100).rounded()))%" }
+/// .NET's "P0" in the user's region ("6%", "6 %").
+private func percent(_ x: Double) -> String { NetNumber.percent(x) }
 
-/// A length of time the way a readout shows it: 45 s, 12 min, 1.4 h.
+/// A length of time the way a readout shows it: 45 s, 12 min, 1.4 h ("0" and "0.0" custom formats, the region's decimal
+/// separator).
 private func duration(_ seconds: Double) -> String {
-    seconds < 60 ? "\(Int(seconds.rounded())) s" : seconds < 3600 ? "\(Int((seconds / 60).rounded())) min" : String(format: "%.1f h", seconds / 3600)
+    seconds < 60 ? NetNumber.fixed(seconds, digits: 0) + " s" : seconds < 3600 ? NetNumber.fixed(seconds / 60, digits: 0) + " min"
+        : NetNumber.fixed(seconds / 3600, digits: 1) + " h"
 }
