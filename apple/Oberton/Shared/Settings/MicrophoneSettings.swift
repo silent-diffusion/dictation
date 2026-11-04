@@ -22,7 +22,7 @@ struct MicrophoneSection: View {
             // While a dictation records, its own level shows; otherwise the page's meter (as Windows' AudioPage).
             ProgressBar(fraction: Double(model.phase == .recording ? model.level : meterLevel)).frame(width: 400, height: 10)
                 .accessibilityLabel("Input level")
-            Caption(problem ?? "Speak to see the meter move. If it stays flat, choose another microphone or check \(privacyPlace).", size: 12.5)
+            Caption(problem ?? "Speak to see the meter move. If it stays flat, choose another microphone or check \(privacyPlace).", bottom: 0)
                 .padding(.top, 8)
         }
         .onAppear {

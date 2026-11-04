@@ -30,8 +30,7 @@ public enum Microphones {
     public static func use(_ name: String?, on engine: AVAudioEngine) {
         #if os(macOS)
         // The engine is reused, so the default is set again too when no microphone (or a missing one) is chosen.
-        guard let unit = engine.inputNode.audioUnit,
-              var id = name.flatMap({ n in inputDevices().first { $0.name == n }?.id }) ?? defaultInputDevice() else { return }
+        guard let unit = engine.inputNode.audioUnit, var id = device(named: name) ?? defaultInputDevice() else { return }
         // Only a real change: each one sends the engine a device-change notice on a queue of its own.
         var current = AudioDeviceID(0)
         var size = UInt32(MemoryLayout<AudioDeviceID>.size)
@@ -40,10 +39,33 @@ public enum Microphones {
         AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &id, UInt32(MemoryLayout<AudioDeviceID>.size))
         #else
         let session = AVAudioSession.sharedInstance()
-        let port = name.flatMap { n in session.availableInputs?.first { $0.portName == n } }
+        let port = name.flatMap { n in session.availableInputs?.first { $0.portName.caseInsensitiveCompare(n) == .orderedSame } }
+        if let name, !name.trimmingCharacters(in: .whitespaces).isEmpty, port == nil { logMissing(name) }
         try? session.setPreferredInput(port)
         #endif
     }
+
+    /// Windows' MicCapture: "Microphone '{name}' not found; using the default device.", once per name in a row.
+    nonisolated(unsafe) private static var lastMissing: String?
+    private static func logMissing(_ name: String) {
+        guard lastMissing != name else { return }
+        lastMissing = name
+        CoreLog.warn("Microphone '\(name)' not found; using the default device.")
+    }
+
+    #if os(macOS)
+    /// The named microphone, matched in any case as Windows does (`ProductName.Equals(…, OrdinalIgnoreCase)`); nil for
+    /// none chosen, or one that isn't there any more (logged, and the default is used).
+    private static func device(named name: String?) -> AudioDeviceID? {
+        guard let name, !name.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        if let id = inputDevices().first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame })?.id {
+            lastMissing = nil
+            return id
+        }
+        logMissing(name)
+        return nil
+    }
+    #endif
 
     /// Tap the microphone (bus 0 of the input node, in its own format). The input device may have changed its format a
     /// moment ago (a Bluetooth headset switching to its microphone mode, or another engine opening it at another rate)
@@ -140,18 +162,21 @@ public final class MicrophoneMeter: @unchecked Sendable {
         Microphones.use(microphone, on: engine)
         let node = engine.inputNode
         let format = node.outputFormat(forBus: 0)
-        guard format.sampleRate > 0, format.channelCount > 0 else { throw UserFacingError("No microphone was found.") }
+        guard format.sampleRate > 0, format.channelCount > 0 else { throw UserFacingError(LiveTranscriber.noMicrophone) }
         try Microphones.tap(node, bufferSize: 2048) { [weak self] buffer, _ in
             guard let (rms, _) = LiveTranscriber.rms(buffer) else { return }
-            let level = LiveTranscriber.meterLevel(rms: rms), cb = self?.onLevel
+            // Windows' MicCapture scale, the one a dictation's own level uses too: min(1, √rms · 1.8).
+            let level = min(1, rms.squareRoot() * 1.8), cb = self?.onLevel
             DispatchQueue.main.async { cb?(level) }
         }
         engine.prepare()
         do { try engine.start() } catch {
             node.removeTap(onBus: 0)
-            throw UserFacingError("The microphone couldn't be started (\(error.localizedDescription)).")
+            CoreLog.warn("The microphone meter couldn't start: \(error.localizedDescription)")
+            throw UserFacingError(LiveTranscriber.micWontOpen)
         }
     }
+
 
     public func stop() {
         guard Self.owner == ObjectIdentifier(self) else { return }
