@@ -227,11 +227,11 @@ enum AXReader {
 
     /// The text around the caret in the app's focused control, two sentences before and one after (Windows
     /// `InsertionContext.Read`). An empty field that shows a placeholder or keeps an invisible character counts as
-    /// empty. nil when the control's text can't be read.
+    /// empty. nil when the control's text can't be read: only a control with a text selection (Windows: one with a
+    /// TextPattern) gives any context, an empty one included.
     static func context(_ pid: pid_t) -> InsertionContext? {
-        guard let focused = focusedElement(pid) else { return nil }
+        guard let focused = focusedElement(pid), let selection = selectedRange(focused) else { return nil }
         if isEmptyField(focused) { return InsertionContext(before: "", after: "") }
-        guard let selection = selectedRange(focused) else { return nil }
         let start = max(0, selection.location - readChars)
         guard let before = text(focused, in: CFRange(location: start, length: selection.location - start)) else { return nil }
         let end = selection.location + selection.length

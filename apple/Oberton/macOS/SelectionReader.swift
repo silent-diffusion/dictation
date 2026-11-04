@@ -1,33 +1,69 @@
 #if os(macOS)
 import ApplicationServices
 import Foundation
+import ObertonCore
 
 /// The text selected in the app in front, for Read aloud (Windows' SelectionReader). The direct build asks the focused
 /// control through Accessibility first, which has no side effects; the App Store build can't read other apps (the
 /// sandbox), so it, and any app that doesn't answer, goes straight to MacPlatform's ⌘C fallback.
 enum SelectionReader {
-    static let maxChars = 100_000
-    /// How long an app may take to answer, as Windows waits for UI Automation.
-    static let timeout: Float = 0.6
+    /// How long the app may take to answer in all, as Windows waits 600 ms for UI Automation.
+    static let timeout: Duration = .milliseconds(600)
 
     /// The selection as the focused control reports it: nil when it can't be asked (App Store build, no
     /// Accessibility permission, a control without text, an app that doesn't answer in time), "" when it says nothing
     /// is selected.
     static func accessibility() async -> String? {
         guard Distribution.axTrusted else { return nil }
-        return await Task.detached(priority: .userInitiated) { () -> String? in
-            let system = AXUIElementCreateSystemWide()
-            AXUIElementSetMessagingTimeout(system, timeout)
-            var focused: CFTypeRef?
-            guard AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &focused) == .success,
-                  let focused, CFGetTypeID(focused) == AXUIElementGetTypeID() else { return nil }
-            let element = focused as! AXUIElement
-            AXUIElementSetMessagingTimeout(element, timeout)
-            var selected: CFTypeRef?
-            guard AXUIElementCopyAttributeValue(element, kAXSelectedTextAttribute as CFString, &selected) == .success,
-                  let text = selected as? String else { return nil }
-            return String(text.prefix(maxChars)).trimmingCharacters(in: .whitespacesAndNewlines)
-        }.value
+        return await AXReader.bounded(timeout, fallback: nil) { read() }
+    }
+
+    /// Each range read up to 100,000 UTF-16 units, several ranges (a multiple selection) joined, then trimmed
+    /// (Windows `string.Concat(selection.Select(r => r.GetText(MaxChars))).Trim()`).
+    private static func read() -> String? {
+        let system = AXUIElementCreateSystemWide()
+        var focused: CFTypeRef?
+        let found = AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &focused)
+        guard found == .success, let focused, CFGetTypeID(focused) == AXUIElementGetTypeID() else {
+            unreadable(found)
+            return nil
+        }
+        let element = focused as! AXUIElement
+        if let ranges = AXReader.attribute(element, kAXSelectedTextRangesAttribute) as? [AXValue], ranges.count > 1 {
+            var parts: [String] = []
+            for value in ranges {
+                var range = CFRange()
+                guard AXValueGetValue(value, .cfRange, &range), let text = AXReader.text(element, in: range) else { continue }
+                parts.append(InsertionRules.capped(text))
+            }
+            if !parts.isEmpty { return parts.joined().trimmingCharacters(in: .whitespacesAndNewlines) }
+        }
+        var selected: CFTypeRef?
+        let asked = AXUIElementCopyAttributeValue(element, kAXSelectedTextAttribute as CFString, &selected)
+        guard asked == .success, let text = selected as? String else {
+            unreadable(asked)
+            return nil
+        }
+        return InsertionRules.capped(text).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Windows logs which apps needed the copy fallback ("Selection not readable via UI Automation: …").
+    private static func unreadable(_ error: AXError) {
+        Log.info("Selection not readable via Accessibility: \(name(error))")
+    }
+
+    private static func name(_ error: AXError) -> String {
+        switch error {
+        case .success: return "noText"
+        case .attributeUnsupported: return "attributeUnsupported"
+        case .noValue: return "noValue"
+        case .cannotComplete: return "cannotComplete"
+        case .apiDisabled: return "apiDisabled"
+        case .notImplemented: return "notImplemented"
+        case .invalidUIElement: return "invalidUIElement"
+        case .failure: return "failure"
+        default: return "error \(error.rawValue)"
+        }
     }
 }
 #endif
