@@ -227,9 +227,10 @@ final class BudgetBackend: LanguageModelBackend, @unchecked Sendable {
     @Test func cloudModelsHaveNothingToLoad() async {
         var s = AppSettings()
         let id = ModelID(provider: .anthropic, name: "claude-haiku-4-5-20251001")
-        #expect(await AIStatus.current(id, settings: s) == ("claude-haiku-4-5-20251001 is a cloud model; \"Keep everything offline\" blocks it", false))
+        // Windows names the model by its stored id.
+        #expect(await AIStatus.current(id, settings: s) == ("anthropic:claude-haiku-4-5-20251001 is a cloud model; \"Keep everything offline\" blocks it", false))
         s.cloud.keepOffline = false
-        #expect(await AIStatus.current(id, settings: s) == ("Ready · claude-haiku-4-5-20251001 (cloud)", true))
+        #expect(await AIStatus.current(id, settings: s) == ("Ready · anthropic:claude-haiku-4-5-20251001 (cloud)", true))
     }
 
     @Test func theRuntimeStartsByItselfByDefault() throws {

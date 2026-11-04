@@ -34,7 +34,24 @@ public struct ModelID: Hashable, Sendable, Codable, CustomStringConvertible {
         self.init(provider: p, name: String(raw[raw.index(after: colon)...]))
     }
 
+    /// A model as a profile or the settings store it (Windows' `ModelFor`/`string.IsNullOrWhiteSpace(p.Model)`): nil
+    /// when blank, "provider:name" as usual, and anything else as an Ollama tag, the way Windows writes local models
+    /// ("qwen2.5:3b"), so a profiles.json from Windows keeps its model.
+    public init?(stored raw: String?) {
+        let t = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return nil }
+        if let id = ModelID(t) {
+            guard !id.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            self = id
+        } else {
+            self.init(provider: .ollama, name: t)
+        }
+    }
+
     public var description: String { "\(provider.rawValue):\(name)" }
+
+    /// The id as Windows writes and shows it: an Ollama model by its bare tag, a cloud model as "provider:name".
+    public var windowsForm: String { provider == .ollama ? name : description }
 
     /// Anthropic or OpenAI(-compatible): the text goes to that service with the user's key.
     public var isCloud: Bool { provider == .anthropic || provider == .openai }
@@ -62,7 +79,7 @@ public struct ModelID: Hashable, Sendable, Codable, CustomStringConvertible {
 
     public init(from decoder: Decoder) throws {
         let raw = try decoder.singleValueContainer().decode(String.self)
-        guard let id = ModelID(raw) else { throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: raw)) }
+        guard let id = ModelID(stored: raw) else { throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: raw)) }
         self = id
     }
 
@@ -84,6 +101,12 @@ public enum CloudCatalog {
         CloudModel(id: ModelID(provider: .anthropic, name: "claude-sonnet-5-5"), title: "Claude Sonnet 5.5", blurb: "Stronger rewriting, e.g. emails from rambling."),
         CloudModel(id: ModelID(provider: .anthropic, name: "claude-opus-5-5"), title: "Claude Opus 5.5", blurb: "The most capable; slower and pricier."),
     ]
+
+    /// Windows' CloudModels.Catalog: Anthropic's models, then the OpenAI(-compatible) model set under Settings › Cloud AI.
+    public static func models(_ cloud: CloudSettings) -> [CloudModel] {
+        anthropic + [CloudModel(id: ModelID(provider: .openai, name: cloud.openAIModel), title: cloud.openAIModel,
+                                blurb: "From \(cloud.openAIBaseURL)")]
+    }
 }
 
 /// A local model offered for download through Ollama (Windows' ModelsPage `LocalModels`), word for word, with "PC"
@@ -159,6 +182,18 @@ public struct AppleIntelligenceBackend: LanguageModelBackend {
         case .unavailable(.modelNotReady): "Apple Intelligence is still getting ready (downloading its model). Try again in a few minutes."
         case .unavailable: "Apple Intelligence isn't available right now."
         }
+    }
+
+    /// Apple Intelligence can't run now but will by itself soon (its model is still downloading).
+    public static var isGettingReady: Bool {
+        if case .unavailable(.modelNotReady) = SystemLanguageModel.default.availability { return true }
+        return false
+    }
+
+    /// This device can never run Apple Intelligence.
+    public static var isUnsupported: Bool {
+        if case .unavailable(.deviceNotEligible) = SystemLanguageModel.default.availability { return true }
+        return false
     }
 
     /// Load the on-device model ahead of the first dictation.
@@ -241,18 +276,16 @@ public struct OllamaBackend: LanguageModelBackend {
             "options": ["temperature": 0, "num_predict": maxTokens, "num_ctx": 4096],
         ]
         if let keepAlive { body["keep_alive"] = keepAlive }
-        var req = URLRequest(url: endpoint.appending(path: "api/chat"), timeoutInterval: timeout)
+        var req = URLRequest(url: endpoint.appending(path: "api/chat"), timeoutInterval: timeout + 5)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, resp): (Data, URLResponse)
-        do { (data, resp) = try await URLSession.shared.data(for: req) } catch let e as URLError {
-            switch e.code {
-            case .timedOut: throw UserFacingError("The AI model took too long to respond.")
-            // Windows checks first that the runtime answers at all.
-            case .cannotConnectToHost: throw UserFacingError(Self.notRunning)
-            default: throw UserFacingError("Couldn't reach the local AI runtime.")
-            }
+        // Windows' CancelAfter: a deadline over the whole request, not an idle timeout. The runtime was checked before
+        // this request (TextProcessor.backend), so any network failure here is "Couldn't reach" (HttpRequestException).
+        let request = req
+        do { (data, resp) = try await Deadline.run(seconds: timeout) { try await URLSession.shared.data(for: request) } } catch let e as URLError {
+            throw UserFacingError(e.code == .timedOut ? "The AI model took too long to respond." : "Couldn't reach the local AI runtime.")
         }
         let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
         if status == 404 { throw UserFacingError("The AI model '\(model)' isn't installed. Install it with:  ollama pull \(model)") }
@@ -262,14 +295,21 @@ public struct OllamaBackend: LanguageModelBackend {
     }
 
     /// Windows' "The local AI runtime (Ollama) isn't running. Run scripts\\setup.ps1, or start Ollama and check the
-    /// endpoint under Settings > AI Models.", with the Mac's way to get it.
-    public static let notRunning = "The local AI runtime (Ollama) isn't running. Start Ollama (or install it under Settings › Models), and check the endpoint under Settings › Models."
+    /// endpoint under Settings > AI Models.", with the Mac's way to get it: the direct download can install its own
+    /// copy under Settings › Models; the App Store version can't, so there the user starts their own Ollama.
+    public static var notRunning: String {
+        OllamaRuntime.canManage
+            ? "The local AI runtime (Ollama) isn't running. Start Ollama (or install it under Settings › Models), and check the endpoint under Settings › Models."
+            : "The local AI runtime (Ollama) isn't running. Start Ollama, and check the endpoint under Settings › Models."
+    }
 
     /// Load the model into memory without generating anything (an empty chat request), so the first dictation doesn't
     /// wait for it. Returns whether Ollama answered.
     @discardableResult
     public static func warmUp(endpoint: URL, model: String, keepAlive: String? = nil) async -> Bool {
-        var req = URLRequest(url: endpoint.appending(path: "api/chat"), timeoutInterval: 300)
+        // No time limit, as on Windows (its HttpClient waits however long a model takes to load): a 19 GB model read
+        // from a slow disk can take minutes.
+        var req = URLRequest(url: endpoint.appending(path: "api/chat"), timeoutInterval: 24 * 3600)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         var body: [String: Any] = ["model": model, "messages": [] as [Any], "options": ["num_ctx": 4096]]
@@ -297,12 +337,16 @@ public struct OllamaBackend: LanguageModelBackend {
         do { (bytes, resp) = try await URLSession.shared.bytes(for: req) } catch let e as URLError where e.code != .cancelled {
             throw UserFacingError("Couldn't reach the AI runtime to download the model.")
         }
-        guard ((resp as? HTTPURLResponse)?.statusCode ?? 0) / 100 == 2 else {
-            throw UserFacingError("Couldn't reach the AI runtime to download the model.")
-        }
+        // Windows' EnsureSuccessStatusCode and JsonNode.Parse sit outside its "Couldn't reach" catch: a bad status or
+        // a line that isn't JSON is the generic "The download failed. See the log for details."
+        let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        guard status / 100 == 2 else { throw PullFailed(reason: "the runtime answered \(status)") }
         var layers: [String: (done: Double, total: Double)] = [:]
         for try await line in bytes.lines {
-            guard let o = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any] else { continue }
+            if line.isEmpty { continue }
+            guard let o = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any] else {
+                throw PullFailed(reason: "a progress line wasn't JSON")
+            }
             if let err = o["error"] as? String { throw UserFacingError("Downloading the AI model failed: \(err). Click Retry.") }
             if let digest = o["digest"] as? String, let total = (o["total"] as? NSNumber)?.doubleValue {
                 layers[digest] = ((o["completed"] as? NSNumber)?.doubleValue ?? 0, total)
@@ -315,13 +359,20 @@ public struct OllamaBackend: LanguageModelBackend {
         throw UserFacingError("Downloading the AI model stopped unexpectedly. Click Retry.")
     }
 
+    /// A download through the runtime that failed in a way Windows doesn't put into words (logged; the page says
+    /// "The download failed. See the log for details.").
+    public struct PullFailed: Error, CustomStringConvertible {
+        public var reason: String
+        public var description: String { "Downloading the AI model failed: \(reason)" }
+    }
+
     /// How much of a loaded model sits in GPU memory, as a percentage (/api/ps size_vram of size), or nil when it
-    /// isn't loaded.
+    /// isn't loaded. The name as given, in any case (Windows' DescribeLoadedAsync: no ":latest" twin).
     public static func gpuShare(endpoint: URL, model: String) async -> Int? {
         guard let (data, _) = try? await URLSession.shared.data(from: endpoint.appending(path: "api/ps")),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let models = json["models"] as? [[String: Any]],
-              let m = models.first(where: { LocalCatalog.same(($0["name"] as? String) ?? "", model) }) else { return nil }
+              let m = models.first(where: { (($0["name"] as? String) ?? "").caseInsensitiveCompare(model) == .orderedSame }) else { return nil }
         let size = (m["size"] as? NSNumber)?.doubleValue ?? 0, vram = (m["size_vram"] as? NSNumber)?.doubleValue ?? 0
         return size <= 0 ? 0 : Int((100 * vram / size).rounded())
     }
@@ -344,6 +395,12 @@ public struct OllamaBackend: LanguageModelBackend {
             $0.name.caseInsensitiveCompare(model) == .orderedSame || $0.name.caseInsensitiveCompare(model + ":latest") == .orderedSame
         }) else { return ModelSize() } // not installed (yet): ask again next time
         let size = ModelSize(large: m.heldInRam(gpuBytes: ModelSize.gpuBytes), dense: !m.isMixture)
+        if size.large {
+            func b(_ x: Double) -> String { String(format: "%g", (x * 10).rounded() / 10) }
+            CoreLog.info(m.isMixture
+                ? "LLM \(model): a mixture of experts (\(b(m.activeBillions))B of \(b(m.billions))B at work), run from memory, with what fits on the GPU"
+                : "LLM \(model): \(b(m.billions))B, too big for the GPU: held in memory with what fits on the GPU, and slow (all of it works on each word)")
+        }
         sizesLock.withLock { sizes[model] = size }
         return size
     }
@@ -396,7 +453,12 @@ public struct OllamaBackend: LanguageModelBackend {
         guard let (data, _) = try? await URLSession.shared.data(from: endpoint.appending(path: "api/tags")),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let models = json["models"] as? [[String: Any]] else { return [] }
-        return models.compactMap { $0["name"] as? String }.sorted()
+        return sortedLikeWindows(models.compactMap { $0["name"] as? String })
+    }
+
+    /// Windows' `OrderBy(n => n)`: the culture's order (':' before '.', "Llama" among the l's), not code points.
+    public static func sortedLikeWindows(_ names: [String]) -> [String] {
+        names.sorted { $0.compare($1, locale: Locale.current) == .orderedAscending }
     }
 }
 
@@ -522,7 +584,7 @@ public struct CloudBackend: LanguageModelBackend {
         switch id.provider {
         case .anthropic:
             label = "Anthropic"
-            req = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!, timeoutInterval: timeout)
+            req = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!, timeoutInterval: timeout + 5)
             req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
             req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
             req.httpBody = try JSONSerialization.data(withJSONObject: [
@@ -531,14 +593,14 @@ public struct CloudBackend: LanguageModelBackend {
         case .openai:
             label = "OpenAI"
             // The key and the text go to this address: over TLS, unless it is a server on this Mac.
-            guard let base = URL(string: openAIBaseURL), base.scheme == "https" || OllamaBackend.isLoopback(base) else {
+            guard let base = URL(string: openAIBaseURL), base.scheme?.lowercased() == "https" || OllamaBackend.isLoopback(base) else {
                 throw UserFacingError("The OpenAI-compatible address must start with https:// (http:// only for a server on this Mac). " +
                                       "Check it under Settings › Cloud AI.")
             }
-            req = URLRequest(url: base.appending(path: "chat/completions"), timeoutInterval: timeout)
+            req = URLRequest(url: base.appending(path: "chat/completions"), timeoutInterval: timeout + 5)
             req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
             // OpenAI itself wants max_completion_tokens; compatible services still use max_tokens.
-            let tokensKey = openAIBaseURL.contains("api.openai.com") ? "max_completion_tokens" : "max_tokens"
+            let tokensKey = openAIBaseURL.range(of: "api.openai.com", options: .caseInsensitive) != nil ? "max_completion_tokens" : "max_tokens"
             req.httpBody = try JSONSerialization.data(withJSONObject: [
                 "model": id.name, "messages": [["role": "system", "content": system]] + turns, tokensKey: maxTokens,
             ] as [String: Any])
@@ -549,13 +611,17 @@ public struct CloudBackend: LanguageModelBackend {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
         let (data, resp): (Data, URLResponse)
-        do { (data, resp) = try await URLSession.shared.data(for: req) } catch let e as URLError {
+        // A deadline over the whole request (Windows' CancelAfter), so a service that trickles keep-alive bytes still
+        // gives up in time.
+        let request = req
+        do { (data, resp) = try await Deadline.run(seconds: timeout) { try await URLSession.shared.data(for: request) } } catch let e as URLError {
             throw UserFacingError(e.code == .timedOut ? "The cloud model took too long to respond."
                 : "Couldn't reach the cloud AI service. Check your internet connection.")
         }
         let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
         let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         guard (200..<300).contains(status) else {
+            CoreLog.warn("\(label) returned \(status)") // the message is shown, not logged: it can echo the text
             if status == 401 || status == 403 { throw UserFacingError("\(label) rejected the API key. Check it under Settings › Cloud AI.") }
             var detail = ((json?["error"] as? [String: Any])?["message"] as? String) ?? String(decoding: data, as: UTF8.self)
             if detail.count > 200 { detail = String(detail.prefix(200)) + "…" }
@@ -568,5 +634,27 @@ public struct CloudBackend: LanguageModelBackend {
         }
         let choices = json?["choices"] as? [[String: Any]]
         return (choices?.first?["message"] as? [String: Any])?["content"] as? String ?? ""
+    }
+}
+
+/// A deadline over a whole piece of async work (.NET's CancellationTokenSource.CancelAfter): past it the work is
+/// cancelled and `URLError(.timedOut)` thrown. Cancelling the caller still ends in `CancellationError`.
+enum Deadline {
+    static func run<T: Sendable>(seconds: Double, _ work: @escaping @Sendable () async throws -> T) async throws -> T {
+        try await withThrowingTaskGroup(of: T?.self) { group in
+            group.addTask { try await work() }
+            group.addTask {
+                try await Task.sleep(for: .seconds(seconds))
+                return nil
+            }
+            defer { group.cancelAll() }
+            do {
+                guard let first = try await group.next(), let value = first else { throw URLError(.timedOut) }
+                return value
+            } catch let e as URLError where e.code == .cancelled {
+                try Task.checkCancellation()
+                throw e
+            }
+        }
     }
 }

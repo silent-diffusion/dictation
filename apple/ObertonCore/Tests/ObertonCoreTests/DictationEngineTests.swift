@@ -145,6 +145,8 @@ import Testing
     @Test func offlineBlocksOllamaCloudModels() async {
         var settings = AppSettings()
         settings.cloud.keepOffline = true
+        settings.startOllama = false // never start a runtime from a test
+        settings.ollamaEndpoint = "http://127.0.0.1:9" // nothing answers there
         let p = TextProcessor(settings: settings)
         #expect(throws: UserFacingError.self) { try p.backend(for: ModelID(provider: .ollama, name: "gpt-oss:120b-cloud")) }
         #expect((try? p.backend(for: ModelID(provider: .ollama, name: "qwen2.5:3b"))) != nil)
@@ -153,7 +155,9 @@ import Testing
         let r = await p.process("make sure the build is green", profile: profile)
         #expect(r.text == "make sure the build is green")
         #expect(!r.modified)
-        #expect(r.warning?.contains("ollama.com") == true)
+        // As on Windows the runtime is checked first: with none answering, that is what the notice says (with one
+        // answering, it would be the offline rule's "runs on ollama.com").
+        #expect(r.warning?.contains("isn't running") == true)
     }
 
     @Test func timeoutsGrowForModelsHeldInMemory() {

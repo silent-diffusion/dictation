@@ -17,7 +17,8 @@ public enum AIStatus {
         case .anthropic, .openai:
             await report(cloudLine(id, settings: settings), !settings.cloud.keepOffline)
         case .ollama:
-            if id.isOllamaCloud { await report(cloudLine(id, settings: settings), !settings.cloud.keepOffline); return }
+            // Every Ollama model goes through the runtime, its cloud ones ("…-cloud") too (Windows' WarmUpAsync only
+            // short-circuits Anthropic and OpenAI).
             do {
                 await report("Starting AI runtime…", false)
                 let endpoint = try OllamaBackend.validated(settings.ollamaEndpoint)
@@ -30,12 +31,14 @@ public enum AIStatus {
                 await report("Loading \(id.name)…", false)
                 let size = await OllamaBackend.size(endpoint: endpoint, model: id.name)
                 guard await OllamaBackend.warmUp(endpoint: endpoint, model: id.name, keepAlive: settings.ollamaKeepAlive(large: size.large)) else {
+                    CoreLog.warn("LLM warm-up failed: the runtime didn't load \(id.name)")
                     await report("AI runtime error", false)
                     return
                 }
-                await report(await describeLoaded(id.name, endpoint: endpoint, large: size.large), true)
+                await report(await describeLoaded(id.name, endpoint: endpoint, large: size.large, log: true), true)
             } catch is CancellationError {
             } catch {
+                CoreLog.warn("LLM warm-up failed: \(error.localizedDescription)")
                 await report(error is UserFacingError ? "AI runtime unavailable" : "AI runtime error", false)
             }
         }
@@ -50,7 +53,6 @@ public enum AIStatus {
         case .anthropic, .openai:
             return (cloudLine(id, settings: settings), !settings.cloud.keepOffline)
         case .ollama:
-            if id.isOllamaCloud { return (cloudLine(id, settings: settings), !settings.cloud.keepOffline) }
             guard let endpoint = try? OllamaBackend.validated(settings.ollamaEndpoint),
                   await OllamaBackend.isLoaded(endpoint: endpoint, model: id.name) else { return (notLoaded, false) }
             let large = await OllamaBackend.size(endpoint: endpoint, model: id.name).large
@@ -58,13 +60,15 @@ public enum AIStatus {
         }
     }
 
+    /// Windows names the model by its stored id here ("anthropic:claude-haiku-4-5-20251001").
     static func cloudLine(_ id: ModelID, settings: AppSettings) -> String {
-        settings.cloud.keepOffline ? "\(id.name) is a cloud model; \"Keep everything offline\" blocks it" : "Ready · \(id.name) (cloud)"
+        settings.cloud.keepOffline ? "\(id.windowsForm) is a cloud model; \"Keep everything offline\" blocks it" : "Ready · \(id.windowsForm) (cloud)"
     }
 
     /// How much of the loaded model landed in GPU memory (Windows' DescribeLoadedAsync).
-    static func describeLoaded(_ model: String, endpoint: URL, large: Bool) async -> String {
+    static func describeLoaded(_ model: String, endpoint: URL, large: Bool, log: Bool = false) async -> String {
         guard let pct = await OllamaBackend.gpuShare(endpoint: endpoint, model: model) else { return "Ready · \(model)" }
+        if log { CoreLog.info("LLM \(model) loaded: \(pct)% in GPU memory") }
         return describe(model, gpuPercent: pct, large: large)
     }
 

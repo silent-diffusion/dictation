@@ -3,7 +3,7 @@ import Foundation
 /// A dictation profile: the instructions the AI follows and the switches around it. The same fields and built-ins as
 /// the Windows app's `Profile` (src/Dictation.Core/Settings/Models.cs), so the two stay recognisably one product.
 public struct Profile: Codable, Identifiable, Hashable, Sendable {
-    public var id: String = UUID().uuidString
+    public var id: String = Profile.newID()
     public var name: String = "New Profile"
     public var description: String = ""
     public var prompt: String = ""
@@ -32,7 +32,7 @@ public struct Profile: Codable, Identifiable, Hashable, Sendable {
     /// and the raw transcript is used. 0.5 = ±50%.
     public var maxChangeRatio: Double = 0.5
 
-    public init(id: String = UUID().uuidString, name: String = "New Profile", description: String = "", prompt: String = "",
+    public init(id: String = Profile.newID(), name: String = "New Profile", description: String = "", prompt: String = "",
                 model: String? = nil, autoProcess: Bool = true, showPreview: Bool = false, rewriteWhole: Bool = false,
                 maxChangeRatio: Double = 0.5) {
         self.id = id
@@ -60,6 +60,18 @@ public struct Profile: Codable, Identifiable, Hashable, Sendable {
 
     public var isRaw: Bool { !autoProcess }
 
+    /// A new profile's id as Windows makes it (`Guid.NewGuid().ToString("N")`): 32 lower-case hex digits, no dashes.
+    public static func newID() -> String { UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased() }
+
+    /// The voice this profile reads with (Windows' `App.VoiceFor`): its own, or Read aloud's when it names none or a
+    /// blank one.
+    public func readVoice(fallback: String?) -> String? { Self.readVoice(voice, fallback: fallback) }
+
+    public static func readVoice(_ voice: String?, fallback: String?) -> String? {
+        guard let voice, !voice.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return fallback }
+        return voice
+    }
+
     /// `speechModel` for Apple's speech recognizer (in settings that is "", which here means "the one in Settings").
     public static let appleSpeech = "apple-speech"
 }
@@ -86,6 +98,23 @@ public enum BuiltInProfiles {
             changed = true
         }
         return changed
+    }
+
+    /// Windows' ProfileService at start. A new install (profiles.json missing, empty or unreadable: `fresh`) starts with
+    /// Grammar & Clarity as the default and active profile (`freshPick` overrides that, e.g. Raw where no AI can run);
+    /// built-ins added in later versions appear once; then the default is checked (missing: the first profile) and
+    /// made active. True when the profiles or the settings changed in a way worth saving.
+    @discardableResult
+    public static func start(_ profiles: inout [Profile], settings: inout AppSettings, fresh: Bool, freshPick: String? = nil) -> Bool {
+        if fresh {
+            let pick = freshPick.flatMap { id in profiles.first { $0.id == id }?.id } ?? profiles.first { $0.name == defaultName }?.id
+            settings.defaultProfileID = pick
+            settings.activeProfileID = pick
+        }
+        let added = addMissing(to: &profiles, added: &settings.builtInProfilesAdded)
+        settings.defaultProfileID = profiles.first { $0.id == settings.defaultProfileID }?.id ?? profiles.first?.id
+        settings.activeProfileID = settings.defaultProfileID
+        return fresh || added
     }
 
     /// A new profile, as Windows' ProfileService.Create makes it.

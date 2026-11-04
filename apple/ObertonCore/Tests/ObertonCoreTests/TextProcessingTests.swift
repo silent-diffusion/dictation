@@ -12,9 +12,12 @@ import Testing
     @Test func keepsQuotesThatBelong() { #expect(OutputSanitizer.clean("\"Hello,\" she said.", input: "\"hello\" she said") == "\"Hello,\" she said.") }
     @Test func stripsThinkAndFences() { #expect(OutputSanitizer.clean("<think>hmm</think>```text\nDone.\n```", input: "done") == "Done.") }
 
-    static let input = "i went to the store yesterday and bought some apples and oranges for the party"
+    static let input = "so I went to the store yesterday and bought some apples and oranges for the party"
     @Test func plausibleEdit() { #expect(OutputSanitizer.implausibility(input: Self.input, output: "I went to the store yesterday and bought apples and oranges for the party.", maxChange: 0.4) == nil) }
-    @Test func emptyIsRejected() { #expect(OutputSanitizer.implausibility(input: Self.input, output: "  ", maxChange: 0.4) != nil) }
+    @Test func emptyIsRejected() {
+        let why = OutputSanitizer.implausibility(input: Self.input, output: "  ", maxChange: 0.4)
+        #expect(why != nil && why != "") // rejected, with a reason
+    }
     @Test func summaryIsRejected() { #expect(OutputSanitizer.implausibility(input: Self.input, output: "Bought fruit.", maxChange: 0.4) != nil) }
     @Test func ramblingIsRejected() {
         let ramble = Array(repeating: "Sure! I would be happy to help with that.", count: 6).joined(separator: " ")
@@ -34,26 +37,49 @@ import Testing
 @Suite struct ChunkerTests {
     @Test func shortTextIsOneChunk() { #expect(TextChunker.split("Short text.").count == 1) }
     @Test func longTextSplitsAtSentences() {
-        let text = Array(repeating: "This is a sentence that goes on for a while.", count: 120).joined(separator: " ")
+        let text = (0..<400).map { "This is sentence number \($0)." }.joined(separator: " ")
         let chunks = TextChunker.split(text, maxChars: 1000)
         #expect(chunks.count > 5)
-        #expect(chunks.allSatisfy { $0.count <= 1000 && $0.hasSuffix(".") })
+        #expect(chunks.allSatisfy { $0.utf16.count <= 1000 && $0.hasSuffix(".") })
         #expect(chunks.joined(separator: " ") == text)
     }
     @Test func hardCutsWithoutSpaces() { #expect(TextChunker.split(String(repeating: "a", count: 5000), maxChars: 2000).count >= 3) }
-    @Test func neverCutsAWord() {
-        let text = Array(repeating: "word", count: 300).joined(separator: " ")
-        let pieces = TextChunker.split(text, maxChars: 200)
-        #expect(pieces.allSatisfy { $0.count <= 200 && !($0 + " ").contains("wor ") })
-        #expect(pieces.joined(separator: " ") == text)
-    }
-    @Test func segmentsKeepParagraphs() {
-        let text = "First paragraph here.\n\nSecond one."
+}
+
+// Windows' SegmentTests, with its inputs.
+@Suite struct SegmentTests {
+    @Test func shortDictationIsOneSegment() { #expect(TextChunker.segment("Just one short sentence.").count == 1) }
+    @Test func paragraphBreaksStartNewSegments() {
+        let text = "First topic, short.\n\nSecond topic, also short."
         let segments = TextChunker.segment(text)
         #expect(segments.count == 2)
         #expect(!segments[0].startsParagraph && segments[1].startsParagraph)
         #expect(TextChunker.join(segments, segments.map(\.text)) == text)
     }
+    @Test func unpunctuatedRunBreaksBetweenWords() {
+        let text = Array(repeating: "word", count: 600).joined(separator: " ")
+        let pieces = TextChunker.split(text, maxChars: 200)
+        #expect(pieces.allSatisfy { $0.utf16.count <= 200 && !($0 + " ").contains("wor ") })
+        #expect(pieces.joined(separator: " ") == text)
+    }
+    /// Lengths count UTF-16 units, as Windows' string.Length: an emoji is 2.
+    @Test func lengthsCountUTF16Units() {
+        let text = String(repeating: "😀", count: 60) // 60 characters, 120 UTF-16 units
+        #expect(TextChunker.split(text, maxChars: 100).count == 2)
+        #expect(TextChunker.split(text, maxChars: 100).joined() == text) // a hard cut never splits a pair
+        #expect(TextChunker.split(text, maxChars: 120).count == 1)
+    }
+    /// A hard cut drops line breaks at its end as well (Windows' TrimEnd).
+    @Test func hardCutTrimsNewlines() {
+        let text = String(repeating: "a", count: 150) + "\n" + String(repeating: "b", count: 100)
+        #expect(TextChunker.split(text, maxChars: 151).first == String(repeating: "a", count: 150))
+    }
+}
+
+// SYS-016: .NET's char.IsLetterOrDigit (letters and decimal digits, per UTF-16 unit).
+@Suite struct ContentTests {
+    @Test(arguments: ["½ ¾ ²", "Ⅻ", "𝐀𝐁", "— … —"]) func notLettersOrDigitsOnWindows(_ s: String) { #expect(!OutputSanitizer.hasContent(s)) }
+    @Test(arguments: ["a", "7", "é", "日本", "ß"]) func lettersAndDigits(_ s: String) { #expect(OutputSanitizer.hasContent(s)) }
 }
 
 @Suite struct PromptTests {
@@ -77,6 +103,21 @@ import Testing
         #expect(all.last?.id == BuiltInProfiles.rawID && all.last?.isRaw == true)
         // The 5.18 prompts: no em dashes or ellipses.
         #expect(all.prefix(2).allSatisfy { $0.prompt.contains("\"—\"") && $0.prompt.contains("\"...\"") })
+    }
+    /// Windows' StringBuilder.AppendLine: every line of the system prompt ends in "\r\n", the profile's own too.
+    @Test func systemPromptUsesWindowsLineBreaks() {
+        let s = PromptBuilder.systemPrompt(for: Profile(prompt: "Line one.\nLine two."))
+        #expect(s.hasPrefix("Line one.\r\nLine two.\r\n\r\nRemove filler words"))
+        #expect(s.hasSuffix("no notes.\r\n"))
+        #expect(!s.replacingOccurrences(of: "\r\n", with: "").contains("\n"))
+    }
+    /// Windows' history defaults on a new AppSettings (ThreeZeroTests).
+    @Test func historyKeepsAllTextAndAWeekOfAudio() {
+        let s = AppSettings()
+        #expect((s.historyLimit, s.historyDays) == (0, 0))
+        #expect(s.keepHistory && s.saveHistoryAudio)
+        #expect((s.audioLimit, s.audioDays) == (0, 7))
+        #expect(s.historyByApp)
     }
     @Test func defaultsMatchWindows518() {
         let s = AppSettings()

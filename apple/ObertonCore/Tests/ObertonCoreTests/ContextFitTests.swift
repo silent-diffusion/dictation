@@ -66,6 +66,14 @@ import Testing
         #expect(ContextFit.fit("Dear Sam.", context: InsertionContext(before: "Hi", after: "x"), spacingOnly: true) == " Dear Sam. ")
     }
 
+    /// Windows' RewriteWholeTests: a rewrite keeps its own capitals and paragraphs mid-sentence; without spacingOnly the
+    /// first word would be fitted to the sentence.
+    @Test func aRewriteKeepsItsOwnCapitalsMidSentence() {
+        let context = InsertionContext(before: "Draft: see below and", after: "")
+        #expect(ContextFit.fit("Hi Mark,\n\nThanks.", context: context, spacingOnly: true) == " Hi Mark,\n\nThanks.")
+        #expect(ContextFit.fit("Hi Mark.", context: context, spacingOnly: false).hasPrefix(" hi"))
+    }
+
     @Test func sameTextIgnoresEditorSubstitutions() {
         #expect(InsertionContext.sameText("It\u{2019}s \u{201C}ok\u{201D}\r\nyes\u{00A0}no", "It's \"ok\"\nyes no"))
         #expect(!InsertionContext.sameText("a", "b"))

@@ -7,8 +7,10 @@ public struct TextProcessor: Sendable {
 
     public init(settings: AppSettings) { self.settings = settings }
 
+    /// The profile's own model, or the default one when it names none (Windows' `ModelFor`: a blank name means the
+    /// default; a bare Ollama tag, as Windows writes it, is that Ollama model).
     public func model(for profile: Profile) -> ModelID {
-        profile.model.flatMap(ModelID.init) ?? settings.defaultModel
+        ModelID(stored: profile.model) ?? settings.defaultModel
     }
 
     /// The back end for a model, with its request timeout scaled to how the model sits in memory (as on Windows):
@@ -16,8 +18,10 @@ public struct TextProcessor: Sendable {
     public func backend(for id: ModelID, ask: Bool) async throws -> LanguageModelBackend {
         guard id.provider == .ollama else { return try plainBackend(for: id) }
         let endpoint = try OllamaBackend.validated(settings.ollamaEndpoint)
-        try checkOffline(id)
+        // As Windows: the runtime first (EnsureRunningAsync, for every model that isn't Anthropic or OpenAI), then the
+        // offline rule for Ollama's cloud models (inside ChatAsync).
         try await OllamaRuntime.ensureRunning(settings: settings)
+        try checkOffline(id)
         let size = await OllamaBackend.size(endpoint: endpoint, model: id.name)
         return OllamaBackend(endpoint: endpoint, model: id.name,
                              timeout: ask ? size.askTimeout(setting: settings.aiTimeoutSeconds) : size.dictationTimeout(setting: settings.aiTimeoutSeconds),
@@ -62,7 +66,7 @@ public struct TextProcessor: Sendable {
         if raw.isEmpty || profile.isRaw { return ProcessResult(text: raw, modified: false) }
         let id = model(for: profile)
         do {
-            return try await edit(raw, profile: profile, backend: try await backend(for: id, ask: false), cloud: id.isCloud)
+            return try await edit(raw, profile: profile, backend: try await backend(for: id, ask: false), cloud: id.isCloud, model: id.windowsForm)
         } catch {
             return Self.failed(raw, error)
         }
@@ -73,27 +77,45 @@ public struct TextProcessor: Sendable {
         do { return try await edit(raw, profile: profile, backend: backend, cloud: cloud) } catch { return Self.failed(raw, error) }
     }
 
+    /// The words for a failure that isn't put into words for the user (Windows' "Something went wrong. See the log.").
+    public static let somethingWentWrong = "Something went wrong. See the log."
+
     static func failed(_ raw: String, _ error: Error) -> ProcessResult {
         if error is CancellationError { return ProcessResult(text: raw, modified: false) }
-        let message = error.localizedDescription
+        let message: String
+        if let e = error as? UserFacingError {
+            message = e.message
+            CoreLog.warn("AI edit failed: " + message)
+        } else {
+            // Windows shows its own words only for a UserFacingException; anything else is logged and named generically.
+            message = somethingWentWrong
+            CoreLog.error("AI edit failed: \(error)")
+        }
         return ProcessResult(text: raw, modified: false, warning: message + " Inserting your original words.", error: message)
     }
 
     /// Windows' OllamaTextProcessor.ProcessAsync: an AI error anywhere throws, so the whole dictation falls back.
     /// Token budgets as Windows: a local model gets min(4096, n/2 + 256), a cloud one min(8192, n/2 + 512).
-    func edit(_ raw: String, profile: Profile, backend: LanguageModelBackend, cloud: Bool) async throws -> ProcessResult {
-        func budget(_ text: String) -> Int { cloud ? min(8192, text.count / 2 + 512) : min(4096, text.count / 2 + 256) }
+    /// Lengths in the log and the token budgets count UTF-16 units, as Windows' `string.Length`.
+    func edit(_ raw: String, profile: Profile, backend: LanguageModelBackend, cloud: Bool, model: String = "") async throws -> ProcessResult {
+        func budget(_ text: String) -> Int { cloud ? min(8192, text.utf16.count / 2 + 512) : min(4096, text.utf16.count / 2 + 256) }
         let system = PromptBuilder.systemPrompt(for: profile)
+        let clock = ContinuousClock.now
+        func ms() -> Int { let d = ContinuousClock.now - clock; return Int(d.components.seconds * 1000 + d.components.attoseconds / 1_000_000_000_000_000) }
         if profile.rewriteWhole {
             // No conservative-edit examples: they would pull the model towards keeping the wording.
             let text = OutputSanitizer.clean(try await backend.complete(system: system, examples: [], user: PromptBuilder.wrap(raw),
                                                                         maxTokens: budget(raw)), input: raw)
-            if OutputSanitizer.rewriteImplausibility(input: raw, output: text) == nil { return ProcessResult(text: text, modified: true) }
+            CoreLog.info("llm \(model): rewrote \(raw.utf16.count)->\(text.utf16.count) chars in \(ms()) ms")
+            guard let reason = OutputSanitizer.rewriteImplausibility(input: raw, output: text) else { return ProcessResult(text: text, modified: true) }
+            CoreLog.warn("Rejected model rewrite (\(reason)); using raw text.")
             return ProcessResult(text: raw, modified: false,
                                  warning: "The AI's rewrite failed the safety net, so your original words were inserted unchanged.", safetyNet: true)
         }
 
-        let examples = PromptBuilder.examples.map { (input: PromptBuilder.wrap($0.input), output: $0.output) }
+        // The conservative-edit examples remove fillers, so they go along only when the profile removes them
+        // (Windows' useExamples = profile.RemoveFillers), for every kind of model.
+        let examples = profile.removeFillers ? PromptBuilder.examples.map { (input: PromptBuilder.wrap($0.input), output: $0.output) } : []
         let segments = TextChunker.segment(raw)
         var output: [String] = []
         var rejected = 0
@@ -102,15 +124,17 @@ public struct TextProcessor: Sendable {
             let reply = try await backend.complete(system: system, examples: examples, user: PromptBuilder.wrap(segment.text),
                                                    maxTokens: budget(segment.text))
             let cleaned = OutputSanitizer.clean(reply, input: segment.text)
-            if OutputSanitizer.implausibility(input: segment.text, output: cleaned, maxChange: profile.maxChangeRatio) == nil {
+            guard let reason = OutputSanitizer.implausibility(input: segment.text, output: cleaned, maxChange: profile.maxChangeRatio) else {
                 output.append(cleaned)
                 continue
             }
             // The safety net works per segment: only the piece the model mangled falls back to the raw words.
+            CoreLog.warn("Rejected model output for segment \(output.count + 1)/\(segments.count) (\(reason)); using raw text for it.")
             output.append(segment.text)
             rejected += 1
         }
         let text = TextChunker.join(segments, output)
+        CoreLog.info("llm \(model): \(raw.utf16.count)->\(text.utf16.count) chars in \(ms()) ms (\(segments.count) segment(s), \(rejected) rejected)")
         if rejected == 0 { return ProcessResult(text: text, modified: true) }
         if rejected == segments.count {
             return ProcessResult(text: raw, modified: false,

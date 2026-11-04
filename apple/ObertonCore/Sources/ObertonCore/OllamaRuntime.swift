@@ -26,8 +26,35 @@ public enum OllamaRuntime {
         #endif
     }
 
-    /// Make sure the runtime answers: start Oberton's own copy if nothing does (Windows' EnsureRunningAsync).
+    /// Make sure the runtime answers: start Oberton's own copy if nothing does (Windows' EnsureRunningAsync). One
+    /// caller at a time (Windows' SemaphoreSlim), so a warm-up, a dictation and the Models page never start two copies.
     public static func ensureRunning(settings: AppSettings) async throws {
+        let (previous, done) = gate.enqueue()
+        defer { done() }
+        await previous?.value
+        try await ensureRunningNow(settings: settings)
+    }
+
+    private static let gate = Gate()
+
+    /// A first-come, first-served async lock: each caller waits for the one before it.
+    private final class Gate: @unchecked Sendable {
+        private let lock = NSLock()
+        private var tail: Task<Void, Never>?
+
+        func enqueue() -> (previous: Task<Void, Never>?, done: @Sendable () -> Void) {
+            let (stream, continuation) = AsyncStream<Void>.makeStream()
+            let mine = Task { for await _ in stream {} }
+            let previous = lock.withLock { () -> Task<Void, Never>? in
+                let p = tail
+                tail = mine
+                return p
+            }
+            return (previous, { continuation.finish() })
+        }
+    }
+
+    private static func ensureRunningNow(settings: AppSettings) async throws {
         let endpoint = try OllamaBackend.validated(settings.ollamaEndpoint)
         if await OllamaBackend.ping(endpoint: endpoint) { return }
         #if os(macOS)

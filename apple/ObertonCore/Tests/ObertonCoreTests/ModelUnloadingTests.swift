@@ -12,7 +12,7 @@ struct ModelUnloadingTests {
     @Test func keepAliveFollowsTheSetting() {
         #expect(AppSettings().unloadAfterMinutes == 30)
         #expect(settings(30).ollamaKeepAlive == "30m")
-        #expect(settings(1).ollamaKeepAlive == "1m")
+        #expect(settings(5).ollamaKeepAlive == "5m")
         #expect(settings(0).ollamaKeepAlive == "-1m") // never: keep loaded
         #expect(settings(AppSettings.unloadImmediately).ollamaKeepAlive == "1m") // the app unloads it a few seconds after use
     }
