@@ -1,4 +1,5 @@
 import AVFoundation
+import Combine
 import ObertonCore
 import SwiftUI
 import UniformTypeIdentifiers
@@ -18,15 +19,26 @@ struct NotesView: View {
     @State private var tab = NoteSessionView.snapshotTab
     @StateObject private var page = NotesPageState()
 
+    /// Each visit to the page (Windows builds a new NotesPage each time): a start begun on an earlier visit doesn't open
+    /// its session on this one (NOTES-N022).
+    @MainActor static var visit = 0
+
     var body: some View {
-        Group {
-            if let id = nav.place.noteSessionID, let s = model.notes.store.sessions.first(where: { $0.id == id }) {
-                NoteSessionView(session: s, tab: $tab, page: page).id(id)
-            } else {
-                NotesLanding(search: $search)
+        let open = nav.place.noteSessionID.flatMap { id in model.notes.store.sessions.first { $0.id == id } }
+        // The landing stays while a session shows, only hidden (Windows collapses it), so its list keeps its scroll.
+        ZStack(alignment: .topLeading) {
+            NotesLanding(search: $search, hidden: open != nil)
+                .opacity(open == nil ? 1 : 0)
+                .allowsHitTesting(open == nil)
+                .accessibilityHidden(open != nil)
+            if let s = open {
+                NoteSessionView(session: s, tab: $tab, page: page).id(s.id)
             }
         }
-        .onAppear { model.notes.forgetIdleModel() }
+        .onAppear {
+            Self.visit += 1
+            model.notes.forgetIdleModel()
+        }
     }
 }
 
@@ -55,6 +67,8 @@ struct NotesLanding: View {
     @EnvironmentObject var nav: Navigator
     @Environment(\.ob) private var ob
     @Binding var search: String
+    /// A session shows over it: its pipeline's model isn't worked out meanwhile (the page shows the session's).
+    var hidden = false
     @State private var starting = false
     @State private var problem: String?
     @State private var deleting: NoteSession?
@@ -63,7 +77,7 @@ struct NotesLanding: View {
 
     var body: some View {
         landing
-        .task { let n = notes; await n.keepIdleModel { n.isRecording } }
+        .task(id: hidden) { guard !hidden else { return }; let n = notes; await n.keepIdleModel { n.isRecording } }
         .alert(NotesDialog.title, isPresented: Binding(get: { problem != nil }, set: { if !$0 { problem = nil } })) {
             Button("OK") { problem = nil }
         } message: { Text(problem ?? "") }
@@ -82,7 +96,10 @@ struct NotesLanding: View {
         if !PageScroll<EmptyView>.flat {
             VStack(alignment: .leading, spacing: 0) {
                 top.padding(EdgeInsets(top: margins.top, leading: margins.leading, bottom: 0, trailing: margins.trailing))
-                ScrollView { list.padding(EdgeInsets(top: 0, leading: margins.leading, bottom: margins.bottom, trailing: margins.trailing)) }
+                // The ScrollViewer sits inside the page's margins: its scroll bar 28 in from the edge, the list cut 16 above
+                // the bottom.
+                ScrollView { list }
+                    .padding(EdgeInsets(top: 0, leading: margins.leading, bottom: margins.bottom, trailing: margins.trailing))
             }
         } else {
             PageScroll { VStack(alignment: .leading, spacing: 0) { top; list }.padding(margins) }
@@ -113,8 +130,8 @@ struct NotesLanding: View {
                     Text("SESSIONS").font(Ob.mono(12, .bold))
                     Spacer()
                     Readout("Search").padding(.trailing, 8)
-                    TextField("", text: $search).textFieldStyle(.plain).font(Ob.sans(13)).padding(.horizontal, 8).padding(.vertical, 5)
-                        .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1)).frame(width: 240)
+                    // A plain TextBox: the Fluent text box, Width 240.
+                    ObField("", text: $search, width: 240)
                         .accessibilityLabel("Search the sessions")
                 }
                 .padding(.top, 22).padding(.bottom, 8)
@@ -136,12 +153,13 @@ struct NotesLanding: View {
                     Button {
                         if let live = notes.current { nav.goNotes(live.id); return }
                         starting = true
+                        let visit = NotesView.visit
                         Task {
                             do {
                                 try await notes.start(source: chosenSource)
-                                // Opened only if Extended Notes is still the page showing (Windows opens it on its own
-                                // page, so moving to History meanwhile leaves you there).
-                                if let s = notes.current, nav.place.section == .notes { nav.goNotes(s.id) }
+                                // Opened only on the very page it was started from (Windows opens it on its own page: moving
+                                // to History meanwhile leaves you there, and a new visit to Notes stays on the landing).
+                                if let s = notes.current, nav.place.section == .notes, NotesView.visit == visit { nav.goNotes(s.id) }
                             } catch let e as UserFacingError {
                                 NotesDialog.warn(e.localizedDescription) { problem = $0 }
                             } catch {
@@ -154,7 +172,9 @@ struct NotesLanding: View {
                         HStack(spacing: 9) {
                             Circle().strokeBorder(ob.record, lineWidth: 1.6).background(Circle().fill(notes.isRecording ? ob.record : .clear))
                                 .frame(width: 11, height: 11)
-                            Text(notes.current.map { "● Recording // \($0.title) // Open" } ?? "Extended notes session")
+                            // ToUpperInvariant ("ß" stays), not the capsule's own upper-casing ("SS").
+                            Text(notes.current.map { "● RECORDING // " + NoteSessionView.invariantUpper($0.title) + " // OPEN" } ?? "EXTENDED NOTES SESSION")
+                                .textCase(nil)
                         }
                     }
                     .buttonStyle(.quiet)
@@ -209,8 +229,11 @@ struct NotesLanding: View {
                 readout(t.wordsTyped.formatted(), "words typed")
                 readout(t.aiRequests.formatted(), "AI requests")
                 // By source, in the order of the pills above, only the ones used: "MIC 3 · COMPUTER 1 · BOTH 2".
+                // Always there, even empty (one line high, no width), with its 22 after it, as Windows' TextBlock.
                 let by = [NotesSource.mic, .computer, .both].compactMap { s in t.sources[s.rawValue].flatMap { $0 > 0 ? (s, $0) : nil } }
-                if !by.isEmpty {
+                if by.isEmpty {
+                    Text(verbatim: "\u{200B}").font(Ob.mono(10.5))
+                } else {
                     Text(by.enumerated().reduce(into: AttributedString()) { text, item in
                         var label = AttributedString((item.offset > 0 ? " · " : "") + item.element.0.rawValue.uppercased() + " ")
                         label.font = Ob.mono(10.5); label.foregroundColor = ob.muted
@@ -229,7 +252,7 @@ struct NotesLanding: View {
 
     @ViewBuilder private var list: some View {
         let q = search.trimmed
-        let sessions = notes.store.sessions.filter { q.isEmpty || [$0.title, $0.transcript, $0.summary].contains { $0.range(of: q, options: [.caseInsensitive, .literal]) != nil } }
+        let sessions = notes.store.sessions.filter { q.isEmpty || [$0.title, $0.transcript, $0.summary].contains { NoteSessionView.containsIgnoringCase($0, q) } }
         if sessions.isEmpty {
             // Margin 2,6,0,0 replaces the Caption style's bottom 12 (NotesPage.xaml.cs:168).
             Caption(q.isEmpty ? "No sessions yet. Start one above and it appears here." : "No session matches.", bottom: 0).padding(.top, 6).padding(.leading, 2)
@@ -327,7 +350,11 @@ struct NoteSessionView: View {
     @State private var exportingExt = ""
     @State private var exporting: ExportFile?
     @State private var saveSoon: Task<Void, Never>?
+    @State private var playKeyFocused = false
     @FocusState private var titleFocused: Bool
+    @State private var titleKeyFocused = false
+    /// One of the three texts has the keyboard: the box draws Fluent's ink line along its bottom.
+    @State private var textFocused: [Tab: Bool] = [:]
     #if os(macOS)
     @State private var fullScreen = NSApp.keyWindow?.styleMask.contains(.fullScreen) == true
     #endif
@@ -340,7 +367,8 @@ struct NoteSessionView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Button("← Extended notes") { nav.goNotes(nil) }.buttonStyle(CapsuleButtonStyle(kind: .quiet, size: 10.5, compact: true)).handCursor().padding(.bottom, 8)
+            Button("← Extended notes") { nav.goNotes(nil) }.buttonStyle(CapsuleButtonStyle(kind: .quiet, size: 10.5, compact: true)).handCursor()
+                .focusTaker().padding(.bottom, 8)
             header
             Rule().padding(.vertical, 10)
             // A step redoes itself (and what follows it) from the recording, once the session has stopped.
@@ -350,7 +378,7 @@ struct NoteSessionView: View {
             // The hint is docked right first: it stays whole, and the pills give way when the row is too narrow.
             HStack(spacing: 0) {
                 HStack(spacing: 0) {
-                    ForEach(Tab.allCases, id: \.self) { t in Pill(t.rawValue, on: tab == t) { tab = t }.padding(.trailing, 4) }
+                    ForEach(Tab.allCases, id: \.self) { t in Pill(t.rawValue, on: tab == t) { tab = t }.focusTaker().padding(.trailing, 4) }
                 }
                 .fixedSize()
                 .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
@@ -398,7 +426,22 @@ struct NoteSessionView: View {
 
     // MARK: Header
 
+    /// Windows' DockPanel: the buttons docked right keep their size; the dot, the name and the timer (a horizontal
+    /// StackPanel, measured at any width) get what is left and are cut off there, so a long name runs to the buttons
+    /// with no "…" and pushes the timer out of sight.
     private var header: some View {
+        HStack(spacing: 0) {
+            headerLeft
+                .fixedSize()
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                .clipped()
+            headerButtons
+                .padding(.leading, 6) // each button's left margin 6
+                .fixedSize()
+        }
+    }
+
+    private var headerLeft: some View {
         HStack(spacing: 0) {
             if live {
                 Circle().strokeBorder(ob.record, lineWidth: 1.6)
@@ -406,8 +449,12 @@ struct NoteSessionView: View {
                     .frame(width: 11, height: 11).padding(.trailing, 10)
             }
             if renaming {
-                TextField("", text: $title).textFieldStyle(.roundedBorder).font(Ob.mono(22, .bold)).frame(minWidth: 360).fixedSize()
+                // A Fluent TextBox (4-pt corners, the control fill, the ink line while typing), MinWidth 360.
+                TextField("", text: $title).textFieldStyle(.plain).font(Ob.mono(22, .bold))
                     .focused($titleFocused)
+                    .fluentBox(focused: titleFocused)
+                    .frame(minWidth: 360)
+                    .fixedSize()
                     .onSubmit(commitTitle)
                     .onExitCommand { title = session.title; commitTitle() }
                     .onChange(of: titleFocused) { if !titleFocused { commitTitle() } }
@@ -420,43 +467,53 @@ struct NoteSessionView: View {
                     DispatchQueue.main.async { titleFocused = true }
                 } label: {
                     // Padding 0,1 above the 1-px underline; upper-cased as ToUpperInvariant ("ß" stays).
-                    Text(Self.invariantUpper(session.title)).font(Ob.mono(24, .bold)).lineLimit(1).truncationMode(.tail)
+                    Text(Self.invariantUpper(session.title)).font(Ob.mono(24, .bold)).lineLimit(1).fixedSize()
                         .padding(.top, 1).padding(.bottom, 2)
                         .overlay(alignment: .bottom) { Hairline() }
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .keyTabStop {
+                .focusEffectDisabled()
+                .tabStop(focused: $titleKeyFocused) {
                     title = session.title
                     renaming = true
                     DispatchQueue.main.async { titleFocused = true }
                 }
+                // WPF's own focus mark on a Button with its own template: a dotted rectangle 2 inside its edge.
+                .overlay {
+                    if titleKeyFocused {
+                        Rectangle().strokeBorder(ob.ink, style: StrokeStyle(lineWidth: 1, dash: [1, 2])).padding(2).allowsHitTesting(false)
+                    }
+                }
+                .focusTaker()
                 .help("Click to rename")
                 .accessibilityLabel("Session name; click to rename")
                 .textCursor()
             }
             // The live timer reads the recorder's samples as they come in (Windows' 400 ms tick).
             TimelineView(.periodic(from: .now, by: 0.4)) { _ in
-                Text(timer).font(Ob.mono(14, .bold)).foregroundStyle(live ? ob.ink : ob.muted).padding(.leading, 16).lineLimit(1)
+                Text(timer).font(Ob.mono(14, .bold)).foregroundStyle(live ? ob.ink : ob.muted).padding(.leading, 16).lineLimit(1).fixedSize()
             }
-            Spacer(minLength: 6) // Mark/Full's left margin 6 is the least gap
+        }
+    }
+
+    private var headerButtons: some View {
             HStack(spacing: 6) {
                 if live {
-                    Button("⚑ Mark") { notes.addMarker() }.buttonStyle(.quiet).disabled(notes.isFinishing)
+                    Button("⚑ Mark") { notes.addMarker() }.buttonStyle(.quiet).focusTaker().disabled(notes.isFinishing)
                         .help("Drop a time marker into the transcript (hotkey in Settings › Hotkeys)")
                         .accessibilityLabel("Drop a time marker into the transcript")
                     Button(notes.userPaused ? "● Resume" : "Ⅱ Pause") { notes.userPaused ? notes.resume() : notes.pause() }
-                        .buttonStyle(.quiet).disabled(notes.isFinishing)
+                        .buttonStyle(.quiet).focusTaker().disabled(notes.isFinishing)
                 }
                 #if os(macOS)
-                Button(fullScreen ? "⤡ Exit full screen" : "⤢ Full screen") { Self.toggleFullScreen(model) }.buttonStyle(.quiet)
+                Button(fullScreen ? "⤡ Exit full screen" : "⤢ Full screen") { Self.toggleFullScreen(model) }.buttonStyle(.quiet).focusTaker()
                 #endif
-                exportMenu
+                exportMenu.focusTaker()
                 if live {
-                    Button("■ Stop") { Task { await notes.stop() } }.buttonStyle(.primary).disabled(notes.isFinishing)
+                    Button("■ Stop") { Task { await notes.stop() } }.buttonStyle(.primary).focusTaker().disabled(notes.isFinishing)
                 }
             }
-        }
     }
 
     private var timer: String {
@@ -479,6 +536,22 @@ struct NoteSessionView: View {
     #if os(macOS)
     /// The sidebar's state before Full screen folded it, given back on the way out (MainWindow.SetFullScreen).
     private static var sidebarBefore: Bool?
+    private static var foldWatch: AnyCancellable?
+
+    /// Windows folds the sidebar for full screen without saving it (`SetSidebar(false, save: false)`): while in full
+    /// screen, settings.json keeps the sidebar as it was before, whatever else is saved meanwhile, so even a crash or a
+    /// forced quit there leaves it as the user had it.
+    private static func keepSavedFold(_ model: AppModel) {
+        func rewrite(_ settings: AppSettings) {
+            guard let before = sidebarBefore, settings.sidebarCollapsed != before, !AppModel.snapshotMode else { return }
+            var saved = settings
+            saved.sidebarCollapsed = before
+            _ = JSONFile<AppSettings>("settings.json").save(saved)
+        }
+        // After AppModel's own save of each change (it saves in didSet; the publisher fires before it).
+        foldWatch = model.$settings.sink { s in DispatchQueue.main.async { MainActor.assumeIsolated { rewrite(s) } } }
+        DispatchQueue.main.async { MainActor.assumeIsolated { rewrite(model.settings) } }
+    }
     private static var exitWatch: NSObjectProtocol?
     private static var quitWatch: NSObjectProtocol?
 
@@ -489,9 +562,11 @@ struct NoteSessionView: View {
         if !w.styleMask.contains(.fullScreen) {
             sidebarBefore = model.settings.sidebarCollapsed
             model.settings.sidebarCollapsed = true
+            keepSavedFold(model)
             if exitWatch == nil {
                 exitWatch = NotificationCenter.default.addObserver(forName: NSWindow.didExitFullScreenNotification, object: nil, queue: .main) { [weak model] _ in
                     MainActor.assumeIsolated {
+                        foldWatch = nil
                         if let before = sidebarBefore { model?.settings.sidebarCollapsed = before }
                         sidebarBefore = nil
                     }
@@ -502,6 +577,7 @@ struct NoteSessionView: View {
             if quitWatch == nil {
                 quitWatch = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak model] _ in
                     MainActor.assumeIsolated {
+                        foldWatch = nil
                         if let before = sidebarBefore { model?.settings.sidebarCollapsed = before }
                         sidebarBefore = nil
                     }
@@ -529,15 +605,15 @@ struct NoteSessionView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     // The snapshot renderer can't draw a text view: the same text in SwiftUI.
                     EditedText(session: session, revision: notes.revision).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                        .padding(.horizontal, 10).padding(.vertical, 8).clipped()
-                        .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
+                        .padding(.horizontal, 11).padding(.vertical, 9).clipped()
+                        .modifier(FluentField(focused: false))
                     EditedLegend()
                 }
             } else {
                 // The snapshot renderer can't draw a text view: the text as it reads.
-                MarkdownReadingView(text: text, size: 14.5).padding(EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14))
+                MarkdownReadingView(text: text, size: 14.5).padding(EdgeInsets(top: 13, leading: 15, bottom: 13, trailing: 15))
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).clipped()
-                    .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
+                    .modifier(FluentField(focused: false))
             }
         } else {
             // Read as Markdown; a click opens that line as plain text to edit (typing goes on at the end). One view per
@@ -550,14 +626,17 @@ struct NoteSessionView: View {
                         let doc = Self.doc(t)
                         // Padding 14,12 inside the box's 1-px border.
                         MarkdownEditor(text: text(doc), size: 14.5, label: t.rawValue, inset: CGSize(width: 15, height: 13), shown: tab == t,
-                                       onEdit: { edit($0, doc) }, onCaret: { carets[t] = $0 }, jump: { jumpItem($0, doc) },
-                                       playback: tab == t ? playback : nil)
+                                       onEdit: { edit($0, doc) }, onFocus: { textFocused[t] = $0 }, onCaret: { carets[t] = $0 },
+                                       jump: { jumpItem($0, doc) }, playback: tab == t ? playback : nil, focusClicksOnly: true)
                     }
                 }
-                .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1).opacity(tab == .edited ? 0 : 1))
+                // Windows' NotesBox is the Fluent TextBox: 4-pt corners, the control fill, a hairline edge, and its
+                // bottom line turning into the 2-pt ink line while typing.
+                .modifier(FluentField(focused: textFocused[tab] == true))
+                .opacity(tab == .edited ? 0 : 1)
                 VStack(alignment: .leading, spacing: 8) {
                     EditedTextView(session: session, revision: notes.revision, live: live, shown: tab == .edited) { seconds in jumpItem(seconds: seconds) }
-                        .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
+                        .modifier(FluentField(focused: false)) // a RichTextBox: the same Fluent box
                     EditedLegend()
                 }
                 .opacity(tab == .edited ? 1 : 0)
@@ -646,10 +725,12 @@ struct NoteSessionView: View {
             }
             .disabled(!hasRecording)
         } label: {
-            Text(page.copied ?? "Export ▾")
+            // ToUpperInvariant, as the Content Windows sets ("EXPORT ▾", "COPIED 1,234 WORDS ✓").
+            Text(Self.invariantUpper(page.copied ?? "Export ▾"))
         }
         .menuStyle(.button)
-        .buttonStyle(.quiet)
+        // A Menu takes only a plain ButtonStyle (the capsules are a PrimitiveButtonStyle on the Mac): the same quiet pill.
+        .buttonStyle(QuietMenuFace())
         .menuIndicator(.hidden)
         .fixedSize()
     }
@@ -671,10 +752,34 @@ struct NoteSessionView: View {
 
     private func save(_ part: NotesExport.Part, _ type: UTType, _ ext: String) {
         let name = part == .everything ? safeName : "\(safeName) - \(part.rawValue)"
-        let data = ext == "docx" ? NotesExport.buildDocx(session, part: part) : Data(NotesExport.build(session, part: part, markdown: ext == "md").utf8)
+        let s = session
+        let build = { ext == "docx" ? NotesExport.buildDocx(s, part: part) : Data(NotesExport.build(s, part: part, markdown: ext == "md").utf8) }
+        #if os(macOS)
+        // Built once the Save panel is closed (Windows builds after ShowDialog returns), so what was heard meanwhile is in it.
+        savePanel(name: name + "." + ext, type: type, ext: ext) { url in try build().write(to: url, options: .atomic) }
+        #else
         exportingExt = ext
-        exporting = ExportFile(data: data, type: type, name: name + "." + ext)
+        exporting = ExportFile(data: build(), type: type, name: name + "." + ext)
+        #endif
     }
+
+    #if os(macOS)
+    /// The Save panel on the main window; `write` runs on the main thread once a place is chosen.
+    private func savePanel(name: String, type contentType: UTType, ext: String, write: @escaping (URL) throws -> Void) {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [contentType]
+        panel.nameFieldStringValue = name
+        panel.canCreateDirectories = true
+        let done: (NSApplication.ModalResponse) -> Void = { response in
+            guard response == .OK, let url = panel.url else { return }
+            do { try write(url) } catch {
+                if ext == "docx" { Log.warn("Extended notes: Word export failed: \(type(of: error))") }
+                NotesDialog.warn("Saving failed: " + error.localizedDescription) { problem = $0 }
+            }
+        }
+        if let window = NSApp.keyWindow ?? NSApp.mainWindow { panel.beginSheetModal(for: window, completionHandler: done) } else { done(panel.runModal()) }
+    }
+    #endif
 
     /// As played: with its level brought up, once the recording has been prepared (and its copy is still there).
     private var recordingSource: URL? {
@@ -684,8 +789,15 @@ struct NoteSessionView: View {
 
     private func saveRecording() {
         guard hasRecording, let url = recordingSource else { return }
+        #if os(macOS)
+        savePanel(name: safeName + ".wav", type: .wav, ext: "wav") { to in
+            if FileManager.default.fileExists(atPath: to.path) { try FileManager.default.removeItem(at: to) }
+            try FileManager.default.copyItem(at: url, to: to)
+        }
+        #else
         exportingExt = "wav"
         exporting = ExportFile(file: url, type: .wav, name: safeName + ".wav")
+        #endif
     }
 
     #if os(macOS)
@@ -751,31 +863,41 @@ struct NoteSessionView: View {
 
     // MARK: Playback
 
+    /// The Summary and Edited tabs have no cursor moment: Play goes on from where it is.
+    private func playOrPause() {
+        if player.playing { player.pause() } else { let doc = doc; player.play(caret: caret, at: { session.secondsAt(doc, $0) }, session) }
+    }
+
     private var playBar: some View {
         HStack(spacing: 12) {
             Button {
-                // The Summary and Edited tabs have no cursor moment: Play goes on from where it is.
-                if player.playing { player.pause() } else { let doc = doc; player.play(caret: caret, at: { session.secondsAt(doc, $0) }, session) }
+                playOrPause()
             } label: {
-                PlayFace(playing: player.playing)
+                PlayFace(playing: player.playing, keyFocused: playKeyFocused)
             }
             .buttonStyle(PlayButtonStyle())
-            .handCursor()
+            // A WPF Button: a Tab stop, Space or Return presses it, its accent border while it has the keyboard.
+            .focusEffectDisabled()
+            .tabStop(focused: $playKeyFocused) { playOrPause() }
+            .handCursor(!(player.preparing || !hasRecording))
+            .focusTaker()
             .disabled(player.preparing || !hasRecording)
             .help(player.prepared.map { $0.gainDb > 0.5 ? "Play from the cursor (level brought up \(Int($0.gainDb.rounded())) dB)" : "Play from the cursor" } ?? "Play from the cursor")
             .accessibilityLabel("Play the recording from the cursor; right-click the text to jump to a moment")
             Text(player.preparing ? "PREPARING…" : "\(Self.length(player.position)) / \(Self.length(max(session.seconds, player.duration)))")
                 .font(Ob.mono(11.5)).frame(minWidth: 130, alignment: .leading)
-            Slider(value: Binding(get: { player.position }, set: { player.seek($0) }), in: 0...max(1, max(session.seconds, player.duration)))
-                .tint(ob.ink)
+            // The Fluent slider (SmallChange 0.1 s on the arrow keys).
+            FluentSlider(value: Binding(get: { player.position }, set: { player.seek($0) }), range: 0...max(1, max(session.seconds, player.duration)), step: 0.1)
+                .focusTaker()
                 .accessibilityLabel("Position in the recording")
             HStack(spacing: 0) {
-                Pill("Skip silences", on: player.skipSilences) { player.skipSilences.toggle(); page.skipSilences = player.skipSilences }.padding(.trailing, 14)
+                Pill("Skip silences", on: player.skipSilences) { player.skipSilences.toggle(); page.skipSilences = player.skipSilences }
+                    .focusTaker().padding(.trailing, 14)
                     .help("Jump over the pauses")
                     .accessibilityLabel("Skip silences")
                 ForEach([1.0, 1.5, 2.0], id: \.self) { r in
                     // Each pill keeps the style's right margin 4, the last one too.
-                    Pill(r == 1 ? "1×" : r == 1.5 ? "1.5×" : "2×", on: player.rate == r) { player.setRate(r); page.rate = r }.padding(.trailing, 4)
+                    Pill(r == 1 ? "1×" : r == 1.5 ? "1.5×" : "2×", on: player.rate == r) { player.setRate(r); page.rate = r }.focusTaker().padding(.trailing, 4)
                 }
             }
         }
@@ -793,6 +915,37 @@ struct NoteSessionView: View {
             if up.count == 1, let u = up.first { out.append(u) } else { out.append(c) }
         }
         return String(out)
+    }
+
+    /// .NET's `Contains(q, StringComparison.OrdinalIgnoreCase)`: each UTF-16 unit upper-cased on its own (simple
+    /// mapping, invariant), then compared unit by unit.
+    static func containsIgnoringCase(_ text: String, _ q: String) -> Bool {
+        let needle = ordinalUpper(q)
+        if needle.isEmpty { return true }
+        let hay = ordinalUpper(text)
+        guard hay.count >= needle.count else { return false }
+        let first = needle[0]
+        var i = 0
+        let last = hay.count - needle.count
+        while i <= last {
+            if hay[i] == first {
+                var k = 1
+                while k < needle.count && hay[i + k] == needle[k] { k += 1 }
+                if k == needle.count { return true }
+            }
+            i += 1
+        }
+        return false
+    }
+
+    static func ordinalUpper(_ s: String) -> [UInt16] {
+        s.utf16.map { u in
+            if u < 0x80 { return u >= 0x61 && u <= 0x7A ? u - 0x20 : u }
+            guard let scalar = Unicode.Scalar(u) else { return u } // a surrogate half stays as it is
+            let up = scalar.properties.uppercaseMapping.unicodeScalars
+            if up.count == 1, let v = up.first, v.value <= 0xFFFF { return UInt16(v.value) }
+            return u
+        }
     }
 
     static func length(_ seconds: Double) -> String {
@@ -837,7 +990,7 @@ enum NotesDialog {
     /// `fallback` shows it in the page instead (iPhone and iPad).
     static func warn(_ message: String, fallback: (String) -> Void) { show(message, warning: true, fallback: fallback) }
 
-    /// MessageBoxImage.Information: a message with the app's own icon.
+    /// MessageBoxImage.Information: a message with the information glyph.
     static func inform(_ message: String, fallback: (String) -> Void) { show(message, warning: false, fallback: fallback) }
 
     private static func show(_ message: String, warning: Bool, fallback: (String) -> Void) {
@@ -846,8 +999,14 @@ enum NotesDialog {
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = message
-        // The caution triangle is macOS's warning glyph (it comes with the critical style).
-        alert.alertStyle = warning ? .critical : .informational
+        // MessageBoxImage.Warning / Information: the warning triangle or the "i", as the page's other dialogs show them.
+        alert.alertStyle = warning ? .warning : .informational
+        let kind: DialogKind = warning ? .warning : .information
+        if let glyph = NSImage(systemSymbolName: kind.symbol, accessibilityDescription: nil)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 48, weight: .regular)
+                .applying(NSImage.SymbolConfiguration(hierarchicalColor: warning ? .systemYellow : .systemBlue))) {
+            alert.icon = glyph
+        }
         alert.addButton(withTitle: "OK")
         NSSound.beep() // the Exclamation / Asterisk sound Windows plays with the box
         if let window = NSApp.mainWindow ?? NSApp.windows.first(where: { $0.isVisible && $0.canBecomeMain }) {
@@ -865,6 +1024,7 @@ enum NotesDialog {
 /// Icons' outline Play/Pause).
 private struct PlayFace: View {
     var playing: Bool
+    var keyFocused = false
     @Environment(\.ob) private var ob
     @Environment(\.isEnabled) private var enabled
     @Environment(\.playPressed) private var pressed
@@ -875,11 +1035,41 @@ private struct PlayFace: View {
         Image(systemName: playing ? "pause" : "play").font(.system(size: 13)).foregroundStyle(ob.onInk)
             .frame(width: 36, height: 36)
             .background(Circle().fill(ob.ink))
-            .overlay(Circle().strokeBorder(ob.accent, lineWidth: focused ? 1 : 0))
+            .overlay(Circle().strokeBorder(ob.accent, lineWidth: focused || keyFocused ? 1 : 0))
             .contentShape(Circle())
             // PrimaryButton's triggers: hover 0.82, pressed 0.66, disabled 0.4, accent border on keyboard focus.
             .opacity(!enabled ? 0.4 : pressed ? 0.66 : hover ? 0.82 : 1)
-            .onHover { hover = $0 }
+            .onHover { hover = enabled && $0 }
+    }
+}
+
+/// EXPORT ▾'s face: App.xaml's QuietButton (an ink outline at CornerRadius 17, at least 34 tall, Padding 16 inside the
+/// line, the hover wash, 0.7 while pressed, the hand) for a Menu, which on the Mac takes only a plain ButtonStyle.
+private struct QuietMenuFace: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View { Face(label: configuration.label, pressed: configuration.isPressed) }
+
+    private struct Face<Label: View>: View {
+        var label: Label
+        var pressed: Bool
+        @Environment(\.ob) private var ob
+        @Environment(\.isEnabled) private var enabled
+        @State private var hover = false
+
+        var body: some View {
+            let shape = RoundedRectangle(cornerRadius: 17)
+            label
+                .font(Ob.mono(12))
+                .lineLimit(1)
+                .foregroundStyle(ob.ink)
+                .padding(.horizontal, 16 + Ob.border)
+                .frame(minHeight: 34)
+                .background(shape.fill(hover ? ob.subtle : .clear))
+                .overlay(shape.strokeBorder(ob.ink, lineWidth: 1))
+                .contentShape(shape)
+                .opacity(!enabled ? 0.4 : pressed ? 0.7 : 1)
+                .onHover { hover = enabled && $0 }
+                .handCursor(enabled)
+        }
     }
 }
 
@@ -895,6 +1085,16 @@ private extension EnvironmentValues {
 }
 
 fileprivate extension View {
+    /// A control that takes the keyboard when clicked (a focusable WPF control): a click on it renders an open line of
+    /// the text again; a click anywhere else on the page leaves it open (NOTES-159).
+    func focusTaker() -> some View {
+        #if os(macOS)
+        takesFocusOnClick()
+        #else
+        self
+        #endif
+    }
+
     /// The pointing hand over something clickable (WPF's Cursor="Hand").
     func handCursor() -> some View {
         #if os(macOS)
@@ -1004,9 +1204,11 @@ struct EditedLegend: View {
 
     @ViewBuilder private func item(_ label: String, _ mark: EditMark) -> some View {
         if mark == .userRemoved {
-            // The same 2-px line through the middle as in the text (SwiftUI's strikethrough has one weight).
+            // Windows' Pen(user, 2) in FontRecommended units: 2 × Cascadia Mono's strikeout size (100/2048 em), about
+            // 1 px at 10.5, at its strikeout position (636/2048 em, about 3.26 pt above the baseline; the middle of the
+            // line is about 3.64).
             Text(Self.unstruck(EditedText.styled(label.uppercased(), mark, ob: ob))).font(Ob.mono(10.5))
-                .overlay { Rectangle().fill(EditedText.userInk(ob)).frame(height: 2) }
+                .overlay { Rectangle().fill(EditedText.userInk(ob)).frame(height: 10.5 * 200 / 2048).offset(y: 0.38) }
         } else {
             Text(EditedText.styled(label.uppercased(), mark, ob: ob)).font(Ob.mono(10.5))
         }
@@ -1189,6 +1391,7 @@ struct Pill: View {
     var on: Bool
     var action: () -> Void
     @Environment(\.ob) private var ob
+    @Environment(\.isEnabled) private var enabled
     @State private var hover = false
     @FocusState private var focused: Bool
     @State private var keyFocused = false
@@ -1210,8 +1413,10 @@ struct Pill: View {
         .focused($focused)
         .tabStop(focused: $keyFocused, action: action)
         .focusEffectDisabled()
-        .onHover { hover = $0 }
-        .handCursor()
+        // A disabled ToggleButton has no IsMouseOver, and WPF shows the arrow over it.
+        .onHover { hover = enabled && $0 }
+        .onChange(of: enabled) { if !enabled { hover = false } }
+        .handCursor(enabled)
         .accessibilityAddTraits(on ? .isSelected : [])
     }
 }
@@ -1312,13 +1517,13 @@ struct FlowRow: Layout {
 struct NotesModelMenu: View {
     var width: CGFloat?
     @EnvironmentObject var model: AppModel
-    /// The list as last filled: empty until Ollama first answers (Windows' box is empty until FillAsync), then kept
-    /// for the next time the menu shows, and filled again.
-    @State private var installed: [NotesModels.Installed]? = Self.lastInstalled ?? (PageScroll<EmptyView>.flat ? [] : nil)
-    private static var lastInstalled: [NotesModels.Installed]?
+    /// The list once filled: blank each time the box first shows, until Ollama answers (Windows builds the page anew on
+    /// every visit, and its box is empty until FillAsync).
+    @State private var installed: [NotesModels.Installed]? = PageScroll<EmptyView>.flat ? [] : nil
 
     var body: some View {
-        let options = installed.map { self.options($0) } ?? []
+        // Before the list arrives the box shows nothing (one blank choice: the setting as it is).
+        let options = installed.map { self.options($0) } ?? [(model.settings.notesModel, "")]
         ObMenu(options: options, selection: Binding(get: {
             // The choice as stored, matched without regard to case (and an older "ollama:<name>" as that model).
             let v = model.settings.notesModel
@@ -1332,10 +1537,8 @@ struct NotesModelMenu: View {
             .help("Formats and sums up the session. Also under Settings › Models.")
             .accessibilityLabel("AI model for Extended Notes")
             .task {
-                var list: [NotesModels.Installed] = []
-                if let url = try? OllamaBackend.validated(model.settings.ollamaEndpoint) { list = await OllamaBackend.installedDetails(endpoint: url) }
-                installed = list
-                Self.lastInstalled = list
+                // ListModelDetailsAsync: Oberton's own runtime is started first if nothing answers (Direct).
+                installed = await NotesRecorder.listModels(model.settings)
             }
     }
 
@@ -1358,7 +1561,7 @@ struct NotesModelMenu: View {
         }
         // Largest first, then by name as the user's language sorts it (Windows' culture comparer).
         list += installed.filter(NotesModels.isChatModel).sorted {
-            $0.billions != $1.billions ? $0.billions > $1.billions : $0.name.compare($1.name, locale: .current) == .orderedAscending
+            $0.billions != $1.billions ? $0.billions > $1.billions : $0.name.compare($1.name, locale: NotesExport.userLocale) == .orderedAscending
         }.map { m in
             (m.name,
              "\(m.name) · \(Self.billions(m.billions))B"
@@ -1367,7 +1570,7 @@ struct NotesModelMenu: View {
         }
         if !st.cloud.keepOffline {
             // Ollama's cloud models run on ollama.com, so they are listed as cloud models.
-            list += installed.filter { ModelID.isOllamaCloud($0.name) }.sorted { $0.name.compare($1.name, locale: .current) == .orderedAscending }.map { m in
+            list += installed.filter { ModelID.isOllamaCloud($0.name) }.sorted { $0.name.compare($1.name, locale: NotesExport.userLocale) == .orderedAscending }.map { m in
                 (m.name, "\(m.name) · cloud: the transcript goes to ollama.com")
             }
             for c in CloudCatalog.anthropic where KeyStore.get(.anthropic) != nil { list.append((c.id.description, "\(c.title) · cloud: the transcript goes to Anthropic")) }
