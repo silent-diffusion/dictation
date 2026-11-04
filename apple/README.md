@@ -63,12 +63,18 @@ with the Windows app's (different key names and date formats).
 
 **Troubleshooting:** if the first-run setup fails, check your internet connection and click *Continue setup*; it picks up
 where it stopped. If a hotkey does nothing or the overlay says it is "already used", another app owns it: pick another on
-*Settings › Hotkeys*. Anything else: the log above.
+*Settings › Hotkeys*. If a dictation is only copied and Oberton says to allow it in Accessibility although the switch
+there is on, the switch belongs to another signed copy of Oberton (an older or development build): quit Oberton, run
+`tccutil reset PostEvent com.silentdiffusion.oberton` and `tccutil reset Accessibility com.silentdiffusion.oberton`,
+open Oberton, dictate once and allow it again, then quit and reopen it. Anything else: the log above.
 
 ## Toward TestFlight and the App Store
 
 The app is already built the App Store way: sandboxed, hardened runtime, signed with your team (set `DEVELOPMENT_TEAM` in `Local.xcconfig`, copied from `Local.xcconfig.example`; git ignores it), bundle ID
 `com.silentdiffusion.oberton`, no downloaded code (Apple's own speech and language models, Ollama only if the user runs it).
+Debug builds (both schemes) are `com.silentdiffusion.oberton.dev`, so a development copy never shares Privacy & Security
+grants, the sandbox container, settings or Keychain items with the installed App Store or TestFlight copy (macOS ties
+those grants to the bundle ID and the signature; CI checks the IDs with `scripts/check-bundle-ids.sh`).
 Left to do: register the bundle ID and create the app in App Store Connect, a privacy policy URL, then *Product › Archive* and upload for TestFlight.
 
 ## The direct download (Developer ID)
@@ -87,7 +93,7 @@ updates when Oberton starts" is on. The App Store build keeps its information pa
 | Sandbox / entitlements | on / `Oberton.entitlements` | off / `Oberton-Direct.entitlements` (microphone) |
 | Info.plist | `Info.plist` | `Info-Direct.plist`: the same Mac keys (CI checks with `scripts/check-direct-plist.sh`) + Sparkle's |
 | Swift flag | — | `OBERTON_DIRECT` |
-| Data | `~/Library/Containers/com.silentdiffusion.oberton/…/Application Support/Oberton` | `~/Library/Application Support/Oberton` |
+| Data | `~/Library/Containers/com.silentdiffusion.oberton/…/Application Support/Oberton` (Debug: `…oberton.dev/…`) | `~/Library/Application Support/Oberton` (Debug too: not sandboxed) |
 
 Both build `Oberton.app` with the same bundle ID, so in Xcode's shared DerivedData the last one built replaces the other
 (and a Debug App Store build made over a direct one keeps a stale, unused `Sparkle.framework` inside; archives are

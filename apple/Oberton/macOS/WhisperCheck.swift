@@ -6,7 +6,7 @@ import ObertonCore
 /// Debug only: downloads a Whisper model, then runs a dictation, an Extended Notes stream and a file transcription on a
 /// WAV made with `say` (played in place of the microphone), unloads it, puts the setting back, deletes the model if it
 /// wasn't there before, and quits. `OBERTON_WHISPER_CHECK=base.en OBERTON_DATA_DIR=<folder inside the container>`.
-/// Results go to the log (`/usr/bin/log show --predicate 'subsystem == "com.silentdiffusion.oberton"'`).
+/// Results go to the log (`/usr/bin/log show --predicate 'subsystem == "com.silentdiffusion.oberton.dev"'`: Debug's ID).
 @MainActor
 enum WhisperCheck {
     static let words = "The quick brown fox jumps over the lazy dog. Oberton writes down what you say, on this Mac. " +

@@ -33,3 +33,5 @@ jobs:
         run: xcodebuild -project Oberton.xcodeproj -scheme "Oberton Direct" -destination 'generic/platform=macOS' -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
       - name: Check the direct build's Info.plist
         run: scripts/check-direct-plist.sh
+      - name: Check the bundle IDs (Debug is com.silentdiffusion.oberton.dev)
+        run: scripts/check-bundle-ids.sh
