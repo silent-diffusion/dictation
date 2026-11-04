@@ -69,7 +69,7 @@ private struct ReadAloudPage: View {
                         bottom: 0).padding(.top, 6)
 
                 FieldLabel("Player position")
-                ObSwitch("Same place as the dictation overlay", isOn: ReaderPositionPicker.samePlaceBinding(model, previews: true)).fixedSize()
+                ObSwitch("Same place as the dictation overlay", isOn: ReaderPositionPicker.samePlaceBinding(model, previews: PositionPreview.samePlaceSwitchPreviews(on: .readAloud))).fixedSize()
                 HStack(spacing: 14) {
                     // A Border in Ob.Border (ink) on Ob.Window, radius 8.
                     ReaderPositionPicker(fill: ob.paper, radius: 8)
