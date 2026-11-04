@@ -4,13 +4,17 @@ import CoreAudio
 import Foundation
 import ObertonCore
 
-/// Everything this Mac plays, as 16 kHz mono Float32 samples (Core Audio process tap).
-/// A global tap (all processes, nothing excluded) feeds a private aggregate device whose IO proc converts each
-/// buffer with AVAudioConverter. Needs "System Audio Recording" permission (NSAudioCaptureUsageDescription).
+/// What this Mac plays on its default output device, as 16 kHz mono Float32 samples (Core Audio process tap), as
+/// Windows' WASAPI loopback of the default render device. A tap of every process's audio bound for that device's first
+/// stream feeds a private aggregate device whose IO proc converts each buffer with AVAudioConverter. Needs "System Audio
+/// Recording" permission (NSAudioCaptureUsageDescription).
 final class SystemAudioCapture {
     private var tapID = AudioObjectID(kAudioObjectUnknown)
     private var aggregateID = AudioObjectID(kAudioObjectUnknown)
     private var procID: AudioDeviceIOProcID?
+    /// The output device tapped, and the listener that says when it goes away.
+    private var outputID = AudioObjectID(kAudioObjectUnknown)
+    private var aliveListener: AudioObjectPropertyListenerBlock?
     private let queue = DispatchQueue(label: "Oberton.SystemAudioCapture", qos: .userInitiated)
     private let outputFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)!
 
@@ -32,6 +36,12 @@ final class SystemAudioCapture {
 
     /// Tears down the IO proc, aggregate device and tap. Safe to call more than once.
     func stop() {
+        if outputID != kAudioObjectUnknown, let aliveListener {
+            var address = Self.address(kAudioDevicePropertyDeviceIsAlive)
+            AudioObjectRemovePropertyListenerBlock(outputID, &address, queue, aliveListener)
+        }
+        aliveListener = nil
+        outputID = AudioObjectID(kAudioObjectUnknown)
         if aggregateID != kAudioObjectUnknown, let procID {
             AudioDeviceStop(aggregateID, procID)
             AudioDeviceDestroyIOProcID(aggregateID, procID)
@@ -48,14 +58,33 @@ final class SystemAudioCapture {
     }
 
     private func setUp(onSamples: @escaping ([Float]) -> Void) throws {
-        // 1. A private stereo tap of every process's output, left audible.
-        let description = CATapDescription(stereoGlobalTapButExcludeProcesses: [])
-        description.uuid = UUID()
-        description.name = "Oberton Extended Notes"
-        description.isPrivate = true
-        description.muteBehavior = .unmuted
+        // 0. The default output device (Windows' default render device for multimedia, which loopback records).
+        var outputDevice = AudioObjectID(kAudioObjectUnknown)
+        try check(Self.get(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDefaultOutputDevice,
+                           &outputDevice), "find the output device")
+        var outputUID: CFString = "" as CFString
+        try check(Self.get(outputDevice, kAudioDevicePropertyDeviceUID, &outputUID), "read the output device")
+
+        // 1. A private tap of what every process sends to that device's first stream, left audible. A device that
+        // won't be tapped on its own falls back to everything the Mac plays (the tap as it was before).
+        func tapDescription(device: Bool) -> CATapDescription {
+            let d = device ? CATapDescription(excludingProcesses: [], deviceUID: outputUID as String, stream: 0)
+                : CATapDescription(stereoGlobalTapButExcludeProcesses: [])
+            d.uuid = UUID()
+            d.name = "Oberton Extended Notes"
+            d.isPrivate = true
+            d.muteBehavior = .unmuted
+            return d
+        }
+        var description = tapDescription(device: true)
         var tap = AudioObjectID(kAudioObjectUnknown)
-        let tapStatus = AudioHardwareCreateProcessTap(description, &tap)
+        var tapStatus = AudioHardwareCreateProcessTap(description, &tap)
+        if tapStatus != noErr || tap == kAudioObjectUnknown {
+            Log.warn("Computer audio: couldn't tap the output device alone (Core Audio error \(tapStatus)); tapping all of the Mac's audio")
+            description = tapDescription(device: false)
+            tap = AudioObjectID(kAudioObjectUnknown)
+            tapStatus = AudioHardwareCreateProcessTap(description, &tap)
+        }
         guard tapStatus == noErr, tap != kAudioObjectUnknown else {
             throw UserFacingError("Oberton couldn't capture the computer's audio. Allow Oberton under System Settings › "
                                   + "Privacy & Security › Screen & System Audio Recording, then try again. (\(tapStatus))")
@@ -73,11 +102,6 @@ final class SystemAudioCapture {
         converter.downmix = true
 
         // 3. A private aggregate device clocked by the default output device, containing the tap.
-        var outputDevice = AudioObjectID(kAudioObjectUnknown)
-        try check(Self.get(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDefaultSystemOutputDevice,
-                           &outputDevice), "find the output device")
-        var outputUID: CFString = "" as CFString
-        try check(Self.get(outputDevice, kAudioDevicePropertyDeviceUID, &outputUID), "read the output device")
         let aggregate: [String: Any] = [
             kAudioAggregateDeviceNameKey: "Oberton System Audio",
             kAudioAggregateDeviceUIDKey: UUID().uuidString,
@@ -118,6 +142,19 @@ final class SystemAudioCapture {
 
         // 5. Go.
         try check(AudioDeviceStart(device, proc), "start capturing the computer's audio")
+        // The device going away (headphones unplugged, a USB device gone) ends the capture: Windows' RecordingStopped
+        // with an exception logs it as an error. The session goes on, its clock filling the gap with silence.
+        outputID = outputDevice
+        let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            guard let self else { return }
+            var alive: UInt32 = 1
+            guard Self.get(self.outputID, kAudioDevicePropertyDeviceIsAlive, &alive) != noErr || alive == 0 else { return }
+            Log.error("Computer audio capture stopped: the output device \(outputUID as String) is gone")
+        }
+        var aliveAddress = Self.address(kAudioDevicePropertyDeviceIsAlive)
+        if AudioObjectAddPropertyListenerBlock(outputDevice, &aliveAddress, queue, listener) == noErr { aliveListener = listener }
+        // The format as it is: Core Audio has no WAVEFORMATEXTENSIBLE wrapper, which Windows' mix format reports as
+        // "Extensible".
         let float = asbd.mFormatFlags & kAudioFormatFlagIsFloat != 0
         Log.info("Computer audio: \(Int(asbd.mSampleRate)) Hz, \(asbd.mChannelsPerFrame) ch, \(asbd.mBitsPerChannel)-bit \(float ? "IeeeFloat" : "Pcm")")
     }
@@ -131,10 +168,13 @@ final class SystemAudioCapture {
         throw UserFacingError(Self.failed)
     }
 
+    private static func address(_ selector: AudioObjectPropertySelector) -> AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+    }
+
     /// Reads a global-scope property of a fixed-size type.
     private static func get<T>(_ object: AudioObjectID, _ selector: AudioObjectPropertySelector, _ value: inout T) -> OSStatus {
-        var address = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal,
-                                                 mElement: kAudioObjectPropertyElementMain)
+        var address = address(selector)
         var size = UInt32(MemoryLayout<T>.size)
         return withUnsafeMutablePointer(to: &value) { AudioObjectGetPropertyData(object, &address, 0, nil, &size, $0) }
     }
