@@ -56,8 +56,9 @@ struct ReadAloudVoiceRows: View {
 
         private var systemRow: some View {
             let voices = VoiceCatalog.systemVoices()
-            var seen = Set<String>()
-            let names = voices.map { VoiceCatalog.shortName($0.id) }.filter { seen.insert($0).inserted } // one per name
+            // Every voice and its count, as Windows' row lists every installed voice (`Name.Split(" (")[0]`), a name
+            // that comes in two qualities twice.
+            let names = voices.map { VoiceCatalog.shortName($0.id) }
             var badges: [(String, Badge.Kind)] = activeModel == VoiceCatalog.system ? [("Active", .active)] : []
             badges.append(voices.isEmpty ? ("None", .outline) : ("Installed", .plain))
             #if os(macOS)
