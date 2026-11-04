@@ -140,10 +140,10 @@ struct DashboardView: View {
         .padding(.bottom, 14)
     }
 
-    /// Four equal cells (a UniformGrid of 4 columns): a cell too narrow for UNLOAD EVERYTHING clips it rather than
-    /// growing.
+    /// Four equal cells (a UniformGrid of 4 columns). A cell too narrow for UNLOAD EVERYTHING keeps its size, its edge
+    /// lines and its own hover and click area; only the button is cut, inside the cell's padding (`meterCell`).
     private func meters(width: CGFloat) -> some View {
-        HStack(spacing: 0) { ForEach(0..<4, id: \.self) { meter($0).frame(width: width / 4).clipped() } }
+        HStack(spacing: 0) { ForEach(0..<4, id: \.self) { meter($0).frame(width: width / 4) } }
             .frame(width: width)
     }
 
@@ -242,7 +242,12 @@ struct DashboardView: View {
         Cell(link: true, padding: EdgeInsets(top: 6, leading: 6, bottom: 6, trailing: 6)) {
             VStack(spacing: 0) {
                 content()
-                if let footer { footer }
+                // WPF arranges the centred button at its full width in the cell's inner width and clips it to that slot
+                // (both sides cut evenly); the cell itself never grows. `contentShape` keeps the cut-off parts from
+                // taking clicks outside the slot.
+                if let footer {
+                    footer.frame(minWidth: 0, maxWidth: .infinity).clipped().contentShape(Rectangle())
+                }
             }
         }
         .help(tip)
@@ -954,9 +959,6 @@ struct HistoryCell: View {
                         .background(GeometryReader { g in Color.clear.preference(key: CopyWidthKey.self, value: g.size.width) })
                         .padding(.leading, 8)
                 }
-                .background(GeometryReader { g in
-                    Color.clear.onChange(of: g.size.width, initial: true) { rowWidth = g.size.width; fitInsertLabel() }
-                })
                 .onPreferenceChange(CopyWidthKey.self) { w in
                     // The first measure of COPY only (its later flashes don't re-pick the label).
                     let first = copyWidth == 0
@@ -964,15 +966,20 @@ struct HistoryCell: View {
                     if first { fitInsertLabel() }
                 }
             }
+            // Picked again whenever the bottom block changes size (`bottom.SizeChanged`): its width, and its height when
+            // the done note shows or collapses (then COPY's current width counts, e.g. "COPIED ✓").
+            .background(GeometryReader { g in
+                Color.clear.onChange(of: g.size, initial: true) { rowWidth = g.size.width; fitInsertLabel() }
+            })
             .padding(.top, 8)
         }
     }
 
-    /// The longest label that fits in the row beside COPY, the gap and the button's own padding; the shortest (which
-    /// then trims) when none does.
+    /// The longest label that fits in the row beside COPY, the gap and the button's own padding and border (12 + 1 on
+    /// each side, FitInsertLabel's 26); the shortest (which then trims) when none does.
     private func fitInsertLabel() {
         guard rowWidth > 0 else { return }
-        let room = rowWidth - copyWidth - 8 - 24
+        let room = rowWidth - copyWidth - 8 - 26
         let font = Ob.monoFont(10)
         insertLabel = Self.insertLabels.first { TextFit.width($0, font: font) - 1 <= room } ?? Self.insertLabels[Self.insertLabels.count - 1]
     }
@@ -1180,6 +1187,23 @@ enum DashboardSnapshots {
                 }
             }
         }
+        // Narrow windows (Windows' MinWidth 960) and the 125 % text size: the meters, History's title row and the
+        // Analytics heads must cut inside their cells, not push past them.
+        let scale = model.settings.uiScale
+        for (name, place, width, zoom) in [("dashboard-960", Place(), 960.0, 1.0), ("dashboard-1000", Place(), 1000, 1),
+                                          ("dashboard-1000-zoom125", Place(), 1000, 1.25), ("history-960", Place(section: .history), 960, 1),
+                                          ("analytics-960", Place(section: .analytics), 960, 1)] {
+            model.settings.uiScale = zoom
+            let view = RootView(start: place).environmentObject(model).obertonTheme(model.settings)
+                .frame(width: width, height: name.hasPrefix("analytics") ? 2000 : 780)
+            let r = ImageRenderer(content: view)
+            r.scale = 2
+            if let img = r.nsImage, let tiff = img.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
+               let png = rep.representation(using: .png, properties: [:]) {
+                try? png.write(to: URL(fileURLWithPath: dir).appending(path: "\(name).png"))
+            }
+        }
+        model.settings.uiScale = scale
     }
 }
 #endif
