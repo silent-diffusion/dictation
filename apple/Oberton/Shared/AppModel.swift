@@ -345,7 +345,7 @@ final class AppModel: ObservableObject {
             pendingSpeechModel = firstRunSpeech.atLaunch(newInstall: settingsOnDisk == nil) { Self.recommendedSpeechModel(language: language) }
         }
         if movesNotepad { settings.notepad = "" }
-        startProfiles(fresh: freshProfiles)
+        startProfiles(fresh: freshProfiles, mustSave: settingsOnDisk == nil || movesNotepad)
         // Extended Notes transcribes with the active profile's speech model, as Windows' NotesRecorder (SpeechModels.For).
         notes.settingsSource = { [weak self] in self.map { $0.settings.dictating(with: $0.activeProfile) } ?? loadedSettings }
         notesChange = notes.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
@@ -421,14 +421,18 @@ final class AppModel: ObservableObject {
 
     /// At start, as Windows' ProfileService and SettingsService: built-ins added in later versions show up once, the
     /// default profile (on an update, the profile that was active) is the one active, and the Ollama address must be
-    /// local. (Property observers don't run in init, so this saves itself.)
-    private func startProfiles(fresh: Bool) {
+    /// local. Property observers don't run in init, so this saves itself, and only when something must be kept (a new
+    /// install, built-ins added, the notepad moved: `mustSave` for the Mac's own first-run changes). The active profile
+    /// going back to the default and a non-local endpoint reset stay in memory until the next save, as on Windows
+    /// (SYS-019).
+    private func startProfiles(fresh: Bool, mustSave: Bool) {
+        _ = settings.enforceLocalEndpoint() // SettingsService's constructor, before the profiles
         // A new install starts on Grammar & Clarity, or on Raw where Apple Intelligence is the model and can't run,
         // rather than failing every dictation (the Mac's addition).
         let raw = AppleIntelligenceBackend.unavailableReason != nil && settings.defaultModel == .appleOnDevice ? BuiltInProfiles.rawID : nil
-        if BuiltInProfiles.start(&profiles, settings: &settings, fresh: fresh, freshPick: raw), !Self.snapshotMode { profilesFile.save(profiles) }
-        settings.enforceLocalEndpoint()
-        if !Self.snapshotMode { settingsFile.save(settings) }
+        let changed = BuiltInProfiles.start(&profiles, settings: &settings, fresh: fresh, freshPick: raw)
+        if changed, !Self.snapshotMode { profilesFile.save(profiles) }
+        if changed || mustSave, !Self.snapshotMode { settingsFile.save(settings) }
     }
 
     /// Whether the active profile's AI can run right now (for the status dots).
@@ -803,7 +807,7 @@ final class AppModel: ObservableObject {
             record(entry)
             level = 0
             phase = .idle
-            Log.warn("Insert failed: " + message)
+            // Shown, not logged: Windows' controller raises the notice and writes no log line for it (SYS-011).
             notice(message, kind: .warning)
             return
         }
