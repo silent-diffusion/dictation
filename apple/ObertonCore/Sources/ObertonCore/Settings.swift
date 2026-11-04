@@ -325,23 +325,34 @@ public struct JSONFile<T: Codable> {
     }
 
     /// Writes the value (atomically), or leaves the file alone when it already holds exactly this, so a file is only
-    /// rewritten when something in it changed. A failure is logged as Windows logs it, and the app goes on.
-    public func save(_ value: T) {
+    /// rewritten when something in it changed. A failure is logged as Windows logs it, and the app goes on. False when
+    /// it failed.
+    @discardableResult
+    public func save(_ value: T) -> Bool {
         do {
             let enc = JSONEncoder()
             enc.outputFormatting = [.prettyPrinted, .sortedKeys]
             enc.dateEncodingStrategy = .iso8601
             let data = try enc.encode(value)
-            if let old = try? Data(contentsOf: url), old == data { return }
+            if let old = try? Data(contentsOf: url), old == data { return true }
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try data.write(to: url, options: .atomic)
+            return true
         } catch {
-            switch url.lastPathComponent {
-            case "settings.json": CoreLog.error("Saving settings failed: \(error)")
-            case "profiles.json": CoreLog.error("Saving profiles failed: \(error)")
-            case "usage.json": CoreLog.warn("Saving usage counts failed: \(error.localizedDescription)")
-            default: CoreLog.error("Saving \(url.lastPathComponent) failed: \(error)")
-            }
+            let line = Self.saveFailure(url.lastPathComponent, error)
+            if line.warn { CoreLog.warn(line.message) } else { CoreLog.error(line.message) }
+            return false
+        }
+    }
+
+    /// Windows' log line for a file that couldn't be saved: SettingsService, ProfileService and Usage word it each
+    /// their own way.
+    static func saveFailure(_ name: String, _ error: Error) -> (warn: Bool, message: String) {
+        switch name {
+        case "settings.json": (false, "Saving settings failed: \(error)")
+        case "profiles.json": (false, "Saving profiles failed: \(error)")
+        case "usage.json": (true, "Saving usage counts failed: \(error.localizedDescription)")
+        default: (false, "Saving \(name) failed: \(error)")
         }
     }
 }

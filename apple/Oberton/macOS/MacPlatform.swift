@@ -263,7 +263,7 @@ final class MacPlatform: PlatformServices {
         }
 
         let s = settings()
-        var mode = target.app.bundleIdentifier.flatMap { s.appOverrides[$0] } ?? s.insertion
+        var mode = target.app.bundleIdentifier.flatMap { s.insertionOverride(for: $0) } ?? s.insertion
         // Auto = paste: one atomic operation, reliable in every kind of app. Typing is a fallback (or a per-app choice).
         if mode == .auto { mode = .clipboard }
         let multiLine = InsertionRules.isMultiLine(text)
@@ -654,7 +654,7 @@ final class MacLiveTarget: LiveTarget {
 
     func type(_ text: String) async throws {
         let s = platform.settingsNow
-        if InsertionRules.isMultiLine(text) || target.app.bundleIdentifier.flatMap({ s.appOverrides[$0] }) == .clipboard {
+        if InsertionRules.isMultiLine(text) || target.app.bundleIdentifier.flatMap({ s.insertionOverride(for: $0) }) == .clipboard {
             try await platform.insert(text, into: target)
             return
         }

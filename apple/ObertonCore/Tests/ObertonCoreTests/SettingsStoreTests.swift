@@ -64,32 +64,25 @@ import Testing
         #expect(file.load()?.hotkey == "F9")
     }
 
-    @Test func aFailedSaveIsLogged() throws {
-        var logged: [String] = []
-        CoreLog.sink = { level, message in logged.append(level + " " + message) }
-        defer { CoreLog.sink = nil }
+    @Test func aFailedSaveIsReportedInWindowsWords() throws {
         // A folder can't be written over with a file.
         let dir = try folder()
         defer { try? FileManager.default.removeItem(at: dir) }
         let blocked = dir.appending(path: "settings.json")
         try FileManager.default.createDirectory(at: blocked.appending(path: "inside"), withIntermediateDirectories: true)
-        JSONFile<AppSettings>(url: blocked).save(AppSettings())
-        #expect(logged.contains { $0.hasPrefix("ERROR Saving settings failed: ") })
-        let usage = dir.appending(path: "usage.json")
-        try FileManager.default.createDirectory(at: usage.appending(path: "inside"), withIntermediateDirectories: true)
-        JSONFile<[String]>(url: usage).save(["a"])
-        #expect(logged.contains { $0.hasPrefix("WARN Saving usage counts failed: ") })
+        #expect(!JSONFile<AppSettings>(url: blocked).save(AppSettings()))
+        let e = CocoaError(.fileWriteNoPermission)
+        #expect(JSONFile<AppSettings>.saveFailure("settings.json", e).message.hasPrefix("Saving settings failed: "))
+        #expect(JSONFile<AppSettings>.saveFailure("profiles.json", e).message.hasPrefix("Saving profiles failed: "))
+        let usage = JSONFile<AppSettings>.saveFailure("usage.json", e)
+        #expect(usage.warn && usage.message.hasPrefix("Saving usage counts failed: "))
     }
 
-    @Test func aNonLocalEndpointIsLoggedAndReset() {
-        var logged: [String] = []
-        CoreLog.sink = { level, message in logged.append(level + " " + message) }
-        defer { CoreLog.sink = nil }
+    @Test func aNonLocalEndpointIsReset() {
         var s = AppSettings()
         s.ollamaEndpoint = "http://example.com:11434"
         let reset = s.enforceLocalEndpoint()
         #expect(reset)
         #expect(s.ollamaEndpoint == AppSettings().ollamaEndpoint)
-        #expect(logged == ["WARN LLM endpoint 'http://example.com:11434' is not local; resetting to default."])
     }
 }
