@@ -36,14 +36,19 @@ public final class NotesStore: @unchecked Sendable {
     private var draftURL: URL { dir.appending(path: "draft.txt") }
 
     private func load() {
-        draft = (try? String(contentsOf: draftURL, encoding: .utf8)) ?? ""
+        if FileManager.default.fileExists(atPath: draftURL.path) {
+            do { draft = try String(contentsOf: draftURL, encoding: .utf8) } catch {
+                CoreLog.warn("Extended notes: couldn't read the draft: " + error.localizedDescription)
+            }
+        }
         let folders = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
         var loaded: [NoteSession] = []
         for folder in folders where folder.hasDirectoryPath {
             let file = folder.appending(path: "session.json")
-            guard let data = try? Data(contentsOf: file) else { continue }
-            guard let s = try? Self.decoder.decode(NoteSession.self, from: data) else {
-                Self.keepBad(file)
+            guard FileManager.default.fileExists(atPath: file.path) else { continue }
+            let s: NoteSession
+            do { s = try Self.decoder.decode(NoteSession.self, from: try Data(contentsOf: file)) } catch {
+                Self.keepBad(file, error)
                 continue
             }
             s.folder = folder
@@ -51,7 +56,7 @@ public final class NotesStore: @unchecked Sendable {
                 // Oberton quit (or crashed) while it recorded: everything up to the last save is kept.
                 s.finished = true
                 save(s)
-                NSLog("Extended notes: closed a session left open")
+                CoreLog.info("Extended notes: closed a session left open: " + s.id)
             }
             loaded.append(s)
         }
@@ -61,8 +66,8 @@ public final class NotesStore: @unchecked Sendable {
 
     /// A file that can't be read is kept beside it as "<name>.bad" before it is skipped or started afresh (Windows'
     /// JsonStore.Load), so nothing is lost for good.
-    static func keepBad(_ file: URL) {
-        NSLog("Could not read %@; keeping a .bad copy", file.lastPathComponent)
+    static func keepBad(_ file: URL, _ error: Error? = nil) {
+        CoreLog.error("Could not read \(file.path); keeping a .bad copy" + (error.map { ": " + String(describing: $0) } ?? ""))
         let bad = file.appendingPathExtension("bad")
         try? FileManager.default.removeItem(at: bad)
         try? FileManager.default.copyItem(at: file, to: bad)
@@ -95,20 +100,39 @@ public final class NotesStore: @unchecked Sendable {
 
     /// Save a session: encoded here (the main thread owns it), written in the background.
     public func save(_ s: NoteSession) {
-        guard disk, let folder = s.folder, let data = try? Self.encoder.encode(s) else { return }
-        writes.async { try? data.write(to: folder.appending(path: "session.json"), options: .atomic) }
+        guard disk, let folder = s.folder, let data = Self.encode(s) else { return }
+        writes.async {
+            do { try data.write(to: folder.appending(path: "session.json"), options: .atomic) } catch {
+                CoreLog.warn("Extended notes: saving failed: " + error.localizedDescription)
+            }
+        }
     }
 
     /// Write a session now (Oberton is quitting).
     public func saveNow(_ s: NoteSession) {
-        guard disk, let folder = s.folder, let data = try? Self.encoder.encode(s) else { return }
-        writes.sync { try? data.write(to: folder.appending(path: "session.json"), options: .atomic) }
+        guard disk, let folder = s.folder, let data = Self.encode(s) else { return }
+        writes.sync {
+            do { try data.write(to: folder.appending(path: "session.json"), options: .atomic) } catch {
+                CoreLog.warn("Extended notes: saving at exit failed: " + error.localizedDescription)
+            }
+        }
+    }
+
+    private static func encode(_ s: NoteSession) -> Data? {
+        do { return try encoder.encode(s) } catch {
+            CoreLog.error("Extended notes: couldn't serialize a session: \(error)")
+            return nil
+        }
     }
 
     public func delete(_ s: NoteSession) {
         sessions.removeAll { $0 === s }
         NotesAudio.forget(s.id)
-        if disk, let folder = s.folder { try? FileManager.default.removeItem(at: folder) }
+        if disk, let folder = s.folder {
+            do { try FileManager.default.removeItem(at: folder) } catch {
+                CoreLog.warn("Extended notes: couldn't delete a session: " + error.localizedDescription)
+            }
+        }
         sessionsChanged?()
     }
 
@@ -150,9 +174,16 @@ public final class NotesStore: @unchecked Sendable {
     }
 
     private func writeDraft(_ text: String) {
-        if text.isEmpty { try? FileManager.default.removeItem(at: draftURL); return }
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        try? Data(text.utf8).write(to: draftURL, options: .atomic)
+        do {
+            if text.isEmpty {
+                if FileManager.default.fileExists(atPath: draftURL.path) { try FileManager.default.removeItem(at: draftURL) }
+                return
+            }
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try Data(text.utf8).write(to: draftURL, options: .atomic)
+        } catch {
+            CoreLog.warn("Extended notes: saving the draft failed: " + error.localizedDescription)
+        }
     }
 }
 
@@ -187,6 +218,8 @@ public struct NotesUsageDay: Codable, Sendable, Equatable {
         let raw = try c.decode(String.self, forKey: .day)
         // Earlier files kept the day as the instant of its midnight ("2026-11-02T23:00:00Z").
         if let d = Self.dayFormat.date(from: raw) { day = d }
+        // Windows writes the day as a DateTime at its midnight ("2026-11-03T00:00:00", maybe with an offset).
+        else if raw.count >= 19, raw.dropFirst(10).hasPrefix("T00:00:00"), let d = Self.dayFormat.date(from: String(raw.prefix(10))) { day = d }
         else if let d = ISO8601DateFormatter().date(from: raw) { day = Calendar.current.startOfDay(for: d) }
         else { throw DecodingError.dataCorruptedError(forKey: .day, in: c, debugDescription: "not a day: \(raw)") }
         sessions = try c.decodeIfPresent(Int.self, forKey: .sessions) ?? 0
@@ -268,8 +301,12 @@ public final class NotesUsage: @unchecked Sendable {
         data.days[i].summaryRequests += summaryRequests
         data.days[i].sources[s.source.rawValue, default: 0] += 1
         guard let url else { return }
-        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        if let out = try? NotesStore.encoder.encode(data) { try? out.write(to: url, options: .atomic) }
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try NotesStore.encoder.encode(data).write(to: url, options: .atomic)
+        } catch {
+            CoreLog.warn("Extended notes: saving the counts failed: " + error.localizedDescription)
+        }
     }
 
     /// The counts over the last `days` days up to and including today; 0 or less means all time.

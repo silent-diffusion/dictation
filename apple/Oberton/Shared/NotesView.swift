@@ -16,13 +16,35 @@ struct NotesView: View {
     /// back from a session the list is still filtered, and the next session opens on the same tab.
     @State private var search = ""
     @State private var tab = NoteSessionView.snapshotTab
+    @StateObject private var page = NotesPageState()
 
     var body: some View {
-        if let id = nav.place.noteSessionID, let s = model.notes.store.sessions.first(where: { $0.id == id }) {
-            NoteSessionView(session: s, tab: $tab).id(id)
-        } else {
-            NotesLanding(search: $search)
+        Group {
+            if let id = nav.place.noteSessionID, let s = model.notes.store.sessions.first(where: { $0.id == id }) {
+                NoteSessionView(session: s, tab: $tab, page: page).id(id)
+            } else {
+                NotesLanding(search: $search)
+            }
         }
+        .onAppear { model.notes.forgetIdleModel() }
+    }
+}
+
+/// What Windows' NotesPage keeps for as long as it is open, whichever session it shows: the playback speed and Skip
+/// silences (ClosePlayer leaves them), and the Export button's "COPIED …" flash with its two-second timer.
+@MainActor
+final class NotesPageState: ObservableObject {
+    @Published var rate = 1.0
+    @Published var skipSilences = false
+    @Published var copied: String?
+    var copiedTurn = 0
+
+    /// The Export button says what was copied, for two seconds after the last copy.
+    func flash(_ what: String) {
+        copied = what
+        copiedTurn += 1
+        let turn = copiedTurn
+        Task { try? await Task.sleep(for: .seconds(2)); if copiedTurn == turn { copied = nil } }
     }
 }
 
@@ -41,7 +63,7 @@ struct NotesLanding: View {
 
     var body: some View {
         landing
-        .task { await notes.keepIdleModel() }
+        .task { let n = notes; await n.keepIdleModel { n.isRecording } }
         .alert(NotesDialog.title, isPresented: Binding(get: { problem != nil }, set: { if !$0 { problem = nil } })) {
             Button("OK") { problem = nil }
         } message: { Text(problem ?? "") }
@@ -147,10 +169,13 @@ struct NotesLanding: View {
                     Readout("AI model").padding(.leading, 14).padding(.trailing, 10)
                     NotesModelMenu(width: 300)
                 }
+                // The controls' bottom margin 6 and the note's top margin 6: 12 between them.
                 Readout("Keeps the recording // about 115 MB an hour // dictating into an app pauses the session, then it resumes", size: 10)
                     .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 6)
             }
-            .padding(EdgeInsets(top: 14, leading: 18, bottom: 14, trailing: 18))
+            // Padding 18,14 inside the card's 1-px border.
+            .padding(EdgeInsets(top: 15, leading: 19, bottom: 15, trailing: 19))
         }
     }
 
@@ -163,7 +188,8 @@ struct NotesLanding: View {
                 Hairline()
                 usageRow("All time", all)
             }
-            .padding(.horizontal, 14).padding(.vertical, 9)
+            // Padding 14,9 inside the 1-px border.
+            .padding(.horizontal, 15).padding(.vertical, 10)
             .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
             .padding(.top, 10)
         }
@@ -172,7 +198,7 @@ struct NotesLanding: View {
     private func usageRow(_ label: String, _ t: NotesUsageTotals) -> some View {
         HStack(alignment: .center, spacing: 0) {
             Readout(label).frame(width: 170, alignment: .leading)
-            FlowRow(spacing: 22, lineSpacing: 0) {
+            FlowRow(spacing: 22, lineSpacing: 0, marginWraps: true) {
                 readout(t.sessions.formatted(), t.sessions == 1 ? "session" : "sessions")
                 readout(NotesUsage.hoursMinutes(t.seconds), "recorded")
                 readout(t.wordsHeard.formatted(), "words heard")
@@ -239,10 +265,11 @@ struct NoteRow: View {
             if live {
                 Text("● RECORDING").font(Ob.mono(10.5, .bold)).foregroundStyle(ob.record)
             } else {
-                Button("Delete", action: delete).buttonStyle(CapsuleButtonStyle(kind: .quiet, size: 10)).fixedSize().handCursor()
+                Button("Delete", action: delete).buttonStyle(.quietSmall).fixedSize().handCursor()
             }
         }
-        .padding(.horizontal, 6).padding(.vertical, 10)
+        // Padding 6,10 above the row's 1-px bottom line.
+        .padding(.horizontal, 6).padding(.top, 10).padding(.bottom, 11)
         .background(hover ? ob.subtle : .clear)
         .overlay(alignment: .bottom) { Hairline() }
         .contentShape(Rectangle())
@@ -276,6 +303,7 @@ struct NoteSessionView: View {
     let session: NoteSession
     /// The tab showing; it stays chosen for the next session opened (NotesView keeps it).
     @Binding var tab: Tab
+    @ObservedObject var page: NotesPageState
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var nav: Navigator
     @Environment(\.ob) private var ob
@@ -287,10 +315,12 @@ struct NoteSessionView: View {
     /// Where the cursor is in each tab's text (UTF-16), for the Play button: each tab keeps its own, as each of
     /// Windows' text boxes does.
     @State private var carets: [Tab: Int] = [:]
-    @State private var copied: String?
-    @State private var copiedTurn = 0
     @State private var problem: String?
     @State private var asking: NotesRedoStep?
+    /// The question asked was "Stop redoing?" (kept as asked, as Windows' modal MessageBox keeps its text).
+    @State private var askingStop = false
+    /// The kind of file being saved, for the log if saving it fails.
+    @State private var exportingExt = ""
     @State private var exporting: ExportFile?
     @State private var saveSoon: Task<Void, Never>?
     @FocusState private var titleFocused: Bool
@@ -306,33 +336,46 @@ struct NoteSessionView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Button("← Extended notes") { nav.goNotes(nil) }.buttonStyle(CapsuleButtonStyle(kind: .quiet, size: 10.5)).handCursor().padding(.bottom, 8)
+            Button("← Extended notes") { nav.goNotes(nil) }.buttonStyle(CapsuleButtonStyle(kind: .quiet, size: 10.5, compact: true)).handCursor().padding(.bottom, 8)
             header
             Rule().padding(.vertical, 10)
             // A step redoes itself (and what follows it) from the recording, once the session has stopped.
             NotesPipelineView(steps: live ? NotesSteps.live(model, chosen: session.source) : NotesSteps.redo(model, session),
                               open: [.transcribe, .transcribe, .format, .summary].map { step in { ask(step) } })
                 .padding(.bottom, 8)
+            // The hint is docked right first: it stays whole, and the pills give way when the row is too narrow.
             HStack(spacing: 0) {
-                ForEach(Tab.allCases, id: \.self) { t in Pill(t.rawValue, on: tab == t) { tab = t }.padding(.trailing, 4) }
-                Spacer()
-                Readout(hint, size: 10).lineLimit(1)
+                HStack(spacing: 0) {
+                    ForEach(Tab.allCases, id: \.self) { t in Pill(t.rawValue, on: tab == t) { tab = t }.padding(.trailing, 4) }
+                }
+                .fixedSize()
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                .clipped()
+                Readout(hint, size: 10).lineLimit(1).fixedSize()
             }
             .padding(.bottom, 10)
             content
             if !live { playBar.padding(.top, 10) }
         }
         .padding(EdgeInsets(top: 20, leading: 28, bottom: 16, trailing: 28))
-        .onAppear { if !live { player.prepare(session) } }
+        .onAppear {
+            player.setRate(page.rate)
+            player.skipSilences = page.skipSilences
+            if !live { player.prepare(session) }
+        }
         // Stopped while on the page: the recording is made ready at once, so ▶ works (Windows' Refresh does this).
         .onChange(of: live) { if !live { player.prepare(session) } }
         .onDisappear { player.close(); flushSave() }
-        .task { await notes.keepIdleModel() }
+        // A live session's pipeline skips it while recording; a finished one's while a step is redone.
+        .task { let n = notes, s = session; await n.keepIdleModel { s === n.current ? n.isRecording : n.redoing != nil } }
         .alert(NotesDialog.title, isPresented: Binding(get: { problem != nil }, set: { if !$0 { problem = nil } })) {
             Button("OK") { problem = nil }
         } message: { Text(problem ?? "") }
         .alert(NotesDialog.title, isPresented: Binding(get: { asking != nil }, set: { if !$0 { asking = nil } })) {
-            Button("Yes") { if let step = asking { redo(step) }; asking = nil }
+            Button("Yes") {
+                if askingStop { if notes.redoSession === session { notes.cancelRedo() } } else if let step = asking { redo(step) }
+                asking = nil
+            }
             Button("No", role: .cancel) { asking = nil }
         } message: { Text(redoQuestion) }
         #if os(macOS)
@@ -341,7 +384,10 @@ struct NoteSessionView: View {
         #endif
         .fileExporter(isPresented: Binding(get: { exporting != nil }, set: { if !$0 { exporting = nil } }), document: exporting,
                       contentType: exporting?.type ?? .plainText, defaultFilename: exporting?.name) { result in
-            if case .failure(let e) = result { problem = "Saving failed: " + e.localizedDescription }
+            if case .failure(let e) = result {
+                if exportingExt == "docx" { Log.warn("Extended notes: Word export failed: \(type(of: e))") }
+                NotesDialog.warn("Saving failed: " + e.localizedDescription) { problem = $0 }
+            }
         }
     }
 
@@ -362,9 +408,15 @@ struct NoteSessionView: View {
                     .onChange(of: titleFocused) { if !titleFocused { commitTitle() } }
                     .accessibilityLabel("Session name")
             } else {
-                Button { title = session.title; renaming = true; titleFocused = true } label: {
-                    Text(session.title.uppercased()).font(Ob.mono(24, .bold)).lineLimit(1).truncationMode(.tail)
-                        .padding(.vertical, 1)
+                Button {
+                    title = session.title
+                    renaming = true
+                    // Focused once the box exists (it then has its text selected, as TitleBox.Focus(); SelectAll()).
+                    DispatchQueue.main.async { titleFocused = true }
+                } label: {
+                    // Padding 0,1 above the 1-px underline; upper-cased as ToUpperInvariant ("ß" stays).
+                    Text(Self.invariantUpper(session.title)).font(Ob.mono(24, .bold)).lineLimit(1).truncationMode(.tail)
+                        .padding(.top, 1).padding(.bottom, 2)
                         .overlay(alignment: .bottom) { Hairline() }
                         .contentShape(Rectangle())
                 }
@@ -572,7 +624,7 @@ struct NoteSessionView: View {
             }
             .disabled(!hasRecording)
         } label: {
-            Text(copied ?? "Export ▾")
+            Text(page.copied ?? "Export ▾")
         }
         .menuStyle(.button)
         .buttonStyle(.quiet)
@@ -592,20 +644,13 @@ struct NoteSessionView: View {
     private func copy(_ part: NotesExport.Part, markdown: Bool) {
         let text = NotesExport.build(session, part: part, markdown: markdown)
         Clipboard.copy(text)
-        flash("Copied \(NoteSession.words(text).formatted()) words ✓")
-    }
-
-    /// The Export button says what was copied, for two seconds after the last copy.
-    private func flash(_ what: String) {
-        copied = what
-        copiedTurn += 1
-        let turn = copiedTurn
-        Task { try? await Task.sleep(for: .seconds(2)); if copiedTurn == turn { copied = nil } }
+        page.flash("Copied \(NoteSession.words(text).formatted()) words ✓")
     }
 
     private func save(_ part: NotesExport.Part, _ type: UTType, _ ext: String) {
         let name = part == .everything ? safeName : "\(safeName) - \(part.rawValue)"
         let data = ext == "docx" ? NotesExport.buildDocx(session, part: part) : Data(NotesExport.build(session, part: part, markdown: ext == "md").utf8)
+        exportingExt = ext
         exporting = ExportFile(data: data, type: type, name: name + "." + ext)
     }
 
@@ -617,6 +662,7 @@ struct NoteSessionView: View {
 
     private func saveRecording() {
         guard hasRecording, let url = recordingSource else { return }
+        exportingExt = "wav"
         exporting = ExportFile(file: url, type: .wav, name: safeName + ".wav")
     }
 
@@ -628,17 +674,21 @@ struct NoteSessionView: View {
         try? FileManager.default.removeItem(at: dir)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let copy = dir.appending(path: safeName + ".wav")
-        do { try FileManager.default.copyItem(at: url, to: copy) } catch { problem = "The recording couldn't be copied: " + error.localizedDescription; return }
+        do { try FileManager.default.copyItem(at: url, to: copy) } catch {
+            Log.warn("Extended notes: copying the recording failed: \(type(of: error))")
+            NotesDialog.warn("The recording couldn't be copied: " + error.localizedDescription) { problem = $0 }
+            return
+        }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.writeObjects([copy as NSURL])
-        flash("Copied the recording ✓")
+        page.flash("Copied the recording ✓")
     }
     #endif
 
     // MARK: Redo
 
     private var redoQuestion: String {
-        if notes.redoing != nil { return "Stop redoing? What is done so far stays; a transcript is only replaced once it is whole." }
+        if askingStop { return "Stop redoing? What is done so far stays; a transcript is only replaced once it is whole." }
         let minutes = max(1, Int((session.seconds / 60).rounded(.up)))
         switch asking {
         case .transcribe: return "Transcribe this session again from its recording? The transcript, the formatted text and the summary are made again, so edits and notes typed into them are replaced (your markers are kept). For \(minutes) minutes of recording this takes a few minutes."
@@ -650,12 +700,13 @@ struct NoteSessionView: View {
     /// A click on a step of the session's pipeline: confirm, then redo it (or stop the one running). While another
     /// session is being redone, nothing.
     private func ask(_ step: NotesRedoStep) {
-        if live { problem = "A step can be redone once the session has stopped."; return }
+        if live { NotesDialog.inform("A step can be redone once the session has stopped.") { problem = $0 }; return }
         if notes.redoing != nil {
-            if notes.redoSession === session { asking = step }
+            if notes.redoSession === session { askingStop = true; asking = step }
             return
         }
-        if step == .transcribe && !hasRecording { problem = "This session has no recording to transcribe again."; return }
+        if step == .transcribe && !hasRecording { NotesDialog.inform("This session has no recording to transcribe again.") { problem = $0 }; return }
+        askingStop = false
         asking = step
     }
 
@@ -686,7 +737,7 @@ struct NoteSessionView: View {
             } label: {
                 PlayFace(playing: player.playing)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PlayButtonStyle())
             .handCursor()
             .disabled(player.preparing || !hasRecording)
             .help(player.prepared.map { $0.gainDb > 0.5 ? "Play from the cursor (level brought up \(Int($0.gainDb.rounded())) dB)" : "Play from the cursor" } ?? "Play from the cursor")
@@ -697,16 +748,29 @@ struct NoteSessionView: View {
                 .tint(ob.ink)
                 .accessibilityLabel("Position in the recording")
             HStack(spacing: 0) {
-                Pill("Skip silences", on: player.skipSilences) { player.skipSilences.toggle() }.padding(.trailing, 14)
+                Pill("Skip silences", on: player.skipSilences) { player.skipSilences.toggle(); page.skipSilences = player.skipSilences }.padding(.trailing, 14)
                     .help("Jump over the pauses")
                     .accessibilityLabel("Skip silences")
                 ForEach([1.0, 1.5, 2.0], id: \.self) { r in
-                    Pill(r == 1 ? "1×" : r == 1.5 ? "1.5×" : "2×", on: player.rate == r) { player.setRate(r) }.padding(.trailing, r == 2 ? 0 : 4)
+                    // Each pill keeps the style's right margin 4, the last one too.
+                    Pill(r == 1 ? "1×" : r == 1.5 ? "1.5×" : "2×", on: player.rate == r) { player.setRate(r); page.rate = r }.padding(.trailing, 4)
                 }
             }
         }
-        .padding(.horizontal, 12).padding(.vertical, 8)
+        // Padding 12,8 inside the 1-px border.
+        .padding(.horizontal, 13).padding(.vertical, 9)
         .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
+    }
+
+    /// .NET's ToUpperInvariant: each character's own capital where it has a single one ("ß" stays "ß"), never the
+    /// language's rules.
+    static func invariantUpper(_ s: String) -> String {
+        var out = String.UnicodeScalarView()
+        for c in s.unicodeScalars {
+            let up = c.properties.uppercaseMapping.unicodeScalars
+            if up.count == 1, let u = up.first { out.append(u) } else { out.append(c) }
+        }
+        return String(out)
     }
 
     static func length(_ seconds: Double) -> String {
@@ -746,16 +810,22 @@ struct ExportFile: FileDocument {
 enum NotesDialog {
     static let title = "Oberton"
 
-    /// A warning that may come after the page was left (a start or a redo finishing later): Windows' MessageBox shows
-    /// it whatever page is open, so on the Mac it goes up on the main window as an alert of its own, with the warning
-    /// badge. `fallback` shows it in the page instead (iPhone and iPad).
-    static func warn(_ message: String, fallback: (String) -> Void) {
+    /// MessageBoxImage.Warning. Windows' MessageBox shows whatever page is open (a start or a redo may fail after the
+    /// page was left), so on the Mac it goes up on the main window as an alert of its own, with the caution badge.
+    /// `fallback` shows it in the page instead (iPhone and iPad).
+    static func warn(_ message: String, fallback: (String) -> Void) { show(message, warning: true, fallback: fallback) }
+
+    /// MessageBoxImage.Information: a message with the app's own icon.
+    static func inform(_ message: String, fallback: (String) -> Void) { show(message, warning: false, fallback: fallback) }
+
+    private static func show(_ message: String, warning: Bool, fallback: (String) -> Void) {
         #if os(macOS)
         guard !PageScroll<EmptyView>.flat else { fallback(message); return }
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = message
-        alert.alertStyle = .warning
+        // The caution triangle is macOS's warning glyph (it comes with the critical style).
+        alert.alertStyle = warning ? .critical : .informational
         alert.addButton(withTitle: "OK")
         if let window = NSApp.mainWindow ?? NSApp.windows.first(where: { $0.isVisible && $0.canBecomeMain }) {
             alert.beginSheetModal(for: window)
@@ -768,21 +838,37 @@ enum NotesDialog {
     }
 }
 
-/// The Play button: a 36×36 ink circle with the play or pause glyph (PrimaryButton, Width 36, Height 36).
+/// The Play button: a 36×36 ink circle with the play or pause glyph (PrimaryButton, Width 36, Height 36; Segoe Fluent
+/// Icons' outline Play/Pause).
 private struct PlayFace: View {
     var playing: Bool
     @Environment(\.ob) private var ob
     @Environment(\.isEnabled) private var enabled
+    @Environment(\.playPressed) private var pressed
+    @Environment(\.isFocused) private var focused
     @State private var hover = false
 
     var body: some View {
-        Image(systemName: playing ? "pause.fill" : "play.fill").font(.system(size: 13)).foregroundStyle(ob.onInk)
+        Image(systemName: playing ? "pause" : "play").font(.system(size: 13)).foregroundStyle(ob.onInk)
             .frame(width: 36, height: 36)
             .background(Circle().fill(ob.ink))
+            .overlay(Circle().strokeBorder(ob.accent, lineWidth: focused ? 1 : 0))
             .contentShape(Circle())
-            .opacity(!enabled ? 0.4 : hover ? 0.82 : 1)
+            // PrimaryButton's triggers: hover 0.82, pressed 0.66, disabled 0.4, accent border on keyboard focus.
+            .opacity(!enabled ? 0.4 : pressed ? 0.66 : hover ? 0.82 : 1)
             .onHover { hover = $0 }
     }
+}
+
+/// The Play button's own style: no system dimming; the face draws the pressed state.
+private struct PlayButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.environment(\.playPressed, configuration.isPressed)
+    }
+}
+
+private extension EnvironmentValues {
+    @Entry var playPressed = false
 }
 
 fileprivate extension View {
@@ -1096,13 +1182,19 @@ struct Pill: View {
                 .overlay(Capsule().strokeBorder(focused && !on ? ob.accent : ob.ink, lineWidth: 1))
                 .contentShape(Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PlainFaceStyle())
         .focused($focused)
         .focusEffectDisabled()
         .onHover { hover = $0 }
         .handCursor()
         .accessibilityAddTraits(on ? .isSelected : [])
     }
+}
+
+/// A button style that draws the label as it is: no dimming while pressed or disabled (Windows' Pill template has no
+/// IsPressed or IsEnabled trigger).
+struct PlainFaceStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View { configuration.label }
 }
 
 /// A grid row of star-sized columns (Windows' `*` widths) and a last column at its own size.

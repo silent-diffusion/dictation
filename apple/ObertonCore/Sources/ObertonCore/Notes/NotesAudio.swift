@@ -52,7 +52,8 @@ public final class WavWriter: @unchecked Sendable {
     public func write(_ samples: [Float]) {
         var pcm = Data(capacity: samples.count * 2)
         for s in samples {
-            let v = Int16(max(-1, min(1, s)) * 32767)
+            // Rounded to the nearest step, as Windows' writer (Math.Round), not cut towards zero.
+            let v = Int16((max(-1, min(1, s)) * 32767).rounded(.toNearestOrEven))
             withUnsafeBytes(of: v.littleEndian) { pcm.append(contentsOf: $0) }
         }
         lock.withLock {
@@ -63,18 +64,26 @@ public final class WavWriter: @unchecked Sendable {
 
     /// Put the header's sizes right (and keep writing at the end).
     public func flush() {
-        lock.withLock {
-            guard let end = try? handle.offset() else { return }
-            try? handle.seek(toOffset: 0)
-            try? handle.write(contentsOf: WavWriter.header(dataBytes: bytes))
-            try? handle.seek(toOffset: end)
-            try? handle.synchronize()
+        do { try flushing() } catch { CoreLog.warn("Extended notes: flushing audio failed: " + error.localizedDescription) }
+    }
+
+    private func flushing() throws {
+        try lock.withLock {
+            let end = try handle.offset()
+            try handle.seek(toOffset: 0)
+            try handle.write(contentsOf: WavWriter.header(dataBytes: bytes))
+            try handle.seek(toOffset: end)
+            try handle.synchronize()
         }
     }
 
     public func close() {
-        flush()
-        lock.withLock { try? handle.close() }
+        do {
+            try flushing()
+            try lock.withLock { try handle.close() }
+        } catch {
+            CoreLog.warn("Extended notes: closing the recording failed: " + error.localizedDescription)
+        }
     }
 }
 
@@ -185,8 +194,9 @@ public enum NotesAudio {
             if chunk.count == rate || i == samples.count - 1 { writer.write(chunk); chunk.removeAll(keepingCapacity: true) }
         }
         writer.close()
-        return PreparedAudio(url: out, seconds: Double(samples.count) / Double(rate), gainDb: 20 * log10(Double(g)),
-                             silences: findSilences(levels, windowSeconds: windowSeconds))
+        let gainDb = 20 * log10(Double(g)), silences = findSilences(levels, windowSeconds: windowSeconds)
+        CoreLog.info("Extended notes: recording prepared, +\(String(format: "%.1f", gainDb)) dB, \(silences.count) pauses")
+        return PreparedAudio(url: out, seconds: Double(samples.count) / Double(rate), gainDb: gainDb, silences: silences)
     }
 
     /// The prepared copy of a session's recording: made the first time, then found again (unless the recording is newer).
@@ -204,17 +214,26 @@ public enum NotesAudio {
         _ = try? FileManager.default.removeItem(at: copy)
         try FileManager.default.moveItem(at: tmp, to: copy)
         prepared.url = copy
-        if let data = try? JSONEncoder().encode(prepared) { try? data.write(to: meta) }
+        do { try JSONEncoder().encode(prepared).write(to: meta) } catch {
+            CoreLog.warn("Extended notes: couldn't keep the prepared recording's details: " + error.localizedDescription)
+        }
         return prepared
     }
 
     /// Delete prepared copies whose session no longer exists; not one made in the last 10 minutes (it may be being
     /// prepared right now, for a session another store has).
     public static func sweep(keeping ids: Set<String>) {
-        guard let files = try? FileManager.default.contentsOfDirectory(at: cacheDir, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
-        for f in files where !ids.contains(String(f.lastPathComponent.prefix { $0 != "." })) {
-            let modified = (try? f.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-            if Date().timeIntervalSince(modified) > 600 { try? FileManager.default.removeItem(at: f) }
+        guard FileManager.default.fileExists(atPath: cacheDir.path) else { return }
+        // Session ids compared without regard to case (Windows' OrdinalIgnoreCase).
+        let keep = Set(ids.map { $0.lowercased() })
+        do {
+            let files = try FileManager.default.contentsOfDirectory(at: cacheDir, includingPropertiesForKeys: [.contentModificationDateKey])
+            for f in files where !keep.contains(String(f.lastPathComponent.prefix { $0 != "." }).lowercased()) {
+                let modified = (try? f.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                if Date().timeIntervalSince(modified) > 600 { try FileManager.default.removeItem(at: f) }
+            }
+        } catch {
+            CoreLog.warn("Extended notes: sweeping the playback copies failed: " + error.localizedDescription)
         }
     }
 
