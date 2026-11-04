@@ -21,9 +21,11 @@ SWIFT_ACTIVE_COMPILATION_CONDITIONS = $(inherited) OBERTON_DIRECT
 // Info.plist: the App Store build's keys for the Mac (keep them in step with Info.plist; CI checks) plus Sparkle's.
 INFOPLIST_FILE = Info-Direct.plist
 
-// Sparkle. PLACEHOLDERS: nothing is published at this address yet, and there is no signing key. Before the first direct
-// release, generate an EdDSA key pair with Sparkle's generate_keys (the private key stays in your login keychain) and
-// paste the public key below, then publish an appcast signed with that key at the feed URL. With the key empty the
-// updater doesn't start, and Settings › Updates says the check failed. (`/$()/` keeps `//` from starting a comment.)
-OBERTON_APPCAST_URL = https:/$()/github.com/silent-diffusion/dictation/releases/latest/download/appcast.xml
-OBERTON_SPARKLE_PUBLIC_KEY =
+// Sparkle (see README.md, "Updates for the direct download").
+// The public half of the EdDSA key that signs updates. The private half was made with Sparkle's generate_keys and lives
+// only in the release machine's login keychain (account "ed25519"); it is never written to this repository or a file.
+OBERTON_SPARKLE_PUBLIC_KEY = RTUbxpcazDZWWR79doEYxiIT5QSd2YnL3krhkknHC7o=
+// PLACEHOLDER: the appcast (the list of Mac releases). Nothing is published there yet, so a check finds nothing and
+// says "You're up to date". Decide where the Mac feed lives before the first direct release; it must not be the repo's
+// "latest" release, which is the Windows one. (`/$()/` keeps `//` from starting a comment.)
+OBERTON_APPCAST_URL = https:/$()/github.com/silent-diffusion/dictation/releases/download/mac-appcast/appcast.xml

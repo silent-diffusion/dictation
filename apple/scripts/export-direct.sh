@@ -32,7 +32,10 @@ if [[ -z "$team" ]]; then
     print -u2 "DEVELOPMENT_TEAM is empty: copy Local.xcconfig.example to Local.xcconfig and fill it in."
     exit 1
 fi
-[[ -z "$key" ]] && print -u2 "Note: OBERTON_SPARKLE_PUBLIC_KEY (Direct.xcconfig) is empty, so this build can't check for updates."
+if [[ -z "$key" ]]; then
+    print -u2 "OBERTON_SPARKLE_PUBLIC_KEY (Direct.xcconfig) is empty: a build without it can never update itself."
+    exit 1
+fi
 
 print "Archiving Oberton $version (Oberton Direct, Release)…"
 xcodebuild -project Oberton.xcodeproj -scheme "Oberton Direct" -configuration Release -destination 'generic/platform=macOS' \
