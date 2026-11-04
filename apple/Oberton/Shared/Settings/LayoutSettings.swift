@@ -19,7 +19,12 @@ struct LayoutSection: View {
                 opacity($model.settings.overlayOpacity, name: "Overlay opacity")
                 divider
                 position(ReaderPositionPicker.describe(model.settings.overlayPosition))
-                PositionPicker(position: $model.settings.overlayPosition, name: "Overlay position").padding(.top, 8).padding(.bottom, 12)
+                // Position_Checked: save, then App.PreviewOverlay.
+                PositionPicker(position: Binding(get: { model.settings.overlayPosition }, set: { new in
+                    guard new != model.settings.overlayPosition else { return }
+                    model.settings.overlayPosition = new
+                    ReaderPositionPicker.postPreviewOverlay()
+                }), name: "Overlay position").padding(.top, 8).padding(.bottom, 12)
                 Caption("The overlay stays dark in both themes so it reads on top of any window. The preview approval always shows, even with the overlay off.", bottom: 0)
             } preview: {
                 overlayPreview
@@ -66,10 +71,13 @@ struct LayoutSection: View {
             HStack {
                 Text("Opacity").font(Ob.sans(Ob.body))
                 Spacer()
-                Text(Fmt.percent(value.wrappedValue)).font(Ob.mono(12))
+                // A XAML Binding's StringFormat {0:P0}: en-US, "90%" in every region.
+                Text(ReadAloudSliders.opacityReadout(value.wrappedValue)).font(Ob.mono(12))
             }
-            // TickFrequency 0.02 with snapping (from the minimum, 0.3), no ticks drawn; the Fluent slider in ink.
-            FluentSlider(value: value, range: 0.3...1, step: 0.02)
+            // TickFrequency 0.02 with snapping (from the minimum, 0.3), no ticks drawn; the Fluent slider in ink. The
+            // keys move by the Slider's SmallChange, 0.1, snapped.
+            FluentSlider(value: value, range: ReadAloudSliders.opacityRange, step: ReadAloudSliders.opacityTick,
+                         smallChange: ReadAloudSliders.smallChange)
                 .padding(.top, 6).padding(.bottom, 10)
                 .accessibilityLabel(name)
         }

@@ -114,9 +114,9 @@ struct ReaderCard: View {
                 }
                     .padding(.leading, 2)
             } else {
-                // Every line 24 high, a one-line sentence too (LineHeight 24, MaxHeight 48).
-                Text(sentenceLine).font(Ob.sans(16)).lineSpacing(Ob.lineSpacing(16, lineHeight: 24)).lineLimit(2).truncationMode(.tail)
-                    .padding(.vertical, (24 - 16 * 1.2) / 2)
+                // Every line 24 high, a one-line sentence too (LineHeight 24, MaxHeight 48), each drawn at the top of its
+                // line box as WPF does.
+                Text(sentenceLine).font(Ob.sans(16)).lineLimit(2).truncationMode(.tail).wpfLineHeight(24, size: 16)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 2)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -169,19 +169,20 @@ struct ReaderCard: View {
                         ForEach(Self.presets[row * 4 ..< row * 4 + 4], id: \.self) { s in
                             let on = abs(s - player.speed) < 0.001
                             Button { speeds = false; setSpeed(s) } label: {
-                                Text(String(format: "%g×", s)).font(Ob.mono(11.5)).foregroundStyle(on ? darkInk : Self.ink)
+                                Text(ReadAloudSliders.presetSpeed(s)).font(Ob.mono(11.5)).foregroundStyle(on ? darkInk : Self.ink)
                                     .frame(minWidth: 56).frame(height: 30)
                                     .background(Capsule().fill(on ? Self.ink : Self.ink.opacity(0.1)))
                             }
                             .buttonStyle(PillPress())
-                            .accessibilityLabel(String(format: "%g times speed", s))
+                            .accessibilityLabel(NetNumber.fixed(s, digits: 2, optional: true) + " times speed")
                             .padding(3)
                         }
                     }
                 }
             }
         }
-        .padding(8)
+        // Padding 8 inside WPF's 1 px border.
+        .padding(8 + Ob.border)
         // Windows' popup: #F20D0D0C, a 22 % ink line, corner 10.
         .background(RoundedRectangle(cornerRadius: 10).fill(darkInk.opacity(0.95)))
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Self.ink.opacity(0.22), lineWidth: 1))
@@ -190,11 +191,8 @@ struct ReaderCard: View {
 
     static let presets: [Double] = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 3.5, 4]
 
-    /// "1.0×", "1.25×", "1.65×" (Windows' `{0:0.0#}×`).
-    static func speedText(_ s: Double) -> String {
-        let two = String(format: "%.2f", s)
-        return (two.hasSuffix("0") ? String(two.dropLast()) : two) + "×"
-    }
+    /// "1.0×", "1.25×", "1.65×" (Windows' `{0:0.0#}×`, in the region: "1,25×").
+    static func speedText(_ s: Double) -> String { ReadAloudSliders.playerSpeed(s) }
 
     static func clock(_ seconds: Double) -> String {
         let s = Int(seconds.rounded(.down))
@@ -266,8 +264,7 @@ struct ReaderCard: View {
             }
             if !q.body.isEmpty {
                 Text(q.body).font(Ob.sans(13.5)).foregroundStyle(Self.ink.opacity(0.7))
-                    .lineSpacing(Ob.lineSpacing(13.5, lineHeight: 20)).padding(.vertical, (20 - 13.5 * 1.2) / 2)
-                    .lineLimit(4).truncationMode(.tail)
+                    .lineLimit(4).truncationMode(.tail).wpfLineHeight(20, size: 13.5)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(EdgeInsets(top: 8, leading: 2, bottom: 0, trailing: 12))
             }
@@ -689,11 +686,15 @@ extension ReaderFullText: NSViewRepresentable {
         // Any scroll that isn't the follow's (wheel, bar, arrows, page clicks) pauses the follow.
         scroll.onUserScroll = { if !coordinator.following { coordinator.userScrolledAt = Date() } }
         scroll.drawsBackground = false
+        // The window has ThemeMode="None", so its bar is WPF's classic one (Aero2) in both themes: light grey, arrow
+        // buttons, 17 wide, at the edge after the text's 12 margin; shown whenever the text overflows (Auto).
+        scroll.verticalScroller = ClassicScroller()
         scroll.hasVerticalScroller = true
-        // A scroll bar whenever the text overflows, as WPF's Auto.
         scroll.autohidesScrollers = true
         scroll.scrollerStyle = .legacy
         scroll.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 4, right: 12)
+        // The insets are the TextBlock's margin (0,0,12,4): the bar itself stays at the edge, full height.
+        scroll.scrollerInsets = NSEdgeInsets(top: 0, left: 0, bottom: -4, right: -12)
         scroll.automaticallyAdjustsContentInsets = false
         scroll.documentView = textView
         return scroll
@@ -753,6 +754,150 @@ extension ReaderFullText: NSViewRepresentable {
         }
         private func remember() {
             last = (contentView.bounds.origin.y, contentView.bounds.height, documentView?.frame.height ?? 0)
+        }
+    }
+
+    /// WPF's classic vertical ScrollBar (Aero2.NormalColor): a #F0F0F0 track 17 wide, ▲ and ▼ buttons 17 high whose
+    /// glyphs are grey while the pointer is on the bar (#BFBFBF otherwise: the buttons are enabled only then), black on
+    /// a #DADADA button under the pointer, white on #606060 pressed; a #CDCDCD thumb (#A6A6A6 under the pointer,
+    /// #606060 dragged). A button scrolls 16 at a time (ScrollViewer's line), a click in the track a page, both
+    /// repeating while held (RepeatButton: the keyboard repeat's delay and speed).
+    final class ClassicScroller: NSScroller {
+        static let width: CGFloat = 17, line: CGFloat = 16, minThumb: CGFloat = 8.5
+        private enum Spot: Equatable { case up, down, pageUp, pageDown, thumb }
+        private var hovered: Spot?
+        private var pressed: Spot?
+        private var inside = false
+
+        override class var isCompatibleWithOverlayScrollers: Bool { false }
+        override class func scrollerWidth(for controlSize: NSControl.ControlSize, scrollerStyle: NSScroller.Style) -> CGFloat { width }
+        override var isFlipped: Bool { true }
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+        private var scrollView: NSScrollView? { superview as? NSScrollView }
+        private var up: NSRect { NSRect(x: 0, y: 0, width: bounds.width, height: min(Self.width, bounds.height / 2)) }
+        private var down: NSRect { NSRect(x: 0, y: bounds.height - up.height, width: bounds.width, height: up.height) }
+        private var slot: NSRect { NSRect(x: 0, y: up.maxY, width: bounds.width, height: max(0, down.minY - up.maxY)) }
+        private var hasThumb: Bool { knobProportion > 0 && knobProportion < 1 }
+        private var thumb: NSRect {
+            let length = min(slot.height, max(Self.minThumb, slot.height * knobProportion))
+            return NSRect(x: 0, y: slot.minY + (slot.height - length) * doubleValue, width: bounds.width, height: length)
+        }
+
+        override func draw(_ dirtyRect: NSRect) {
+            NSColor(white: 0xF0 / 255.0, alpha: 1).setFill()
+            bounds.fill()
+            arrow(up, pointingUp: true, spot: .up)
+            arrow(down, pointingUp: false, spot: .down)
+            guard hasThumb else { return }
+            let tone: CGFloat = pressed == .thumb ? 0x60 : hovered == .thumb ? 0xA6 : 0xCD
+            NSColor(white: tone / 255.0, alpha: 1).setFill()
+            thumb.fill()
+        }
+
+        /// Path "M 0,4 … 3.5,0.5 … z" (and its mirror), Stretch Uniform inside Margin 3.
+        private func arrow(_ r: NSRect, pointingUp: Bool, spot: Spot) {
+            let glyph: CGFloat
+            if pressed == spot { NSColor(white: 0x60 / 255.0, alpha: 1).setFill(); r.fill(); glyph = 1 }
+            else if hovered == spot { NSColor(white: 0xDA / 255.0, alpha: 1).setFill(); r.fill(); glyph = 0 }
+            else { glyph = inside ? 0x60 / 255.0 : 0xBF / 255.0 }
+            let area = r.insetBy(dx: 3, dy: 3)
+            let scale = min(area.width / 7, area.height / 5.5)
+            let origin = CGPoint(x: area.midX - 3.5 * scale, y: area.midY - 2.75 * scale)
+            let points: [(CGFloat, CGFloat)] = pointingUp
+                ? [(0, 3.5), (0, 5.5), (3.5, 2), (7, 5.5), (7, 3.5), (3.5, 0)]
+                : [(0, 2), (0, 0), (3.5, 3.5), (7, 0), (7, 2), (3.5, 5.5)]
+            let path = NSBezierPath()
+            for (i, p) in points.enumerated() {
+                let pt = CGPoint(x: origin.x + p.0 * scale, y: origin.y + p.1 * scale)
+                if i == 0 { path.move(to: pt) } else { path.line(to: pt) }
+            }
+            path.close()
+            NSColor(white: glyph, alpha: 1).setFill()
+            path.fill()
+        }
+
+        private func spot(at p: NSPoint) -> Spot? {
+            if up.contains(p) { return .up }
+            if down.contains(p) { return .down }
+            guard hasThumb, slot.contains(p) else { return nil }
+            return thumb.contains(p) ? .thumb : p.y < thumb.minY ? .pageUp : .pageDown
+        }
+
+        // The panel is never key: hover is tracked whatever app is active.
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            trackingAreas.filter { $0.owner === self }.forEach(removeTrackingArea)
+            addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect],
+                                           owner: self, userInfo: nil))
+        }
+        override func mouseEntered(with event: NSEvent) { inside = true; hover(event) }
+        override func mouseMoved(with event: NSEvent) { hover(event) }
+        override func mouseExited(with event: NSEvent) { inside = false; hovered = nil; needsDisplay = true }
+        private func hover(_ event: NSEvent) {
+            let s = spot(at: convert(event.locationInWindow, from: nil))
+            if s != hovered { hovered = s; needsDisplay = true }
+        }
+
+        /// Scroll the text by `dy` (down when positive), within its bounds.
+        private func scroll(by dy: CGFloat) {
+            guard let scrollView else { return }
+            let clip = scrollView.contentView
+            var r = clip.bounds
+            r.origin.y += dy
+            clip.scroll(to: clip.constrainBoundsRect(r).origin)
+            scrollView.reflectScrolledClipView(clip)
+        }
+
+        override func mouseDown(with event: NSEvent) {
+            guard let window, let scrollView else { return }
+            let start = convert(event.locationInWindow, from: nil)
+            guard let s = spot(at: start) else { return }
+            pressed = s
+            needsDisplay = true
+            defer { pressed = nil; needsDisplay = true }
+            if s == .thumb {
+                // Drag: the thumb follows the pointer; the text follows the thumb.
+                let grab = start.y - thumb.minY
+                while let next = window.nextEvent(matching: [.leftMouseUp, .leftMouseDragged]), next.type == .leftMouseDragged {
+                    let p = convert(next.locationInWindow, from: nil)
+                    let travel = max(1, slot.height - thumb.height)
+                    let f = min(max((p.y - grab - slot.minY) / travel, 0), 1)
+                    let clip = scrollView.contentView
+                    let extent = (scrollView.documentView?.frame.height ?? 0) + scrollView.contentInsets.bottom - clip.bounds.height
+                    var r = clip.bounds
+                    r.origin.y = f * max(0, extent)
+                    clip.scroll(to: clip.constrainBoundsRect(r).origin)
+                    scrollView.reflectScrolledClipView(clip)
+                    needsDisplay = true
+                }
+                return
+            }
+            // A button or the track: once, then again after the repeat delay, and at the repeat speed while held (the
+            // track stops once the thumb reaches the pointer).
+            var pointer = start
+            func act() {
+                let page = scrollView.contentView.bounds.height
+                switch s {
+                case .up: scroll(by: -Self.line)
+                case .down: scroll(by: Self.line)
+                case .pageUp where spot(at: pointer) == .pageUp: scroll(by: -page)
+                case .pageDown where spot(at: pointer) == .pageDown: scroll(by: page)
+                default: break
+                }
+                needsDisplay = true
+            }
+            act()
+            var due = Date().addingTimeInterval(NSEvent.keyRepeatDelay)
+            while true {
+                guard let next = window.nextEvent(matching: [.leftMouseUp, .leftMouseDragged], until: due, inMode: .eventTracking, dequeue: true) else {
+                    act()
+                    due = Date().addingTimeInterval(NSEvent.keyRepeatInterval)
+                    continue
+                }
+                if next.type == .leftMouseUp { break }
+                pointer = convert(next.locationInWindow, from: nil)
+            }
         }
     }
 
@@ -881,7 +1026,11 @@ struct ReaderPositionPicker: View {
     var name = "Player position"
 
     var body: some View {
-        PositionPicker(position: Binding(get: { place }, set: { model.settings.readerPosition = .at($0) }),
+        PositionPicker(position: Binding(get: { place }, set: { new in
+                           guard new != place else { return }
+                           model.settings.readerPosition = .at(new)
+                           Self.postPreviewOverlay()
+                       }),
                        name: name, describe: Self.describe, radius: radius, stroke: stroke, fill: fill)
             .disabled(samePlace)
             .opacity(samePlace ? 0.45 : 1)
@@ -894,11 +1043,21 @@ struct ReaderPositionPicker: View {
         return model.settings.overlayPosition
     }
 
-    /// "Same place as the dictation overlay": off keeps the place it had (the overlay's).
-    static func samePlaceBinding(_ model: AppModel) -> Binding<Bool> {
+    /// "Same place as the dictation overlay": off keeps the place it had (the overlay's). The Read aloud page's switch
+    /// also previews (ReadAloudPage.SamePlace_Changed calls App.PreviewOverlay); Settings › Layout's doesn't.
+    static func samePlaceBinding(_ model: AppModel, previews: Bool = false) -> Binding<Bool> {
         Binding(get: { model.settings.readerPosition == .withOverlay },
-                set: { model.settings.readerPosition = $0 ? .withOverlay : .at(model.settings.overlayPosition) })
+                set: { same in
+                    guard same != (model.settings.readerPosition == .withOverlay) else { return }
+                    model.settings.readerPosition = same ? .withOverlay : .at(model.settings.overlayPosition)
+                    if previews { postPreviewOverlay() }
+                })
     }
+
+    /// Windows' App.PreviewOverlay, from where Windows calls it (a position picked for the overlay or the player, the
+    /// Read aloud page's "Same place" switch): the player forgets where it was dragged (ReaderWindow.ResetPosition).
+    static let previewOverlay = Notification.Name("Oberton.previewOverlay")
+    static func postPreviewOverlay() { NotificationCenter.default.post(name: previewOverlay, object: nil) }
 
     static func placeName(_ s: AppSettings) -> String {
         if case .at(let p) = s.readerPosition { return Self.describe(p) }

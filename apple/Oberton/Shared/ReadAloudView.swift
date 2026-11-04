@@ -19,8 +19,12 @@ private struct ReadAloudPage: View {
     /// A download started here, for which voice (the page shows only its own, and cancels it when left, as Windows
     /// does), and its failure.
     @State private var downloading = false
-    @State private var downloadingVoice: String?
+    @State private var download: UUID?
     @State private var failure: String?
+    /// A voice was picked while the download runs: as ReadAloudPage.ShowStatus, TRY IT is back (for any voice, the one
+    /// downloading too) and the status shows the picked voice until the download's next report.
+    @State private var tryBack = false
+    @State private var pickedSinceReport = false
     #if os(iOS)
     @State private var text = ""
     #endif
@@ -43,24 +47,29 @@ private struct ReadAloudPage: View {
                 Caption(modelNote, bottom: 0).padding(.top, 6)
 
                 FieldLabel("Voice").padding(.top, -2)
-                ObMenu(options: voiceItems, selection: voiceBinding, width: 380, maxListHeight: 420).accessibilityLabel("Voice")
+                // Under a model with no voices the box is empty and blank (no SelectedItem), not "—".
+                ObMenu(options: voiceItems, selection: voiceBinding, width: 380, maxListHeight: 420, noSelection: "").accessibilityLabel("Voice")
                 Caption("Used unless a profile picks its own model and voice (see its page under Speech to text).", bottom: 0).padding(.top, 6)
 
                 FieldLabel("Base speed")
-                ObSlider(value: snapped($model.settings.ttsBaseSpeed, 0.05), range: 0.25...4, step: nil,
-                         format: { Fmt.fixed($0, digits: 2) + "×" }, width: sizeClass == .compact ? 200 : 300, name: "Base speed")
+                // The readout is a XAML Binding's StringFormat {0:0.00}×: en-US, "1.75×" in every region. The keys move
+                // by the Slider's SmallChange (0.1), snapped to the 0.05 ticks.
+                ObSlider(value: snapped($model.settings.ttsBaseSpeed, ReadAloudSliders.speedTick), range: ReadAloudSliders.speedRange,
+                         step: nil, format: ReadAloudSliders.speedReadout, width: sizeClass == .compact ? 200 : 300, name: "Base speed",
+                         smallChange: ReadAloudSliders.smallChange)
                 Caption("Every reading starts at this speed. The − and + buttons in the reader, and the menu that opens when you click the speed there, change it too, and the next reading starts where you left it.",
                         bottom: 0).padding(.top, 6)
 
                 #if os(macOS)
                 FieldLabel("Player opacity")
-                ObSlider(value: snapped($model.settings.readerOpacity, 0.02), range: 0.3...1, step: nil,
-                         format: { Fmt.percent($0) }, name: "Player opacity")
+                // StringFormat {0:P0}: "90%" in every region; the keys move by 0.1, snapped to the 0.02 ticks.
+                ObSlider(value: snapped($model.settings.readerOpacity, ReadAloudSliders.opacityTick), range: ReadAloudSliders.opacityRange,
+                         step: nil, format: ReadAloudSliders.opacityReadout, name: "Player opacity", smallChange: ReadAloudSliders.smallChange)
                 Caption("How much of the player's dark background shows; the text stays solid. The dictation pill has its own setting under Settings › Layout.",
                         bottom: 0).padding(.top, 6)
 
                 FieldLabel("Player position")
-                ObSwitch("Same place as the dictation overlay", isOn: ReaderPositionPicker.samePlaceBinding(model)).fixedSize()
+                ObSwitch("Same place as the dictation overlay", isOn: ReaderPositionPicker.samePlaceBinding(model, previews: true)).fixedSize()
                 HStack(spacing: 14) {
                     // A Border in Ob.Border (ink) on Ob.Window, radius 8.
                     ReaderPositionPicker(fill: ob.paper, radius: 8)
@@ -94,7 +103,9 @@ private struct ReadAloudPage: View {
             .frame(maxWidth: 760, alignment: .leading)
             .padding(sizeClass == .compact ? EdgeInsets(top: 16, leading: 16, bottom: 16, trailing: 16) : EdgeInsets(top: 32, leading: 40, bottom: 40, trailing: 40))
         }
-        .onDisappear { if downloading { reader.cancelInstall() } }
+        .onDisappear { if downloading, let download { reader.cancelInstall(download) } }
+        .onChange(of: model.settings.ttsVoice) { if downloading { tryBack = true; pickedSinceReport = true } }
+        .onChange(of: download.flatMap { reader.progress(of: $0) }) { pickedSinceReport = false }
     }
 
     private var intro: String {
@@ -112,9 +123,10 @@ private struct ReadAloudPage: View {
     /// "Heart is ready" / "… isn't downloaded yet" / "… isn't installed" / "Kokoro isn't downloaded yet", or how the
     /// download goes; DOWNLOAD VOICE and TRY IT (ReadAloudPage.ShowStatus).
     private var status: some View {
-        // Only this page's own download; until its first report the status stays, over an empty bar.
-        let progress = downloading ? reader.install?.progress : nil
-        let reported = progress.map { !$0.title.isEmpty } ?? false
+        // Only this page's own download; until its first report the status stays, over an empty bar. A voice picked
+        // meanwhile shows its own status until the next report.
+        let progress = downloading ? download.flatMap { reader.progress(of: $0) } ?? VoiceProgress.waiting : nil
+        let reported = !pickedSinceReport && (progress.map { !$0.title.isEmpty } ?? false)
         return HStack(spacing: 0) {
             // A DockPanel: the text column takes the room left of the buttons, 16 from them. The title stays on one
             // line and is cut off (no TextWrapping on Windows).
@@ -132,15 +144,17 @@ private struct ReadAloudPage: View {
             .padding(.trailing, 16)
             HStack(spacing: 8) {
                 if !installed && !VoiceCatalog.isSystemVoice(voice) {
-                    Button("Download voice") { download() }.buttonStyle(.quiet).disabled(downloading)
+                    Button("Download voice") { startDownload() }.buttonStyle(.quiet).disabled(downloading)
                 }
-                // Picking another voice during the download gives TRY IT back (ReadAloudPage.ShowStatus).
+                // Picking a voice during the download gives TRY IT back (ReadAloudPage.ShowStatus).
                 Button("Try it") { reader.read(Self.sample, voice: voice) }
-                    .buttonStyle(.primary).disabled(downloading && downloadingVoice == voice)
+                    .buttonStyle(.primary).disabled(downloading && !tryBack)
             }
         }
+        // DockPanel Margin 18,14 inside the Card's 1 px border (SYS-001).
         .padding(EdgeInsets(top: 14, leading: 18, bottom: 14, trailing: 18))
-        .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
+        .padding(Ob.border)
+        .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: Ob.border))
     }
 
     private var installed: Bool { VoiceCatalog.isInstalled(voice) }
@@ -160,13 +174,16 @@ private struct ReadAloudPage: View {
         return "A one-time download of about \(VoiceInstaller.kokoroDownloadMb) MB, also offered the first time you use Read aloud."
     }
 
-    private func download() {
+    private func startDownload() {
         failure = nil
         downloading = true
-        downloadingVoice = voice
-        reader.installVoice(voice) { result in
+        tryBack = false
+        pickedSinceReport = false
+        download = reader.installVoice(voice) { result in
             downloading = false
-            downloadingVoice = nil
+            download = nil
+            tryBack = false
+            pickedSinceReport = false
             switch result {
             case .success, .failure(is CancellationError): break
             case .failure(let error as UserFacingError): failure = error.message
@@ -219,6 +236,6 @@ private struct ReadAloudPage: View {
 
     /// A slider that moves in steps without drawing tick marks (Windows' sliders have none).
     private func snapped(_ value: Binding<Double>, _ step: Double) -> Binding<Double> {
-        Binding(get: { value.wrappedValue }, set: { value.wrappedValue = (($0 / step).rounded() * step * 100).rounded() / 100 })
+        Binding(get: { value.wrappedValue }, set: { value.wrappedValue = ReadAloudSliders.snap($0, tick: step) })
     }
 }

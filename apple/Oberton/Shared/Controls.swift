@@ -93,6 +93,9 @@ struct ObMenu<Value: Hashable>: View {
     var width: CGFloat?
     /// Windows' MaxDropDownHeight where the page sets one (the voice boxes: 420).
     var maxListHeight: CGFloat? = nil
+    /// The closed box's text when the selection isn't one of the options (a ComboBox with no SelectedItem is blank
+    /// where a page wants it so: the Read aloud page's VOICE box under a model with no voices).
+    var noSelection = "—"
     @Environment(\.ob) private var ob
     @FocusState private var focused
     @State private var hover = false
@@ -100,7 +103,7 @@ struct ObMenu<Value: Hashable>: View {
     @State private var open = false
     @State private var highlighted: Int?
 
-    private var current: String { options.first { $0.0 == selection }?.1 ?? "—" }
+    private var current: String { options.first { $0.0 == selection }?.1 ?? noSelection }
 
     var body: some View {
         #if os(macOS)
@@ -668,6 +671,10 @@ struct FluentSlider: View {
     var range: ClosedRange<Double>
     /// Snaps what is set (Windows' TickFrequency with IsSnapToTickEnabled), without drawing ticks.
     var step: Double? = nil
+    /// WPF's keys when set: ←/→/↑/↓ move by this (a Slider's SmallChange, 0.1 unless the page sets it), Page Up /
+    /// Page Down by `largeChange`, Home / End to the ends. Nil keeps the old 1 % arrow step.
+    var smallChange: Double? = nil
+    var largeChange: Double = 1
     @Environment(\.ob) private var ob
     @Environment(\.isEnabled) private var enabled
     @State private var hover = false
@@ -706,8 +713,18 @@ struct FluentSlider: View {
         #if os(macOS)
         .focusable()
         .onMoveCommand { d in
-            let small = step ?? (range.upperBound - range.lowerBound) / 100
+            let small = smallChange ?? step ?? (range.upperBound - range.lowerBound) / 100
             if d == .left || d == .down { set(value - small) } else if d == .right || d == .up { set(value + small) }
+        }
+        .onKeyPress(keys: [.home, .end, .pageUp, .pageDown]) { press in
+            guard smallChange != nil else { return .ignored }
+            switch press.key {
+            case .home: set(range.lowerBound)
+            case .end: set(range.upperBound)
+            case .pageUp: set(value + largeChange)
+            default: set(value - largeChange)
+            }
+            return .handled
         }
         #endif
     }
@@ -728,10 +745,12 @@ struct ObSlider: View {
     var width: CGFloat = 300
     /// The slider's accessible name (AutomationProperties.Name); the readout beside it keeps its own text.
     var name: String? = nil
+    /// WPF's arrow-key step (FluentSlider.smallChange); nil keeps the 1 % step.
+    var smallChange: Double? = nil
 
     var body: some View {
         HStack(spacing: 12) {
-            FluentSlider(value: $value, range: range, step: step)
+            FluentSlider(value: $value, range: range, step: step, smallChange: smallChange)
             .frame(width: width)
             .accessibilityLabel(name ?? "")
             .accessibilityValue(format(value)) // the value itself ("1.75×"), not a percentage of the range

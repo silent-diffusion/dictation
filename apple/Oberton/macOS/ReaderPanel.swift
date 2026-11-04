@@ -6,9 +6,9 @@ import SwiftUI
 
 /// The Read aloud player's own floating panel (ReaderWindow): always on top, on every Space, never takes focus from the
 /// app being read. It sits at the player's position (Settings › Layout › READ ALOUD PLAYER, or with the dictation
-/// overlay) at its own opacity, and is shown while it reads or asks. It can be dragged by any part that isn't a button;
-/// the spot is kept (same centre, and in the lower half the same bottom edge, so it grows upwards) until Oberton quits
-/// or the position setting changes.
+/// overlay) at its own opacity, on the primary screen as Windows' work area, and is shown while it reads or asks. It
+/// can be dragged by any part that isn't a button; the spot is kept (same centre, and in the lower half of the primary
+/// screen the same bottom edge, so it grows upwards) until Oberton quits or a position is picked (App.PreviewOverlay).
 @MainActor
 final class ReaderController {
     private let panel: NSPanel
@@ -51,10 +51,14 @@ final class ReaderController {
             .receive(on: RunLoop.main)
             .sink { [weak self] showing in self?.update(visible: showing) }
             .store(in: &bag)
-        // A new position forgets where it was dragged, and moves it there now.
+        // A position picked (overlay or player) or the Read aloud page's "Same place" switch forgets where it was dragged
+        // (App.PreviewOverlay → ReaderWindow.ResetPosition); the Layout page's switch doesn't. Then it moves there now.
+        NotificationCenter.default.publisher(for: ReaderPositionPicker.previewOverlay)
+            .sink { [weak self] _ in self?.anchor = nil }
+            .store(in: &bag)
+        // Any change of position moves a player that wasn't dragged.
         model.$settings.map { [$0.overlayPosition.rawValue, Self.key($0.readerPosition)] }.removeDuplicates().dropFirst()
             .sink { [weak self] _ in
-                self?.anchor = nil
                 DispatchQueue.main.async { if self?.panel.isVisible == true { self?.layout() } }
             }
             .store(in: &bag)
@@ -71,7 +75,9 @@ final class ReaderController {
         return "withOverlay"
     }
 
-    private var screen: CGRect? { (panel.isVisible ? panel.screen : nil)?.visibleFrame ?? NSScreen.main?.visibleFrame }
+    /// The primary screen's (the menu bar's) visible part: Windows places it in SystemParameters.WorkArea, the primary
+    /// monitor's, wherever it is shown.
+    private var screen: CGRect? { (NSScreen.screens.first ?? NSScreen.main)?.visibleFrame }
 
     private func update(visible: Bool) {
         guard visible else { panel.orderOut(nil); return }
@@ -115,14 +121,16 @@ final class ReaderController {
             x = [screen.minX + Self.margin, screen.midX - size.width / 2, screen.maxX - size.width - Self.margin][col]
             y = [screen.maxY - size.height - Self.margin, screen.midY - size.height / 2, screen.minY + Self.margin][row]
         }
-        // Kept inside its screen; once dragged, anywhere on the desktop (all screens), as Windows' WindowDrag.
-        let bounds = anchor == nil ? screen : NSScreen.screens.reduce(screen) { $0.union($1.frame) }
-        x = max(bounds.minX, min(x, bounds.maxX - size.width))
-        y = min(bounds.maxY - size.height, max(y, bounds.minY))
+        // Once dragged, kept on the desktop (all screens) as it grows, as Windows' WindowDrag.Place.
+        if anchor != nil {
+            let bounds = NSScreen.screens.reduce(screen) { $0.union($1.frame) }
+            x = max(bounds.minX, min(x, bounds.maxX - size.width))
+            y = min(bounds.maxY - size.height, max(y, bounds.minY))
+        }
         return CGRect(origin: CGPoint(x: x.rounded(), y: y.rounded()), size: size)
     }
 
-    /// The user dragged it: keep the spot.
+    /// The user dragged it: keep the spot; "lower half" is of the primary screen (WindowDrag.Remember's WorkArea).
     private func remember() {
         guard !placing, panel.isVisible, let screen else { return }
         let f = panel.frame
@@ -160,6 +168,8 @@ enum ReaderSnapshots {
             ("reader-done", { player.showForSnapshot(md, word: nil, status: .ended) }, false),
             ("reader-long-sentence", { player.showForSnapshot(long, word: "whole", status: .playing, speed: 1.65) }, false),
             ("reader-expanded", { player.showForSnapshot(md, word: "Press", status: .playing) }, true),
+            // Longer than the 380 the whole text may take: WPF's classic scroll bar at the edge.
+            ("reader-expanded-scroll", { player.showForSnapshot(md + "\n\n" + md + "\n\n" + md, word: "Press", status: .playing) }, true),
             ("reader-clipboard", { player.askToReadClipboard(md, voice: nil, speed: 1) }, false),
             ("reader-nothing", { player.read("--- * * *", voice: VoiceCatalog.systemVoices().first?.id, speed: 1) }, false),
             // Only when the voice isn't here (otherwise this would really read aloud).
