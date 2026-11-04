@@ -73,18 +73,10 @@ final class OverlayController {
         model.$phase
             .sink { [weak self] new in if new == .idle { self?.freeze() } }
             .store(in: &bag)
-        // Settings › Layout moved the overlay (or the player, which can follow it): forget the dragged spot and flash
-        // the pill at the new one (App.PreviewOverlay).
-        // A player position picked on either page flashes too; the Layout page's "Same place as the dictation overlay"
-        // switch (the player's own position set or cleared) doesn't (LayoutPage.SamePlace_Changed), the Read aloud
-        // page's does (ReadAloudPage.SamePlace_Changed calls PreviewOverlay: `ReaderPositionPicker.previewOverlay`,
-        // which the pages post where Windows calls it).
-        model.$settings.map { PositionPair(overlay: $0.overlayPosition, reader: $0.readerPosition) }
-            .removeDuplicates()
-            .scan([PositionPair]()) { last, new in Array((last + [new]).suffix(2)) }
-            .filter { pairs in pairs.count == 2 && Self.flashes(from: pairs[0], to: pairs[1]) }
-            .map { _ in () }
-            .merge(with: NotificationCenter.default.publisher(for: ReaderPositionPicker.previewOverlay).map { _ in () })
+        // App.PreviewOverlay: forget the dragged spot and flash the pill at its position. The pages post it where
+        // Windows calls it (`ReaderPositionPicker.previewOverlay`): a position picked for the overlay or the player, and
+        // the Read aloud page's "Same place" switch, not the Layout page's (`PositionPreview`).
+        NotificationCenter.default.publisher(for: ReaderPositionPicker.previewOverlay)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.previewPosition() }
             .store(in: &bag)
@@ -95,12 +87,6 @@ final class OverlayController {
             .sink { [weak self] _ in self?.moved() }
             .store(in: &bag)
     }
-
-    typealias PositionPair = PositionPreview.Positions
-
-    /// The overlay moved, or the player was given another spot of its own (not following the overlay or stopping to):
-    /// where Windows calls App.PreviewOverlay from a position grid. The "Same place" switches call it themselves.
-    static func flashes(from old: PositionPair, to new: PositionPair) -> Bool { PositionPreview.previews(from: old, to: new) }
 
     /// Where the position setting puts it: the primary screen's visible area (the menu bar's screen), as Windows always
     /// places it on the primary monitor's work area. Once dragged, the screen it was dragged to gives its room.
