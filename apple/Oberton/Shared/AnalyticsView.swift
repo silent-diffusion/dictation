@@ -17,6 +17,11 @@ struct AnalyticsView: View {
     @State private var app: String?
     /// The app's name as the row showed it, for "IN MAIL" and the empty text.
     @State private var appLabel = ""
+    /// Counts what makes Windows' AnalyticsPage call Build() (and so draw every row afresh): a period or an app picked,
+    /// a new typing speed, a change to the word tally or the daily counts (every dictation and reading), an Extended
+    /// Notes session added or removed. The corrections' "ADDED ✓" is looked at again on each.
+    @State private var builds = 0
+    @State private var sessionIDs: [String] = []
 
     private var compact: Bool { sizeClass == .compact }
 
@@ -34,7 +39,7 @@ struct AnalyticsView: View {
                 readouts(usage, now: now)
                 panel(top: 18) { AppsCell(usage: usage, selected: $app, label: $appLabel) }
                 row([1, 1, 1]) {
-                    CorrectionsCell(tally: shown, on: on, scope: scope("Heard → written"), hint: hint)
+                    CorrectionsCell(tally: shown, on: on, scope: scope("Heard → written"), hint: hint, builds: builds)
                     TopWordsCell(tally: shown, on: on, scope: scope("Common words left out"), hint: hint)
                     PhrasesCell(tally: shown, before: before(now: now), on: on, period: period, scope: scope("3 to 4 words"), hint: hint)
                 }
@@ -48,6 +53,19 @@ struct AnalyticsView: View {
             }
             .padding(compact ? EdgeInsets(top: 16, leading: 16, bottom: 24, trailing: 16) : EdgeInsets(top: 20, leading: 28, bottom: 24, trailing: 28))
         }
+        .onChange(of: period) { builds += 1 }
+        .onChange(of: app) { builds += 1 }
+        .onChange(of: model.settings.typingWPM) { builds += 1 }
+        .onReceive(model.$usage.dropFirst()) { _ in builds += 1 }
+        .onReceive(model.$words.dropFirst()) { _ in builds += 1 }
+        .onReceive(model.notes.objectWillChange) { _ in
+            // After the change lands: only a session added or removed counts (Sessions.CollectionChanged).
+            DispatchQueue.main.async {
+                let ids = model.notes.store.sessions.map(\.id)
+                if ids != sessionIDs { sessionIDs = ids; builds += 1 }
+            }
+        }
+        .onAppear { sessionIDs = model.notes.store.sessions.map(\.id) }
     }
 
     // MARK: Header
@@ -82,13 +100,14 @@ struct AnalyticsView: View {
         }
     }
 
-    /// 7D 30D 90D ALL: full capsules at least 52 wide, the period shown filled (BuildPeriods).
+    /// 7D 30D 90D ALL: full capsules at least 52 wide in all (MinWidth 52 counts the 16 padding and the 1-px line on
+    /// each side, so the text gets at least 18), the period shown filled (BuildPeriods).
     private var periods: some View {
         HStack(spacing: 4) {
             ForEach([(7, "7D"), (30, "30D"), (90, "90D"), (0, "All")], id: \.0) { days, label in
                 let value: Int? = days == 0 ? nil : days
                 let tip = value.map { "The last \($0) days" } ?? "Everything so far"
-                Button { period = value } label: { Text(label).frame(minWidth: 52 - 32) }
+                Button { period = value } label: { Text(label).frame(minWidth: 52 - 2 * (16 + Ob.border)) }
                     .buttonStyle(CapsuleButtonStyle(kind: value == period ? .primary : .quiet))
                     .help(tip)
                     .accessibilityLabel(tip)
@@ -163,10 +182,12 @@ struct AnalyticsView: View {
         let f = NotesFigures.compute(store.sessions, from: from.map { Calendar.current.startOfDay(for: $0) })
         let ai = store.usage.totals(now: now, days: period ?? 0)
         let longest = f.longest.first
-        HStack(alignment: .lastTextBaseline) {
-            Text("09 // EXTENDED NOTES").font(Ob.mono(13, .bold)).lineLimit(1)
-            Spacer(minLength: 8)
-            if !compact { Readout("Lectures and meetings // kept apart from dictation").lineLimit(1) }
+        // A DockPanel: the note docked at the right at its full width, the title in what is left, cut off hard (no "…",
+        // no gap kept between them).
+        HStack(alignment: .lastTextBaseline, spacing: 0) {
+            Text("09 // EXTENDED NOTES").font(Ob.mono(13, .bold)).lineLimit(1).fixedSize()
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading).clipped()
+            if !compact { Readout("Lectures and meetings // kept apart from dictation").lineLimit(1).fixedSize() }
         }
         .padding(.top, 26)
         let cells: [AnyView] = [
@@ -346,7 +367,8 @@ private struct TypingSpeed: View {
                     .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
             }
             .buttonStyle(.plain)
-            .keyTabStop { editing = true }
+            // A TextBlock with a click on Windows: never a Tab stop, never focused.
+            .focusable(false)
             .handCursor()
             .help("Click to change the typing speed time saved is measured against")
         }
@@ -374,8 +396,10 @@ private struct Head<Key: View>: View {
     var body: some View {
         HStack(alignment: .center, spacing: 0) {
             // No "…": a title the right-hand label leaves no room for is cut off, as Windows' TextBlock.
+            // minWidth 0: with only maxWidth the frame never gets narrower than the text, and the head would push the
+            // right-hand label (and the cell's edge) into the next column instead of cutting the title.
             Text(title.uppercased()).font(Ob.mono(11, .bold)).lineLimit(1).fixedSize()
-                .frame(maxWidth: .infinity, alignment: .leading).clipped()
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading).clipped()
             key
             if !right.isEmpty { Readout(right).lineLimit(1).fixedSize().padding(.leading, 12) }
         }
@@ -427,6 +451,16 @@ private struct Meter: View {
                      with: .color(accent ? ob.accent : ob.ink))
         }
         .frame(height: 8)
+    }
+}
+
+/// A rectangle's 1 px outline as a hit shape (filled even-odd): where WPF hit-tests a Border with a BorderThickness of 1
+/// and no background.
+private struct Ring: Shape {
+    func path(in rect: CGRect) -> Path {
+        var p = Path(rect)
+        p.addRect(rect.insetBy(dx: 1, dy: 1))
+        return p
     }
 }
 
@@ -532,7 +566,8 @@ private struct AppRow: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .keyTabStop(radius: 0, action: pick)
+            // A Grid with a click on Windows: never a Tab stop, never focused.
+            .focusable(false)
             .handCursor()
             .onHover { hover = $0 }
             .help(key == nil ? "Show the words of every app" : "Show the words dictated into \(tip)")
@@ -544,8 +579,9 @@ private struct AppRow: View {
 }
 
 /// A bar of square-cornered blocks, filled up to a fraction, the rest outlined: Windows' one-row UniformGrid, each block
-/// a cell's width less its 2 px right margin (so the bar ends 2 px short of its column). Its tooltip shows over the
-/// filled blocks only; the empty ones are bare outlines on Windows, and the gaps show the row's own tooltip.
+/// a cell's width less its 2 px right margin (so the bar ends 2 px short of its column). Its tooltip shows where WPF
+/// hit-tests the blocks: all over a filled one, and on the 1 px outline of an empty one; the gaps and the inside of an
+/// empty block show the row's own tooltip.
 private struct BlockBar: View {
     var fraction: Double
     var blocks: Int
@@ -573,9 +609,12 @@ private struct BlockBar: View {
         .overlay {
             if let tip {
                 GeometryReader { g in
-                    ForEach(0..<min(filled, blocks), id: \.self) { b in
+                    ForEach(0..<blocks, id: \.self) { b in
                         let r = block(b, g.size)
-                        Color.clear.contentShape(Rectangle()).frame(width: r.width, height: r.height).position(x: r.midX, y: r.midY).help(tip)
+                        Group {
+                            if b < filled { Color.clear.contentShape(Rectangle()) } else { Color.clear.contentShape(Ring(), eoFill: true) }
+                        }
+                        .frame(width: r.width, height: r.height).position(x: r.midX, y: r.midY).help(tip)
                     }
                 }
             }
@@ -590,6 +629,8 @@ private struct CorrectionsCell: View {
     var on: Bool
     var scope: String
     var hint: (String) -> String
+    /// AnalyticsView's count of Windows' Build() calls.
+    var builds: Int
     @EnvironmentObject var model: AppModel
     @Environment(\.ob) private var ob
 
@@ -607,9 +648,8 @@ private struct CorrectionsCell: View {
                 if !on || top.isEmpty {
                     Empty(on: on, text: hint("Corrections show up here once the AI has fixed the same words a few times."))
                 } else {
-                    let stamp = top.map { "\($0.key)\u{0}\($0.count)" }.joined(separator: "\u{1}")
                     ForEach(top, id: \.key) { row in
-                        Ruled { CorrectionRow(heard: row.heard, written: row.written, count: row.count, stamp: stamp) }
+                        Ruled { CorrectionRow(heard: row.heard, written: row.written, count: row.count, stamp: builds) }
                     }
                 }
             }
@@ -621,8 +661,8 @@ private struct CorrectionRow: View {
     var heard: String
     var written: String
     var count: Int
-    /// Changes when the section is drawn again (new counts): each row then looks at the vocabulary afresh.
-    var stamp: String
+    /// Changes whenever Windows' Build() would draw the page again: each row then looks at the vocabulary afresh.
+    var stamp: Int
     @EnvironmentObject var model: AppModel
     @Environment(\.ob) private var ob
     /// "ADDED ✓" as this row last looked (Windows' ShowState: when the row is drawn and when its own button is
@@ -902,11 +942,11 @@ private struct HeatmapCell: View {
                                 ForEach(0..<12, id: \.self) { c in
                                     let v = blocks[r][c]
                                     let tip = "\(Self.names[r]) \(String(format: "%02d:00–%02d:00", 2 * c, 2 * c + 2)) · \(v.formatted()) dictation\(v == 1 ? "" : "s")"
-                                    // Only a filled block takes the pointer (an empty one is a bare outline on Windows,
-                                    // so its tooltip practically never shows).
+                                    // Where WPF hit-tests the Border: a filled block all over, an empty one only on its
+                                    // 1 px outline (BorderThickness 1, no background).
                                     Group {
                                         if v > 0 { Rectangle().fill(ob.ink.opacity(0.15 + 0.85 * Double(v) / Double(max))).help(tip) }
-                                        else { Rectangle().strokeBorder(ob.divider, lineWidth: 1).allowsHitTesting(false) }
+                                        else { Rectangle().strokeBorder(ob.divider, lineWidth: 1).contentShape(Ring(), eoFill: true).help(tip) }
                                     }
                                     .frame(minHeight: 14)
                                     .padding(1.5)
