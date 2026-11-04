@@ -99,18 +99,22 @@ struct HistorySettingsSection: View {
         } message: {
             Text(shorter.map { "This deletes \($0.gone) older dictation\($0.gone == 1 ? "" : "s") from History right away, with \($0.gone == 1 ? "its recording" : "their recordings"). Go ahead?" } ?? "")
         }
+        .dialogLook(.question, shown: shorter != nil)
         .alert("Oberton", isPresented: $confirmClear) {
             Button("Yes") { model.clearHistory(); size = model.historySizeBytes }
             Button("No", role: .cancel) {}
         } message: { Text("Delete every dictation in History, with its recording? This can't be undone.") }
+        .dialogLook(.warning, shown: confirmClear)
         .alert("Oberton", isPresented: $confirmResetTally) {
             Button("Yes") { model.resetWordTally() }
             Button("No", role: .cancel) {}
         } message: { Text("Reset the Analytics word tally (words, phrases, corrections, fillers, hours, profiles)? History and the dashboard counts are not touched.") }
+        .dialogLook(.question, shown: confirmResetTally)
         .alert("Oberton", isPresented: $confirmReset) {
             Button("Yes") { model.resetUsage() }
             Button("No", role: .cancel) {}
         } message: { Text("Reset the dashboard's daily counts (words per day, streaks, apps)? History itself is not touched.") }
+        .dialogLook(.question, shown: confirmReset)
     }
 
     /// "{mb:0.#}": one decimal at most, none when it is .0, in the region's decimal separator.
