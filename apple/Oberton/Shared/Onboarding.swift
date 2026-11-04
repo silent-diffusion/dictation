@@ -97,6 +97,10 @@ struct OnboardingView: View {
         #endif
         all.append("Speech model")
         if whisperToGet != nil { all.append("Whisper") }
+        #if os(macOS)
+        // The direct download gets Windows' local AI in setup (LocalAISetup): the runtime, then its model.
+        if aiInSetup { all += LocalAISetup.setupSteps(runtimeInstalled: OllamaRuntime.isInstalled); return all }
+        #endif
         all.append("Apple Intelligence")
         return all
     }
@@ -132,9 +136,14 @@ struct OnboardingView: View {
                 row(done: speechReady, warn: false, name: "Speech model",
                     what: whisperToGet ?? model.settings.whisperModel ?? "Apple Speech · \(languageName) · downloaded once, then works offline") {}
                 Hairline()
-                row(done: AppleIntelligenceBackend.unavailableReason == nil, warn: false, name: "Apple Intelligence",
-                    what: AppleIntelligenceBackend.unavailableReason.map { $0 + " Until then, profiles that use it insert what you said as is." }
-                        ?? "Ready: tidies up your dictation on this \(Device.noun)") {}
+                #if os(macOS)
+                if aiInSetup || aiFromSetup {
+                    // Windows' plan row "Cleanup model · qwen2.5:3b via Ollama".
+                    row(done: aiFromSetup, warn: false, name: "Cleanup model", what: LocalCatalog.defaultModel + " via Ollama") {}
+                } else { appleRow }
+                #else
+                appleRow
+                #endif
                 if phase != .plan || stopped {
                     VStack(alignment: .leading, spacing: 0) {
                         Text(stepTitle).font(Ob.sans(13, .semibold))
@@ -202,6 +211,18 @@ struct OnboardingView: View {
         }
         #endif
     }
+
+    private var appleRow: some View {
+        row(done: AppleIntelligenceBackend.unavailableReason == nil, warn: false, name: "Apple Intelligence",
+            what: AppleIntelligenceBackend.unavailableReason.map { $0 + " Until then, profiles that use it insert what you said as is." }
+                ?? "Ready: tidies up your dictation on this \(Device.noun)") {}
+    }
+
+    #if os(macOS)
+    /// This setup downloads the local AI (a new install of the direct download), and whether it has done so.
+    private var aiInSetup: Bool { LocalAISetup.shared.setupGetsAI }
+    @State private var aiFromSetup = false
+    #endif
 
     /// One plan row: a check once it's done, an "i" note while not (Windows' hardware row), the name and what it is.
     private func row(done: Bool, warn: Bool, name: String, what: String, action: @escaping () -> Void) -> some View {
@@ -313,9 +334,29 @@ struct OnboardingView: View {
             try await downloadWhisper(whisper, step: n)
         }
         try Task.checkCancellation()
+        #if os(macOS)
+        if aiInSetup {
+            final class Step { var n: Int; init(_ n: Int) { self.n = n } }
+            let step = Step(n)
+            try await LocalAISetup.shared.runInSetup(model, begin: { next, title, text in
+                if next { step.n += 1 }
+                begin(step.n, title, text)
+            }, progress: { f in
+                fraction = f
+                if let f { detail = f < 1 ? Self.percent(f) : "" } // Windows: the detail, then "  (42%)"
+            })
+            aiFromSetup = true
+            n = step.n
+        } else {
+            n += 1
+            begin(n, "Apple Intelligence", AppleIntelligenceBackend.unavailableReason ?? "Ready.")
+            AppleIntelligenceBackend.warmUp()
+        }
+        #else
         n += 1
         begin(n, "Apple Intelligence", AppleIntelligenceBackend.unavailableReason ?? "Ready.")
         AppleIntelligenceBackend.warmUp()
+        #endif
         Log.info("Runtime setup complete")
         // Done from here on, also if the window is closed now (Windows has written runtime.json by this point).
         Self.isDone = true

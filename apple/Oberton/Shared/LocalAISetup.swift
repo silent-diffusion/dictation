@@ -86,21 +86,34 @@ final class LocalAISetup: ObservableObject {
     private static func clearPending() { try? FileManager.default.removeItem(at: pendingFile.url) }
 
     #if os(macOS)
+    /// Where `install` is, for setup's progress panel.
+    enum Stage: Int, Comparable {
+        case downloadingRuntime, unpackingRuntime, startingRuntime, downloadingModel
+        static func < (a: Stage, b: Stage) -> Bool { a.rawValue < b.rawValue }
+    }
+
     /// Install Oberton's own runtime (if it isn't), start it, and download the default model (if it isn't in), as
-    /// Windows' setup does; Settings › Models' Download on the runtime row runs this too.
-    func install(_ model: AppModel) async throws {
+    /// Windows' setup does (RuntimeInstaller steps 3 and 5); setup runs this, and Settings › Models' Download on the
+    /// runtime row. `report` follows it: the stage and how far it got (nil while unknown).
+    func install(_ model: AppModel, report: (@MainActor (Stage, Double?) -> Void)? = nil) async throws {
         guard !isRunning else { return }
         progress = .some(nil)
         defer { progress = nil }
         if !OllamaRuntime.isInstalled {
-            try await OllamaRuntime.install { f in Task { @MainActor in LocalAISetup.shared.report(f) } }
+            report?(.downloadingRuntime, nil)
+            try await OllamaRuntime.install(progress: { f in Task { @MainActor in LocalAISetup.shared.report(f); report?(.downloadingRuntime, f) } },
+                                            unpacking: { Task { @MainActor in report?(.unpackingRuntime, nil) } })
         }
+        let qwen = LocalCatalog.defaultModel
+        report?(.startingRuntime, nil)
         try await OllamaRuntime.ensureRunning(settings: model.settings)
         let endpoint = try OllamaBackend.validated(model.settings.ollamaEndpoint)
-        let qwen = LocalCatalog.defaultModel
         if !(await OllamaBackend.installedModels(endpoint: endpoint)).contains(where: { LocalCatalog.same($0, qwen) }) {
             progress = .some(0)
-            try await OllamaBackend.pull(endpoint: endpoint, model: qwen) { f in Task { @MainActor in LocalAISetup.shared.report(f) } }
+            report?(.downloadingModel, nil)
+            try await OllamaBackend.pull(endpoint: endpoint, model: qwen) { f in
+                Task { @MainActor in LocalAISetup.shared.report(f); report?(.downloadingModel, f) }
+            }
             Log.info("Downloaded the AI model \(qwen)")
         }
         Self.clearPending()
@@ -111,6 +124,44 @@ final class LocalAISetup: ObservableObject {
             model.rewarmAI()
         }
         await model.refreshOllama()
+    }
+
+    /// A new install of the direct download still has its local AI to get: setup does it (Windows' setup steps 3 and 5,
+    /// "Downloading the AI runtime (Ollama)" and "Downloading the AI model (qwen2.5:3b)").
+    var setupGetsAI: Bool {
+        guard Distribution.isDirect, let pending = Self.pendingFile.load() else { return false }
+        return !pending.model.isEmpty
+    }
+
+    /// Setup's AI steps: the runtime (when it isn't installed) and then the model, each a step of setup's own.
+    /// `begin` starts a step (`next`: it is the next step, not the same one with a new title), with its title and
+    /// detail; `progress` moves the bar.
+    func runInSetup(_ model: AppModel, begin: @escaping @MainActor (_ next: Bool, _ title: String, _ detail: String) -> Void,
+                    progress: @escaping @MainActor (_ fraction: Double?) -> Void) async throws {
+        final class Seen { var stage: Stage? }
+        let seen = Seen(), qwen = LocalCatalog.defaultModel
+        do {
+            try await install(model) { stage, f in
+                if let s = seen.stage, stage < s { return } // a late report of a step already done
+                if stage != seen.stage {
+                    seen.stage = stage
+                    switch stage {
+                    case .downloadingRuntime: begin(true, "Downloading the AI runtime (Ollama)", "")
+                    case .unpackingRuntime: begin(false, "Unpacking the AI runtime", "")
+                    case .startingRuntime: begin(true, "Downloading the AI model (\(qwen))", "Starting the AI runtime…")
+                    case .downloadingModel: begin(false, "Downloading the AI model (\(qwen))", "")
+                    }
+                }
+                progress(f)
+            }
+        } catch let e as URLError where e.code == .cancelled {
+            throw CancellationError()
+        }
+    }
+
+    /// Setup's step names for its "Step n of N".
+    static func setupSteps(runtimeInstalled: Bool) -> [String] {
+        (runtimeInstalled ? [] : ["AI runtime"]) + ["AI model"]
     }
 
     /// Run `install` for Settings › Models, which shows a failure; Cancel stops it.
