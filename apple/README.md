@@ -57,8 +57,7 @@ Oberton/iOS/            iPhone services (clipboard)
 
 The app is already built the App Store way: sandboxed, hardened runtime, signed with your team (set `DEVELOPMENT_TEAM` in `Local.xcconfig`, copied from `Local.xcconfig.example`; git ignores it), bundle ID
 `com.silentdiffusion.oberton`, no downloaded code (Apple's own speech and language models, Ollama only if the user runs it).
-Left to do: register the bundle ID and create the app in App Store Connect, a real 1024 px icon (the current one is the
-Windows `app.ico` scaled up), a privacy policy URL, then *Product › Archive* and upload for TestFlight.
+Left to do: register the bundle ID and create the app in App Store Connect, a privacy policy URL, then *Product › Archive* and upload for TestFlight.
 
 ## The direct download (Developer ID)
 
