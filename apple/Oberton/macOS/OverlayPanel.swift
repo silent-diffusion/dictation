@@ -104,6 +104,7 @@ final class OverlayController {
         let phase = model.phase
         let done = { if case .done = phase { true } else { false } }()
         let visible = phase == .preview || phase == .placing || model.overlayNotice != nil || model.profileNotice || model.positionFlash
+            || model.trialPreview != nil
             || { if case .failed = phase { true } else { false } }()
             || (model.settings.showOverlay && phase != .idle && (!done || model.receipt != nil)) // no receipt: read aloud took its place
         guard visible else { panel.orderOut(nil); return }

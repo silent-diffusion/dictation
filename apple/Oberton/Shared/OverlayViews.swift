@@ -77,6 +77,8 @@ struct OverlayPill: View {
             ProfilePill(name: model.activeProfile.name, index: i, count: model.profiles.count, opacity: opacity)
         } else if let notice = model.overlayNotice {
             NoticePill(text: notice.text, kind: notice.kind, opacity: opacity)
+        } else if let trial = model.trialPreview {
+            TrialPreviewPill(trial: trial, opacity: opacity) // a profile's Try it (TrialPreview.swift)
         } else if phase == .preview, let pending = model.pending {
             PreviewPill(entry: pending, profile: profile.name, hotkey: hotkey, opacity: opacity, context: model.insertionContext,
                         usesAI: !profile.isRaw,

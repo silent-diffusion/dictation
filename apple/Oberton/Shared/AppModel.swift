@@ -129,7 +129,13 @@ final class AppModel: ObservableObject {
                 stateProfile = activeProfile
             }
             if phase == .recording { meter.start() } else { meter.stop() }
+            if phase != .idle { endTrial(nil) } // a real dictation takes over from a Try it preview (TrialPreview.swift)
         }
+    }
+    /// A profile's Try it waiting in the overlay's preview (TrialPreview.swift). It takes the pill from a notice or a
+    /// receipt, as Windows' PreviewTrialAsync resets the overlay.
+    @Published var trialPreview: TrialPreview? {
+        didSet { if let t = trialPreview, t.id != oldValue?.id { clearOverlay() } }
     }
     /// The profile active when the dictation state began: the pill's chip, TIDYING // {profile} and the AI model chip
     /// keep naming it if the profile is cycled meanwhile (Windows draws them once per state).
@@ -920,8 +926,11 @@ final class AppModel: ObservableObject {
 
     /// Get the speech model and the active profile's AI model loaded (at launch, and when the language or the speech
     /// model changes), as Windows does. A speech model that can't start at launch is reported once (`startupProblem`).
-    func warmUp(atLaunch: Bool = false) {
+    /// `restart`: Settings › Speech recognition's APPLY AND RESTART (Windows' Speech.RestartAsync): the speech model
+    /// loads again from scratch, even one that works, and the AI model is left as it is.
+    func warmUp(atLaunch: Bool = false, restart: Bool = false) {
         guard !Self.snapshotMode else { return }
+        let reload = restart && !phase.isBusy && !notes.needsModels // never under a dictation or Extended Notes
         let speech = activeSpeech
         let locale = speech.speechLocale, whisper = speech.whisperModel
         warmTask?.cancel()
@@ -929,6 +938,10 @@ final class AppModel: ObservableObject {
             speechStatus = whisper.map(loadingStatus) ?? "Speech: loading the speech model (\(languageName))…"
             speechOK = false
             do {
+                if reload {
+                    await LiveTranscriber.unloadModel()
+                    await WhisperEngine.shared.unload()
+                }
                 if let whisper {
                     try await WhisperEngine.shared.load(whisper)
                 } else {
@@ -950,7 +963,7 @@ final class AppModel: ObservableObject {
                 }
             }
         }
-        warmUpAI(activeProfile)
+        if !restart { warmUpAI(activeProfile) }
     }
 
     /// The active profile changed to one with another speech model: load it now, while idle, so the next dictation
@@ -1434,9 +1447,9 @@ final class AppModel: ObservableObject {
 
     // MARK: Speech models
 
-    /// Make a speech model the one dictation and Extended Notes use ("" = Apple Speech); it loads now (`warmUp`).
+    /// Make a speech model the one dictation and Extended Notes use ("" = Apple Speech); it loads now (`warmUp`). One
+    /// that isn't downloaded is taken too, as Windows' MODEL box takes any id (the status line then says so).
     func useSpeechModel(_ id: String) {
-        guard id.isEmpty || WhisperModels.isDownloaded(id) else { return }
         pendingSpeechModel = nil // the user's own choice wins over the first-run one
         settings.speechModel = id
     }
@@ -1518,9 +1531,7 @@ final class AppModel: ObservableObject {
 
     /// The installed Ollama models, after making sure the runtime answers (Windows' EnsureRunningAsync starts its own).
     func refreshOllama() async {
-        guard let url = try? OllamaBackend.validated(settings.ollamaEndpoint) else { ollamaModels = []; return }
-        try? await OllamaRuntime.ensureRunning(settings: settings)
-        ollamaModels = await OllamaBackend.installedModels(endpoint: url)
+        ollamaModels = await OllamaBackend.listModels(settings: settings) // Windows' ListModelsAsync, its failure logged
     }
 }
 

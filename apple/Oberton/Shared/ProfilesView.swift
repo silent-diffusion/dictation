@@ -9,6 +9,9 @@ struct SpeechToTextView: View {
     @Environment(\.ob) private var ob
     @Environment(\.horizontalSizeClass) private var sizeClass
     @FocusState private var listFocused: Bool
+    /// The row that has the keyboard focus when it isn't the open one (⌘ with the arrows moves only the focus, as Ctrl
+    /// does in Windows' ListBox); nil: the focus is on the open profile.
+    @State private var cursor: String?
 
     var body: some View {
         if sizeClass == .compact {
@@ -33,6 +36,17 @@ struct SpeechToTextView: View {
                     }
                 }
             }
+        }
+    }
+
+    /// Where an arrow, Home, End, Page Up or Page Down goes from `i` in a list of `count` (the list is all on screen).
+    static func step(_ count: Int, from i: Int, key: KeyEquivalent) -> Int {
+        let last = max(0, count - 1)
+        return switch key {
+        case .upArrow: max(0, i - 1)
+        case .downArrow: min(last, i + 1)
+        case .home, .pageUp: 0
+        default: last
         }
     }
 
@@ -73,8 +87,10 @@ struct SpeechToTextView: View {
             VStack(spacing: 0) {
                 ForEach(model.profiles) { p in
                     let selected = sizeClass != .compact && p.id == model.profiles[selectedIndex ?? 0].id
-                    ProfileRow(profile: p, active: p.id == model.activeProfile.id, selected: selected, keyFocused: selected && listFocused) {
+                    ProfileRow(profile: p, active: p.id == model.activeProfile.id, selected: selected,
+                               focused: listFocused && cursor == p.id && !selected) {
                         nav.goProfile(p.id)
+                        cursor = nil
                         listFocused = true // a click focuses the list, as in a WPF ListBox
                     }
                 }
@@ -82,20 +98,26 @@ struct SpeechToTextView: View {
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Profiles")
             // Windows' ListBox: with the list focused, the arrow keys (and Home, End, Page Up, Page Down) open the
-            // next profile.
+            // next profile; with ⌘ (Windows' Ctrl) they move only the keyboard focus, and Space opens the focused one.
             .focusable(sizeClass != .compact)
             .focused($listFocused)
             .focusEffectDisabled()
-            .onKeyPress(keys: [.upArrow, .downArrow, .home, .end, .pageUp, .pageDown]) { press in
+            .onKeyPress(keys: [.upArrow, .downArrow, .home, .end, .pageUp, .pageDown, .space]) { press in
                 guard !model.profiles.isEmpty else { return .ignored }
-                let i = selectedIndex ?? 0, last = model.profiles.count - 1
-                let next: Int = switch press.key {
-                case .upArrow: max(0, i - 1)
-                case .downArrow: min(last, i + 1)
-                case .home, .pageUp: 0
-                default: last
+                let ids = model.profiles.map(\.id)
+                let focus = cursor.flatMap { c in ids.firstIndex(of: c) } ?? selectedIndex ?? 0
+                if press.key == .space {
+                    nav.goProfile(ids[focus])
+                    cursor = nil
+                    return .handled
                 }
-                nav.goProfile(model.profiles[next].id)
+                let next = Self.step(ids.count, from: focus, key: press.key)
+                if press.modifiers.contains(.command) || press.modifiers.contains(.control) {
+                    cursor = ids[next] == model.profiles[selectedIndex ?? 0].id ? nil : ids[next]
+                } else {
+                    nav.goProfile(ids[next])
+                    cursor = nil
+                }
                 return .handled
             }
             Button {
@@ -122,13 +144,15 @@ struct SpeechToTextView: View {
     }
 }
 
-/// A two-line row: square, a hairline under it, a 3px ink bar beside the selected one (the accent while the list has
-/// the keyboard focus, as Windows' RowItem).
+/// A two-line row: square, a hairline under it, a 3px ink bar beside the selected one, and the accent bar on a row that
+/// has the keyboard focus without being selected. Windows' RowItem: its IsSelected trigger comes after
+/// IsKeyboardFocused, so the selected row's bar stays ink also while it has the focus.
 struct ProfileRow: View {
     var profile: Profile
     var active: Bool
     var selected: Bool
-    var keyFocused = false
+    /// Has the keyboard focus and isn't the selected row.
+    var focused = false
     var action: () -> Void
     @Environment(\.ob) private var ob
     @State private var hover = false
@@ -152,7 +176,13 @@ struct ProfileRow: View {
             // Windows' 8 padding plus the 1-px bottom border under it.
             .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 9)
             .background(selected || hover ? ob.subtle : .clear)
-            .overlay(alignment: .leading) { if selected { Rectangle().fill(keyFocused ? ob.accent : ob.ink).frame(width: 3) } }
+            .overlay(alignment: .leading) {
+                switch RowMark.of(selected: selected, focused: focused) {
+                case .ink: Rectangle().fill(ob.ink).frame(width: 3)
+                case .accent: Rectangle().fill(ob.accent).frame(width: 3)
+                case .none: EmptyView()
+                }
+            }
             .overlay(alignment: .bottom) { Hairline() }
             .contentShape(Rectangle())
         }
@@ -174,9 +204,6 @@ struct ProfilePage: View {
     @State private var running = false
     @State private var confirmDelete = false
     @State private var onlyOne = false
-    /// The preview Try it waits on (the profile shows a preview before inserting), and where its choice goes.
-    @State private var preview: HistoryEntry?
-    @State private var previewChoice: CheckedContinuation<String?, Never>?
     @State private var promptFocused = false
     @State private var sampleFocused = false
     @State private var moreHover = false
@@ -200,12 +227,8 @@ struct ProfilePage: View {
             }
         }
         .onChange(of: profile.autoProcess) { trial = Trial() }
-        // A real dictation ends a trial's preview, as Windows' overlay does (nothing is chosen).
-        .onChange(of: model.phase.isBusy) { _, busy in if busy && previewChoice != nil { choose(nil) } }
-        .onDisappear {
-            if previewChoice != nil { choose(nil) }
-            model.saveProfilesNow() // Windows' AutoSave flushes when the page goes
-        }
+        // A Try it waiting in the preview stays when the page goes: the preview is the app's (TrialPreview).
+        .onDisappear { model.saveProfilesNow() } // Windows' AutoSave flushes when the page goes
         // MessageBox: the caption is the app's name, the question the text, with the Question icon.
         .alert("Oberton", isPresented: $confirmDelete) {
             Button("Yes") {
@@ -223,20 +246,53 @@ struct ProfilePage: View {
         .dialogLook(.question, shown: confirmDelete)
         .alert("Oberton", isPresented: $onlyOne) { Button("OK") {} } message: { Text("You need at least one profile.") }
         .dialogLook(.information, shown: onlyOne)
-        .sheet(item: $preview) { entry in
-            // Windows opens its preview window for the trial; here it is the same card, over the page.
-            PreviewPill(entry: entry, profile: "Try it · \(profile.name)", hotkey: "", opacity: 1,
-                        onInsert: { choose(entry.inserted) }, onOriginal: { choose(entry.transcription) }, onDiscard: { choose(nil) })
-                .padding(16)
-                .presentationBackground(.clear)
-                .interactiveDismissDisabled()
-                #if os(macOS)
-                .onExitCommand { choose(nil) }
-                #endif
-        }
     }
 
     private var isActive: Bool { profile.id == model.activeProfile.id }
+
+    private func makeDefault() { model.settings.defaultProfileID = profile.id }
+    private func askDelete() { if model.profiles.count <= 1 { onlyOne = true } else { confirmDelete = true } }
+
+    /// ⋯: Windows' QuietButton (Width 36, Padding 0: hover fill, pressed at 70 %, the accent border while it has the
+    /// keyboard focus), which opens its menu under itself when clicked (ProfilePage.More_Click).
+    @ViewBuilder private var moreButton: some View {
+        let dots = HStack(spacing: 3) { ForEach(0..<3, id: \.self) { _ in Circle().frame(width: 3.5, height: 3.5) } }
+        #if os(macOS)
+        Button { moreMenu() } label: { dots }
+            .buttonStyle(CapsuleButtonStyle(kind: .quiet, padding: 0, minWidth: 36))
+            .background(MenuAnchor(box: moreAnchor))
+            .fixedSize()
+        #else
+        Menu {
+            Button(isDefault ? "Default profile" : "Make default") { makeDefault() }.disabled(isDefault)
+            Button("Delete profile…", role: .destructive) { askDelete() }
+        } label: {
+            dots.frame(width: 36, height: 34)
+                .background(Capsule().fill(moreHover ? ob.subtle : .clear))
+                .overlay(Capsule().strokeBorder(ob.ink, lineWidth: 1))
+                .contentShape(Capsule())
+        }
+        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+        .onHover { moreHover = $0 }
+        #endif
+    }
+
+    #if os(macOS)
+    @State private var moreAnchor = MenuAnchor.Box()
+
+    /// Windows' ContextMenu with Placement Bottom: "Make default" (greyed out as "Default profile" when it is) and
+    /// "Delete profile…".
+    private func moreMenu() {
+        guard let view = moreAnchor.view else { return }
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        let makeDefault = MenuAction(title: isDefault ? "Default profile" : "Make default") { self.makeDefault() }
+        makeDefault.isEnabled = !isDefault
+        menu.addItem(makeDefault)
+        menu.addItem(MenuAction(title: "Delete profile…") { askDelete() })
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: view.isFlipped ? view.bounds.maxY : 0), in: view)
+    }
+    #endif
     private var isDefault: Bool { profile.id == model.settings.defaultProfileID }
 
     private var header: some View {
@@ -256,24 +312,9 @@ struct ProfilePage: View {
                 if !isActive {
                     Button("Use this profile") { model.activeProfile = profile }.buttonStyle(.primary)
                 }
-                Menu {
-                    Button(isDefault ? "Default profile" : "Make default") { model.settings.defaultProfileID = profile.id }.disabled(isDefault)
-                    Button("Delete profile…", role: .destructive) {
-                        if model.profiles.count <= 1 { onlyOne = true } else { confirmDelete = true }
-                    }
-                } label: {
-                    HStack(spacing: 3) { ForEach(0..<3, id: \.self) { _ in Circle().frame(width: 3.5, height: 3.5) } }
-                        .frame(width: 36, height: 34)
-                        // Windows' QuietButton: the hover fill.
-                        .background(Capsule().fill(moreHover ? ob.subtle : .clear))
-                        .overlay(Capsule().strokeBorder(ob.ink, lineWidth: 1))
-                        .contentShape(Capsule())
-                }
-                .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
-                .onHover { moreHover = $0 }
-                .handCursor()
-                .help("More")
-                .accessibilityLabel("More profile actions")
+                moreButton
+                    .help("More")
+                    .accessibilityLabel("More profile actions")
             }
             .padding(.top, 6)
         }
@@ -297,7 +338,8 @@ struct ProfilePage: View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
                 Text("TRY IT").font(Ob.mono(12, .bold))
-                Text("Edit the sample, then run this profile on it.").font(Ob.sans(12)).foregroundStyle(ob.muted).lineLimit(1)
+                // A NoWrap TextBlock: cut off where the room ends, no "…".
+                Text("Edit the sample, then run this profile on it.").font(Ob.sans(12)).foregroundStyle(ob.muted).noWrap()
                 Spacer()
                 Button("Run") { run() }.buttonStyle(CapsuleButtonStyle(kind: .primary, height: 32)).disabled(running)
             }
@@ -309,7 +351,7 @@ struct ProfilePage: View {
                     PlainTextBox(text: $sample, font: Ob.mono(13), nsFont: .monospacedSystemFont(ofSize: 13, weight: .regular),
                                  label: "Sample transcript", focused: $sampleFocused)
                         .frame(minHeight: 72, alignment: .topLeading)
-                        .modifier(FluentField(focused: sampleFocused))
+                        .modifier(BareFluentField(focused: sampleFocused))
                 }
                 Hairline(vertical: sizeClass != .compact)
                 trialColumn("02 // AI Edit", copy: trial.aiText, copyName: "Copy AI Edit", meta: trial.meta) {
@@ -324,12 +366,15 @@ struct ProfilePage: View {
 
     private func trialColumn<C: View>(_ title: String, copy: String, copyName: String, meta: String = "", @ViewBuilder content: () -> C) -> some View {
         VStack(alignment: .leading, spacing: 6) {
+            // Windows' DockPanel, all on one line: COPY and the meta docked right at their own width, the title in what
+            // is left; short of room the title is cut off first, then the meta (NoWrap, no "…").
             HStack(alignment: .firstTextBaseline, spacing: 0) {
-                Readout(title)
-                Spacer(minLength: 8)
+                Readout(title).noWrap()
+                Spacer(minLength: 0)
                 // Windows' MonoLabel keeps the case ("safety net: original kept", "−52% length · within limit").
-                if !meta.isEmpty { Text(meta).font(Ob.mono(10.5)).foregroundStyle(ob.muted) }
+                if !meta.isEmpty { Text(meta).font(Ob.mono(10.5)).foregroundStyle(ob.muted).noWrap().layoutPriority(1) }
                 TextCopyButton(text: copy).padding(.leading, 10).help("Copy this box").accessibilityLabel(copyName)
+                    .fixedSize().layoutPriority(2)
             }
             content()
         }
@@ -351,63 +396,59 @@ struct ProfilePage: View {
         .fixedSize(horizontal: false, vertical: true)
     }
 
-    /// ProfilePage.Run_Click: the profile on the sample, honouring its own switches. The preview decides what goes in,
-    /// and Read aloud reads it; an AI problem shows in red instead of an unchanged edit.
+    /// ProfilePage.Run_Click: the profile on the sample, honouring its own switches. The preview (the app's overlay,
+    /// `AppModel.previewTrial`) decides what goes in, and Read aloud reads it; an AI problem shows in red instead of an
+    /// edit. The run belongs to the app: opening another profile meanwhile doesn't stop it.
     private func run() {
         running = true
         let p = profile, input = sample
         trial = Trial(edit: p.autoProcess ? .placeholder("Processing…") : nil)
         Task {
             defer { running = false }
-            let result = p.autoProcess ? await model.processor.process(input, profile: p)
-                : ProcessResult(text: FragmentStitcher.tidy(input), modified: false) // no AI: only spacing and the first capital
-            if let problem = result.error {
-                if problem == TextProcessor.somethingWentWrong { Log.error("Profile test failed") }
-                var t = Trial()
-                if p.autoProcess { t.edit = .problem(problem) } else { t.output = .problem(problem) }
-                trial = t
-                return
-            }
-            var t = Trial(original: input)
-            if p.autoProcess {
-                t.edit = .diff(result.text)
-                t.aiText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                t.meta = !result.safetyNet ? Self.lengthChange(input, result.text)
-                    : result.modified ? "safety net: some parts kept as spoken" : "safety net: original kept"
-                if let w = result.warning, !result.safetyNet { t.meta = w }
-            }
-            var final = result.text
-            if p.showPreview {
-                t.output = .placeholder("Waiting for your choice in the preview…")
-                trial = t
-                let chosen = await withCheckedContinuation { c in
-                    previewChoice = c
-                    // The model is what tells the preview to show the AI's edit (Windows passes usesAi = AutoProcess).
-                    preview = HistoryEntry(transcription: input, aiEdit: p.autoProcess ? result.text : nil, inserted: result.text,
-                                           profileName: p.name, model: p.autoProcess ? model.processor.model(for: p).description : nil,
-                                           appName: nil, seconds: 0, turnaroundSeconds: 0,
-                                           warning: nil, safetyNet: result.safetyNet, wasInserted: false)
+            do {
+                let result = p.autoProcess ? try await model.processor.processOrThrow(input, profile: p)
+                    : ProcessResult(text: FragmentStitcher.tidy(input), modified: false) // no AI: only spacing and the first capital
+                var t = Trial(original: input)
+                if p.autoProcess {
+                    t.edit = .diff(result.text)
+                    t.aiText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    t.meta = !result.safetyNet ? Self.lengthChange(input, result.text)
+                        : result.modified ? "safety net: some parts kept as spoken" : "safety net: original kept"
+                    if let w = result.warning, !result.safetyNet { t.meta = w }
                 }
-                guard let chosen else {
-                    t.output = .placeholder("Discarded in the preview: nothing would be inserted.")
+                var final = result.text
+                if p.showPreview {
+                    t.output = .placeholder("Waiting for your choice in the preview…")
                     trial = t
-                    return
+                    let chosen = await model.previewTrial(profileName: p.name, raw: input, edited: result.text, usesAI: p.autoProcess,
+                                                          model: p.autoProcess ? model.processor.model(for: p).description : nil)
+                    guard let chosen else {
+                        t.output = .placeholder("Discarded in the preview: nothing would be inserted.")
+                        trial = t
+                        return
+                    }
+                    final = chosen
                 }
-                final = chosen
-            }
-            t.output = .text(final)
-            t.inserted = final.trimmingCharacters(in: .whitespacesAndNewlines)
-            trial = t
-            if p.readAloudAfterInsert && !t.inserted.isEmpty {
-                model.reader.read(t.inserted, voice: p.readVoice(fallback: model.settings.ttsVoice))
+                t.output = .text(final)
+                t.inserted = final.trimmingCharacters(in: .whitespacesAndNewlines)
+                trial = t
+                if p.readAloudAfterInsert && !t.inserted.isEmpty {
+                    model.reader.read(t.inserted, voice: p.readVoice(fallback: model.settings.ttsVoice))
+                }
+            } catch let e as UserFacingError {
+                showProblem(e.message, p) // in words for the user, not logged (Windows' catch UserFacingException)
+            } catch {
+                Log.error("Profile test failed", error)
+                showProblem(TextProcessor.somethingWentWrong, p)
             }
         }
     }
 
-    private func choose(_ text: String?) {
-        preview = nil
-        previewChoice?.resume(returning: text)
-        previewChoice = nil
+    /// ProfilePage.ShowProblem: in red in AI EDIT, or in INSERTED for a profile without AI.
+    private func showProblem(_ message: String, _ p: Profile) {
+        var t = Trial()
+        if p.autoProcess { t.edit = .problem(message) } else { t.output = .problem(message) }
+        trial = t
     }
 
     /// "−52% length · within limit": the same word-count measure the safety net uses ("+0%" when it is the same).
@@ -548,7 +589,7 @@ struct ProfilePage: View {
             Text("INSTRUCTIONS").font(Ob.mono(12, .bold)).padding(.bottom, 8)
             // A Fluent-theme TextBox (its 14 pt text), Tab leaving it rather than typing a tab into the instructions.
             PlainTextBox(text: $profile.prompt, font: Ob.sans(14), nsFont: .systemFont(ofSize: 14), label: "Instructions", focused: $promptFocused)
-                .padding(10)
+                .padding(10 + Ob.border) // Windows' Padding 10 sits inside the box's 1-px edge
                 .frame(minHeight: 240, maxHeight: 420, alignment: .topLeading)
                 .modifier(FluentField(focused: promptFocused))
             Caption("Sent to the local AI model along with your transcript. It is told to reply with only the edited text.", bottom: 0).padding(.top, 6)
@@ -632,7 +673,47 @@ private struct RatioColumns: Layout {
     }
 }
 
+/// The Fluent TextBox look for Try it's sample, which Windows sets to Background Transparent and BorderThickness 0: no
+/// fill and no outline at rest, only the template's bottom line; its hover and typing fills and the 2-px ink line while
+/// typing stay (`FluentField` without its resting fill and edge).
+struct BareFluentField: ViewModifier {
+    var focused: Bool
+    @Environment(\.ob) private var ob
+    @State private var hover = false
+
+    func body(content: Content) -> some View {
+        content.background {
+            let shape = RoundedRectangle(cornerRadius: 4)
+            ZStack(alignment: .bottom) {
+                if ob.dark {
+                    shape.fill(focused ? Color(hex: 0x1E1E1E, alpha: 0.7) : hover ? Color.white.opacity(0.083) : .clear)
+                } else {
+                    shape.fill(focused ? Color.white : hover ? Color(hex: 0xF9F9F9, alpha: 0.5) : .clear)
+                }
+                Rectangle().fill(focused ? ob.ink : ob.dark ? Color.white.opacity(0.55) : Color.black.opacity(0.45))
+                    .frame(height: focused ? 2 : 1)
+            }
+            .clipShape(shape)
+        }
+        .onHover { hover = $0 }
+    }
+}
+
 #if os(macOS)
+/// Hands over the AppKit view behind a SwiftUI control, so a menu can open under it (WPF's Placement Bottom).
+struct MenuAnchor: NSViewRepresentable {
+    final class Box { weak var view: NSView? }
+    var box: Box
+
+    func makeNSView(context: Context) -> NSView {
+        let v = NSView()
+        box.view = v
+        return v
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) { box.view = nsView }
+}
+
 /// A plain multi-line text box (a WPF TextBox that accepts Return but not Tab): Tab and Shift-Tab move to the next and
 /// previous control instead of typing a tab, and it is as tall as its text (within the frame it is given). The debug
 /// snapshots draw its text instead (the image renderer can't draw an AppKit view).
