@@ -147,7 +147,7 @@ final class Updater: NSObject, ObservableObject {
     private func show(_ item: SUAppcastItem) {
         busy = false
         found = item
-        status = "Version \(Self.threePart(item.displayVersionString)) is available (you have \(Distribution.version))."
+        status = "Version \(Distribution.threePart(item.displayVersionString)) is available (you have \(Distribution.version))."
         if let description = item.itemDescription { notes = Self.plainNotes(description, format: item.itemDescriptionFormat) }
         if Distribution.isDevelopmentCopy {
             status += " This is a development copy: update it with \"git pull\" instead."
@@ -156,15 +156,6 @@ final class Updater: NSObject, ObservableObject {
         installTitle = item.contentLength > 0
             ? "Download and install (\(String(format: "%.0f", Double(item.contentLength) / 1_048_576)) MB)"
             : "Download and install"
-    }
-
-    /// The version in three parts, as Windows prints a release's (Version.ToString(3)): "5.19" is "5.19.0". Anything that
-    /// isn't numbers and dots is shown as it is.
-    static func threePart(_ version: String) -> String {
-        let parts = version.split(separator: ".", omittingEmptySubsequences: false)
-        guard (1...4).contains(parts.count), parts.allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isNumber) }) else { return version }
-        let numbers = parts.compactMap { Int($0) }
-        return (numbers + [0, 0, 0]).prefix(3).map(String.init).joined(separator: ".")
     }
 
     static func plainNotes(_ text: String, format: String?) -> String {
@@ -239,7 +230,7 @@ extension Updater: SPUUserDriver {
         checkWhenFree = false
         show(appcastItem)
         if startup {
-            model?.notice("Oberton \(Self.threePart(appcastItem.displayVersionString)) is available. Open Settings > Updates to install it.")
+            model?.notice("Oberton \(Distribution.threePart(appcastItem.displayVersionString)) is available. Open Settings > Updates to install it.")
         }
     }
 

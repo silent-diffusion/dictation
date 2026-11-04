@@ -14,7 +14,7 @@ struct UpdatesSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(Self.versionLine).font(Ob.mono(13, .bold)).textSelection(.enabled).padding(.bottom, 4)
+            Text(Self.versionLine).font(Ob.mono(13, .bold)).padding(.bottom, 4)
             #if OBERTON_DIRECT
             DirectUpdates()
             #else

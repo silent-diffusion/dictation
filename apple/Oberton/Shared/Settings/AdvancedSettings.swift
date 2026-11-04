@@ -32,7 +32,7 @@ struct AdvancedSection: View {
             Text(localModels).font(Ob.sans(Ob.body)).fixedSize(horizontal: false, vertical: true)
 
             FieldLabel("Locations")
-            Text(paths).font(Ob.mono(12)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            Text(paths).font(Ob.mono(12)).fixedSize(horizontal: false, vertical: true)
             #if os(macOS)
             HStack(spacing: 8) {
                 Button("Open data folder") { open(AppPaths.dataDir) }.buttonStyle(.quietNarrow)

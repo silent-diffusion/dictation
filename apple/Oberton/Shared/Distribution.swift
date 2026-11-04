@@ -62,6 +62,14 @@ enum Distribution {
 
     /// The version as Windows writes it on Settings › Updates and About: "Oberton 5.18.1".
     static var version: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
+        threePart(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—")
+    }
+
+    /// A version in three parts, as Windows prints them (AppInfo.VersionText, Version.ToString(3)): "5.19" is "5.19.0".
+    /// Anything that isn't numbers and dots is shown as it is.
+    static func threePart(_ version: String) -> String {
+        let parts = version.split(separator: ".", omittingEmptySubsequences: false)
+        guard (1...4).contains(parts.count), parts.allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isNumber) }) else { return version }
+        return (parts.compactMap { Int($0) } + [0, 0, 0]).prefix(3).map(String.init).joined(separator: ".")
     }
 }

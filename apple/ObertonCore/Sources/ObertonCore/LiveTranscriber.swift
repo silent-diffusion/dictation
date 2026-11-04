@@ -122,7 +122,13 @@ public final class LiveTranscriber: @unchecked Sendable {
             }
         }
         defer { watch.cancel() }
-        try await request.downloadAndInstall()
+        // The setup's CANCEL stops the download at once (Windows cancels its downloads), not when it ends.
+        try await withTaskCancellationHandler {
+            try await request.downloadAndInstall()
+        } onCancel: {
+            request.progress.cancel()
+        }
+        try Task.checkCancellation()
         await progress(1)
         return true
     }

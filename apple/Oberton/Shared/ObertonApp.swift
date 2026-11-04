@@ -499,19 +499,23 @@ private final class ActionItem: NSMenuItem {
     @objc private func fire() { run() }
 }
 
-/// The menu bar icon: the Oberton mark (TrayIcon.cs), as a template image so it follows the menu bar's colour.
+/// The menu bar icon: the Oberton mark as Windows' tray draws it (TrayIcon.CreateIcon): an ink square (#0D0D0C) with
+/// a faint white edge, so it shows on a dark menu bar too, and a paper dot (#E8E7E3; red is only for recording), on 16 pt
+/// as Windows' 32 px. In colour, not a template image, so it looks the same on every menu bar.
 enum StatusMark {
-    /// A rounded square with the dot cut out of it, 16 pt.
     static let image: NSImage = {
-        let image = NSImage(size: NSSize(width: 16, height: 16), flipped: false) { rect in
-            let square = NSBezierPath(roundedRect: rect.insetBy(dx: 1, dy: 1), xRadius: 3.5, yRadius: 3.5)
-            square.append(NSBezierPath(ovalIn: NSRect(x: 5, y: 5, width: 6, height: 6)))
-            square.windingRule = .evenOdd
-            NSColor.black.setFill()
+        let image = NSImage(size: NSSize(width: 16, height: 16), flipped: true) { _ in
+            let square = NSBezierPath(roundedRect: NSRect(x: 0.5, y: 0.5, width: 15, height: 15), xRadius: 2.5, yRadius: 2.5)
+            NSColor(srgbRed: 0x0D / 255, green: 0x0D / 255, blue: 0x0C / 255, alpha: 1).setFill()
             square.fill()
+            NSColor(white: 1, alpha: 70 / 255).setStroke()
+            square.lineWidth = 0.5
+            square.stroke()
+            NSColor(srgbRed: 0xE8 / 255, green: 0xE7 / 255, blue: 0xE3 / 255, alpha: 1).setFill()
+            NSBezierPath(ovalIn: NSRect(x: 5.25, y: 5.25, width: 5.5, height: 5.5)).fill()
             return true
         }
-        image.isTemplate = true
+        image.isTemplate = false
         image.accessibilityDescription = "Oberton"
         return image
     }()
@@ -619,10 +623,9 @@ enum Snapshots {
             HStack(spacing: 16) {
                 ForEach([false, true], id: \.self) { dark in
                     HStack(spacing: 12) {
-                        Image(nsImage: StatusMark.image).renderingMode(.template)
-                        Image(nsImage: StatusMark.image).renderingMode(.template).resizable().interpolation(.high).frame(width: 64, height: 64)
+                        Image(nsImage: StatusMark.image)
+                        Image(nsImage: StatusMark.image).resizable().interpolation(.high).frame(width: 64, height: 64)
                     }
-                    .foregroundStyle(dark ? Color.white : Color.black)
                     .padding(12).background(dark ? Color(white: 0.15) : Color(white: 0.92))
                 }
             }

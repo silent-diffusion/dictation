@@ -453,16 +453,17 @@ struct ProgressBar: View {
     @Environment(\.ob) private var ob
     var body: some View {
         GeometryReader { g in
+            // Rounded track and indicator, as the Fluent ProgressBar (its accent is the ink here).
             ZStack(alignment: .leading) {
-                Rectangle().fill(ob.subtle)
+                Capsule().fill(ob.subtle)
                 if let fraction {
-                    Rectangle().fill(ob.ink).frame(width: g.size.width * min(1, max(0, fraction)))
+                    Capsule().fill(ob.ink).frame(width: g.size.width * min(1, max(0, fraction)))
                 } else {
                     TimelineView(.animation) { t in
                         let x = t.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.4) / 1.4
-                        Rectangle().fill(ob.ink).frame(width: g.size.width * 0.25).offset(x: g.size.width * (x * 1.25 - 0.25))
+                        Capsule().fill(ob.ink).frame(width: g.size.width * 0.25).offset(x: g.size.width * (x * 1.25 - 0.25))
                     }
-                    .clipped()
+                    .clipShape(Capsule())
                 }
             }
         }
