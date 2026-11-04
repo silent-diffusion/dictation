@@ -193,7 +193,7 @@ final class MacPlatform: PlatformServices {
         guard CGPreflightPostEventAccess() else {
             CGRequestPostEventAccess()
             keep(text)
-            throw UserFacingError("Copied to the clipboard. To paste at the cursor, allow Oberton in System Settings › Privacy & Security › Accessibility.")
+            throw UserFacingError("Copied to the clipboard. To paste at the cursor, " + Distribution.allowAccessibility)
         }
         do {
             try await insert(text, into: target, spot: await spot.value)
@@ -213,7 +213,7 @@ final class MacPlatform: PlatformServices {
         guard let target else { throw UserFacingError("The window you were dictating into was closed.") }
         guard CGPreflightPostEventAccess() else {
             CGRequestPostEventAccess()
-            throw UserFacingError("Text could not be inserted. To paste at the cursor, allow Oberton in System Settings › Privacy & Security › Accessibility.")
+            throw UserFacingError("Text could not be inserted. To paste at the cursor, " + Distribution.allowAccessibility)
         }
         try await insert(text, into: target)
         if let front, !isSame(front, target), isAlive(front) {

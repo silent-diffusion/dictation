@@ -45,6 +45,11 @@ enum Distribution {
         isDirect && !isSandboxed ? AXIsProcessTrusted() && CGPreflightPostEventAccess() : CGPreflightPostEventAccess()
     }
 
+    /// How to let Oberton press ⌘V in other apps, for the messages shown when it may not. A running Oberton keeps the
+    /// answer macOS gave it the first time it asked (`CGPreflightPostEventAccess` doesn't see the switch turned on
+    /// afterwards), so once the switch is on, Oberton has to be opened again.
+    static let allowAccessibility = "allow Oberton in System Settings › Privacy & Security › Accessibility. If it's already on there, quit Oberton and open it again."
+
     /// Asks macOS for Accessibility: the system's prompt, which adds Oberton to Privacy & Security › Accessibility. The
     /// direct build asks with AXIsProcessTrustedWithOptions, which covers reading other apps' text too.
     static func requestAccessibility() {
