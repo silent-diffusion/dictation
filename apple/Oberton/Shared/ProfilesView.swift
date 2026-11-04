@@ -391,7 +391,8 @@ struct ProfilePage: View {
             case .problem(let t): Text(t).foregroundStyle(ob.accent)
             }
         }
-        .font(Ob.sans(15)).lineSpacing(5)
+        // LineHeight 23 on every line, the last one too (SYS-002).
+        .font(Ob.sans(15)).wpfLineHeight(23, size: 15)
         .frame(maxWidth: .infinity, minHeight: 72, alignment: .topLeading)
         .fixedSize(horizontal: false, vertical: true)
     }
@@ -457,26 +458,27 @@ struct ProfilePage: View {
         let wi = words(input)
         guard wi > 0 else { return "" }
         let change = Double(words(output)) / Double(wi) - 1
-        return "\(change < 0 ? "−" : "+")\(Int((abs(change) * 100).rounded()))% length · within limit"
+        // {0:P0} in code: the region's percent ("−52 %" in German), rounded from the exact value (SYS-010).
+        return "\(change < 0 ? "−" : "+")\(NetNumber.percent(abs(change))) length · within limit"
     }
 
     // MARK: Switches
 
     private var switches: some View {
         VStack(spacing: 0) {
-            ObSwitch("Use AI", isOn: $profile.autoProcess).padding(.horizontal, 14).accessibilityLabel("Use AI")
+            ObSwitch("Use AI", isOn: $profile.autoProcess).padding(.horizontal, 14 + Ob.border).accessibilityLabel("Use AI")
             Caption(profile.autoProcess
                     ? "Your words go to the local AI model with these instructions before they are inserted."
                     : "Your words are inserted as the speech recognizer heard them, with the pieces typed while you speak joined into clean sentences. Nothing goes to the AI model.",
                     bottom: 0)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(EdgeInsets(top: 0, leading: 14, bottom: 12, trailing: 14))
+                .padding(EdgeInsets(top: 0, leading: 14 + Ob.border, bottom: 12, trailing: 14 + Ob.border))
             Hairline()
-            ObSwitch("Preview before inserting", isOn: $profile.showPreview).padding(.horizontal, 14)
+            ObSwitch("Preview before inserting", isOn: $profile.showPreview).padding(.horizontal, 14 + Ob.border)
             Hairline()
             ObSwitch("Read aloud after inserting", detail: "Once the text is in place, Read aloud reads it to you with the voice chosen under Models. \(stopHint)",
                      isOn: $profile.readAloudAfterInsert)
-                .padding(.horizontal, 14).padding(.vertical, 4)
+                .padding(.horizontal, 14 + Ob.border).padding(.vertical, 4)
             #if os(macOS)
             // Without AI: how the words go into the app while you speak (Settings › General › Type as you speak).
             if !profile.autoProcess {
@@ -484,10 +486,12 @@ struct ProfilePage: View {
                 ObSwitch("Type the words in, instead of pasting them",
                          detail: "While you speak, your words go into the app as they are heard. Off (recommended): each new bit is pasted. On: it is typed key by key, which some apps (browsers, chat apps, editors with autocomplete) can garble.",
                          isOn: $profile.liveTyping)
-                    .padding(.horizontal, 14).padding(.vertical, 4)
+                    .padding(.horizontal, 14 + Ob.border).padding(.vertical, 4)
             }
             #endif
         }
+        // A Card: the CheckBoxes' Margin 14,0 and the rows sit inside its 1 px line (SYS-001).
+        .padding(.vertical, Ob.border)
         .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
     }
 
@@ -530,7 +534,7 @@ struct ProfilePage: View {
                 .font(Ob.sans(12)).foregroundStyle(ob.muted).fixedSize(horizontal: false, vertical: true).padding(.top, 10)
             if let problem { Text(problem).font(Ob.sans(12)).foregroundStyle(ob.accent).fixedSize(horizontal: false, vertical: true).padding(.top, 6) }
         }
-        .padding(EdgeInsets(top: 12, leading: 14, bottom: 14, trailing: 14))
+        .padding(EdgeInsets(top: 12, leading: 14 + Ob.border, bottom: 14, trailing: 14 + Ob.border))
         .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
         .task { await model.refreshOllama() }
     }
@@ -600,15 +604,15 @@ struct ProfilePage: View {
         VStack(alignment: .leading, spacing: 0) {
             Text("BEHAVIOUR").font(Ob.mono(12, .bold)).padding(.bottom, 8)
             VStack(spacing: 0) {
-                ObSwitch("Rewrite the whole dictation", isOn: $profile.rewriteWhole).padding(.horizontal, 14)
+                ObSwitch("Rewrite the whole dictation", isOn: $profile.rewriteWhole).padding(.horizontal, 14 + Ob.border)
                 Caption("For instructions that reshape what you say, like turning your thoughts into an email. The AI gets everything at once when you stop. While you speak, your words are typed as spoken, then replaced by the rewrite. Off: long dictation is edited a few sentences at a time, which keeps the wording closer to yours.",
                         bottom: 0)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(EdgeInsets(top: 0, leading: 14, bottom: 12, trailing: 14))
+                    .padding(EdgeInsets(top: 0, leading: 14 + Ob.border, bottom: 12, trailing: 14 + Ob.border))
                 Hairline()
-                ObSwitch("Keep paragraph breaks", isOn: $profile.preserveParagraphs).padding(.horizontal, 14)
+                ObSwitch("Keep paragraph breaks", isOn: $profile.preserveParagraphs).padding(.horizontal, 14 + Ob.border)
                 Hairline()
-                ObSwitch("Remove filler words", isOn: $profile.removeFillers).padding(.horizontal, 14)
+                ObSwitch("Remove filler words", isOn: $profile.removeFillers).padding(.horizontal, 14 + Ob.border)
                 Hairline()
                 VStack(alignment: .leading, spacing: 0) {
                     HStack {
@@ -622,8 +626,9 @@ struct ProfilePage: View {
                             ? "A rewrite may change the length a lot, so only an empty or runaway result falls back to your original words."
                             : "If the AI changes the length by more than this, your original words are inserted instead.", bottom: 0)
                 }
-                .padding(EdgeInsets(top: 12, leading: 14, bottom: 14, trailing: 14))
+                .padding(EdgeInsets(top: 12, leading: 14 + Ob.border, bottom: 14, trailing: 14 + Ob.border))
             }
+            .padding(.vertical, Ob.border) // inside the Card's 1 px line
             .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
         }
     }
