@@ -39,7 +39,9 @@ public enum FragmentStitcher {
             if piece.isEmpty { continue }
 
             let last = lastMeaningfulChar(out)
-            if last.isLetter || last.isNumber || ",;-—–".contains(last) {
+            // char.IsLetterOrDigit on the last UTF-16 unit: letters and decimal digits only ("²" and "½" end nothing
+            // mid-sentence), as on Windows (SYS-016).
+            if (last.utf16.last.map(OutputSanitizer.isLetterOrDigit) ?? false) || ",;-—–".contains(last) {
                 // Cut mid-sentence: the next piece continues it.
                 if lowercaseAtCut(piece, everything: everything) { piece = piece.prefix(1).lowercased() + piece.dropFirst() }
             } else if last == ".", firstLetter(piece)?.isLowercase == true, !endsWithAbbreviationOrEllipsis(out) {

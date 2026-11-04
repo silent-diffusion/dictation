@@ -234,8 +234,9 @@ public enum WordDiff {
     }
 
     /// Compare words ignoring case and surrounding punctuation, so "so" and "So," count as the same word.
+    /// As WordDiff.Normalize: Trim() first, then the punctuation, then ToLowerInvariant (İ stays İ; SYS-016).
     static func normalize(_ w: String) -> String {
-        let t = w.trimmingCharacters(in: CharacterSet(charactersIn: ".,;:!?\"'“”‘’()…-—").union(.whitespaces))
-        return (t.isEmpty ? w : t).lowercased()
+        let t = w.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: ".,;:!?\"'“”‘’()…-—"))
+        return WordTally.lowerInvariant(t.isEmpty ? w : t)
     }
 }
