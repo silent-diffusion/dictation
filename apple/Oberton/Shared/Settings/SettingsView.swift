@@ -29,10 +29,16 @@ struct SettingsView: View {
 
     private func reveal(_ s: SettingsSection) { shownOpen.insert(s.groupKey) }
 
+    /// A section opened from elsewhere while the page is up (the menu bar's Updates, Back): Windows' Show() expands the
+    /// group after the page has loaded, so Group_Toggled saves the unfold.
+    private func open(_ s: SettingsSection) {
+        if isFolded(s.groupKey) { toggle(s.groupKey) } else { reveal(s) }
+    }
+
     var body: some View {
         content
             .onAppear { reveal(nav.place.settings) }
-            .onChange(of: nav.place.settings) { _, s in reveal(s) }
+            .onChange(of: nav.place.settings) { _, s in open(s) }
     }
 
     @ViewBuilder private var content: some View {
@@ -59,19 +65,21 @@ struct SettingsView: View {
     }
 
     private var menu: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .bottom) {
                 Text("SETTINGS").font(Ob.mono(18, .bold))
                 Spacer()
                 Decor("設定").padding(.bottom, 3)
             }
             .padding(.horizontal, 12)
-            .padding(.bottom, 10) // 18 with the groups' spacing
+            .padding(.bottom, 18)
             ForEach(SettingsSection.groups, id: \.0) { group, sections in
                 let key = sections[0].groupKey
                 VStack(alignment: .leading, spacing: 0) {
                     GroupHeader(title: group, folded: isFolded(key)) { toggle(key) }
                     if !isFolded(key) {
+                        // A ListBox (Margin 0,4,0,0) of items with Margin 18,1,0,1: 1 above the first, 2 between, 1 after
+                        // the last. ↑/↓ move the selection and open the section, as in a ListBox.
                         VStack(alignment: .leading, spacing: 2) {
                             ForEach(sections, id: \.self) { s in
                                 NavCapsule(title: s.title, size: 11.5, selected: nav.place.settings == s && sizeClass != .compact) {
@@ -81,10 +89,30 @@ struct SettingsView: View {
                                 .padding(.leading, 18)
                             }
                         }
-                        .padding(.top, 5)
+                        .padding(.top, 4 + 1).padding(.bottom, 1)
+                        #if os(macOS)
+                        .onMoveCommand { direction in
+                            guard let i = sections.firstIndex(of: nav.place.settings) else { return }
+                            let next = direction == .down ? i + 1 : direction == .up ? i - 1 : i
+                            if next != i, sections.indices.contains(next) { nav.goSettings(sections[next]) }
+                        }
+                        #endif
+                        .accessibilityElement(children: .contain)
+                        .accessibilityLabel(Self.listName(key))
                     }
                 }
+                .padding(.bottom, 8) // the Expander's Margin 0,0,0,8
             }
+        }
+    }
+
+    /// The lists' names for screen readers (SettingsPage.xaml's AutomationProperties.Name).
+    private static func listName(_ key: String) -> String {
+        switch key {
+        case "DictationGroup": "Dictation settings"
+        case "ModelsGroup": "Models & AI settings"
+        case "LookGroup": "Look & feel settings"
+        default: "App settings"
         }
     }
 
@@ -128,7 +156,8 @@ private struct GroupHeader: View {
 
     var body: some View {
         Button(action: action) {
-            HStack {
+            // The sign is docked right at the top of the row; the heading is centred in it (the taller, so also on top).
+            HStack(alignment: .top) {
                 Text(title.uppercased()).font(Ob.mono(15, .bold))
                 Spacer()
                 Text(folded ? "+" : "−").font(Ob.mono(12)).foregroundStyle(ob.muted)
@@ -142,8 +171,9 @@ private struct GroupHeader: View {
         .focused($focused)
         .onHover { hover = $0 }
         .handCursor()
-        .accessibilityLabel(title)
-        .accessibilityValue(folded ? "Folded" : "Open")
+        // The Expander's toggle: its heading as written, with its expanded state.
+        .accessibilityLabel(title.uppercased())
+        .accessibilityValue(folded ? "collapsed" : "expanded")
     }
 }
 
