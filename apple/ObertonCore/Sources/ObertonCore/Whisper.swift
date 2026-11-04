@@ -27,24 +27,30 @@ public struct WhisperModel: Identifiable, Sendable, Equatable {
 
 /// The Whisper models, where they are kept (Application Support/Oberton/models/whisper) and their downloads.
 public enum WhisperModels {
-    /// Windows' list and wording; the GPU notes are for Apple's chips (CoreML runs these on the Neural Engine and GPU).
+    /// Windows' list and wording (SpeechModels.All). Only the hardware clauses are the Mac's: where Windows names an
+    /// NVIDIA GPU, the Mac's own rule for the pick (`SpeechModelChoice`: large-v3 turbo on Apple silicon with 16 GB of
+    /// memory, small.en below that and on iPhone and iPad); medium.en runs on the GPU here, not a CPU.
     public static let all: [WhisperModel] = [
         WhisperModel(id: "large-v3-turbo", name: "Whisper large-v3 turbo",
-                     description: "Nearly the accuracy of large-v3, several times faster, in any language. A few seconds after you stop.", size: "1.6 GB",
+                     description: "The best balance: nearly the accuracy of large-v3, several times faster. Needs an Apple silicon Mac with 16 GB of memory to keep up.", size: "1.6 GB",
                      variant: "openai_whisper-large-v3-v20240930_turbo", tokenizer: .largev3, encoderCompute: .cpuAndGPU),
-        WhisperModel(id: "large-v3", name: "Whisper large-v3", description: "The most accurate, and the slowest; any language.", size: "3 GB",
+        WhisperModel(id: "large-v3", name: "Whisper large-v3", description: "The most accurate, and the slowest. GPU only.", size: "3 GB",
                      variant: "openai_whisper-large-v3", tokenizer: .largev3, encoderCompute: .cpuAndGPU),
-        WhisperModel(id: "distil-large-v3", name: "Distil-Whisper large-v3", description: "English only. Fast and accurate: the quickest pick on a Mac, near-instant.", size: "1.5 GB",
+        WhisperModel(id: "distil-large-v3", name: "Distil-Whisper large-v3", description: "English only. Fast and accurate on a GPU.", size: "1.5 GB",
                      variant: "distil-whisper_distil-large-v3", tokenizer: .largev3, encoderCompute: .cpuAndGPU),
         WhisperModel(id: "medium.en", name: "Whisper medium (English)", description: "Good accuracy; slower to load and to run.", size: "1.5 GB",
                      variant: "openai_whisper-medium.en", tokenizer: .mediumEn, encoderCompute: .cpuAndGPU),
-        WhisperModel(id: "small.en", name: "Whisper small (English)", description: "Quick everywhere; the pick for an iPhone.", size: "470 MB",
+        WhisperModel(id: "small.en", name: "Whisper small (English)", description: "The pick for Macs with less than 16 GB of memory, and for iPhone and iPad.", size: "470 MB",
                      variant: "openai_whisper-small.en", tokenizer: .smallEn, encoderCompute: .cpuAndNeuralEngine),
         WhisperModel(id: "base.en", name: "Whisper base (English)", description: "Tiny and quick; makes more mistakes.", size: "145 MB",
                      variant: "openai_whisper-base.en", tokenizer: .baseEn, encoderCompute: .cpuAndNeuralEngine),
     ]
 
     public static func model(_ id: String) -> WhisperModel? { all.first { $0.id.caseInsensitiveCompare(id) == .orderedSame } }
+
+    /// Where a model's audio encoder runs, for the status line ("Ready · large-v3-turbo on GPU", as Windows names its
+    /// CUDA device "GPU").
+    public static func device(of id: String) -> String { model(id)?.encoderCompute == .cpuAndNeuralEngine ? "Neural Engine" : "GPU" }
 
     /// The name for display ("Whisper base (English)"), or the id itself.
     public static func name(of id: String) -> String { model(id)?.name ?? id }
@@ -99,7 +105,10 @@ public enum WhisperModels {
             throw error
         } catch {
             if Task.isCancelled { throw CancellationError() }
-            throw UserFacingError("The download of \(m.name) failed (\(error.localizedDescription)).")
+            // Anything else: the details go to the log and the user reads Windows' "The download failed. See the log
+            // for details." (ModelsPage.RunDownloadAsync).
+            CoreLog.error("Model download failed: \(m.id): \(error)")
+            throw UserFacingError("The download failed. See the log for details.")
         }
     }
 
@@ -189,12 +198,16 @@ public actor WhisperEngine {
         if let loading, loadingID == id { return try await loading.value }
         guard let m = WhisperModels.model(id) else { throw UserFacingError("Oberton doesn't know the speech model \(id).") }
         guard WhisperModels.isDownloaded(id) else {
-            throw UserFacingError("\(m.name) isn't downloaded. Download it under Settings › Models, or pick another model.")
+            // Windows: "The speech engine isn't installed yet. Run scripts\setup.ps1 once (it needs internet), then
+            // restart the app." The Mac has no engine to install, only the model to download.
+            throw UserFacingError("The speech model (\(id)) isn't downloaded yet. Download it under Settings › Models (it needs internet), or pick another model.")
         }
         // Let go of the model loaded now (and any other load) before this one comes in. Nothing here waits between
         // checking `loading` and setting it, so two callers for the same model share one load.
         loading?.cancel()
         let old = kit
+        if let kitID { CoreLog.info("Switching the speech model from \(kitID) to \(id)") } // SpeechRecognizer.InitializeAsync
+        if let old { Self.unwrap(old) }
         kit = nil; probe = nil
         kitID = nil
         Self.lock.withLock { Self.loadedID = nil }
@@ -216,14 +229,20 @@ public actor WhisperEngine {
         let loaded: WhisperKit
         let started = Date()
         do { loaded = try await task.value } catch {
-            throw UserFacingError("\(m.name) couldn't be loaded (\(error.localizedDescription)).")
+            if error is CancellationError { throw error }
+            // Windows: "The speech model could not be loaded. Is it installed? Run scripts\setup.ps1. ({detail})"
+            CoreLog.error("asr: \(id) could not be loaded: \(error)")
+            throw UserFacingError("The speech model could not be loaded. Is it downloaded? See Settings › Speech recognition. (\(error.localizedDescription))")
         }
         WhisperModels.markPrepared(m)
-        NSLog("Whisper: loaded %@ in %.1f s", id, Date().timeIntervalSince(started))
+        // asr_server.py's "Loaded {model} on {device} ({compute type})", in dictation.log as Windows' "asr: " lines.
+        CoreLog.info(String(format: "asr: Loaded %@ on %@ (CoreML) in %.1f s", id, WhisperModels.device(of: id), Date().timeIntervalSince(started)))
         if let tokenizer = loaded.tokenizer {
             let probe = NoSpeechProbe(tokenizer: tokenizer)
             loaded.textDecoder.logitsFilters = [probe]
             loaded.segmentDiscoveryCallback = { probe.found($0) }
+            // faster-whisper's rule for when a window is decoded again at a higher temperature (see `FallbackRule`).
+            loaded.textDecoder = FallbackRule(loaded.textDecoder, probe: probe)
             self.probe = probe
             nonSpeech = Self.nonSpeechTokens(tokenizer)
         }
@@ -233,12 +252,17 @@ public actor WhisperEngine {
         return loaded
     }
 
+    /// The decoder as WhisperKit made it, so `unloadModels` lets go of it (it only unloads its own model types).
+    private static func unwrap(_ kit: WhisperKit) {
+        if let rule = kit.textDecoder as? FallbackRule { kit.textDecoder = rule.inner }
+    }
+
     /// Free the model's memory now; the downloaded files stay.
     public func unload() async {
         loading?.cancel()
         loading = nil
         loadingID = nil
-        if let kit { await kit.unloadModels() }
+        if let kit { Self.unwrap(kit); await kit.unloadModels() }
         kit = nil; probe = nil
         kitID = nil
         Self.lock.withLock { Self.loadedID = nil; Self.loadingNow = nil }
@@ -262,9 +286,9 @@ public actor WhisperEngine {
             let kit = try await WhisperKit(config(m, prewarm: true))
             await kit.unloadModels()
             WhisperModels.markPrepared(m)
-            NSLog("Whisper: prepared %@ in %.1f s", id, Date().timeIntervalSince(started))
+            CoreLog.info(String(format: "asr: Prepared %@ for this device in %.1f s", id, Date().timeIntervalSince(started)))
         } catch {
-            NSLog("Whisper: preparing %@ failed (%@)", id, error.localizedDescription)
+            CoreLog.warn("asr: Preparing \(id) failed: \(error.localizedDescription)")
         }
         lock.withLock { if loadingNow?.model == id { loadingNow = nil } }
         changed()
@@ -300,13 +324,14 @@ public actor WhisperEngine {
         let long = audio.count > WhisperKit.sampleRate * 30
         func options(_ temperature: Float) -> DecodingOptions {
             DecodingOptions(language: language, temperature: temperature, temperatureIncrementOnFallback: step,
-                            // Past one window, WhisperKit falls back window by window (on its own compression ratio).
+                            // Past one window, WhisperKit decodes window by window and falls back for each window on
+                            // its own, as faster-whisper does; with `FallbackRule`, by faster-whisper's rule.
                             temperatureFallbackCount: long ? 2 : 0,
                             usePrefillPrompt: true, detectLanguage: language == nil, skipSpecialTokens: true,
                             // Word times for highlighting the word being said in playback (WordTimes); the text is the same.
                             withoutTimestamps: false, wordTimestamps: words, maxInitialTimestamp: 1.0,
                             promptTokens: promptTokens, suppressBlank: true, suppressTokens: nonSpeech,
-                            compressionRatioThreshold: long ? 2.4 : nil, logProbThreshold: long ? -1.0 : nil,
+                            compressionRatioThreshold: nil, logProbThreshold: nil,
                             firstTokenLogProbThreshold: nil, noSpeechThreshold: nil, chunkingStrategy: nil)
         }
         func run(_ temperature: Float) async throws -> [WhisperText.Segment] {
@@ -388,22 +413,34 @@ public actor WhisperEngine {
         let exact = exactWords ?? prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         // No speech: decoding anyway is exactly how Whisper produces "Thank you." on silence.
         guard let prepared = WhisperPrep.prepare(samples, even: even) else { return ("", []) }
-        func kept(_ segments: [WhisperText.Segment]) -> [WhisperText.Segment] { segments.filter { !(dropPhantoms && WhisperText.isPhantom($0)) } }
-        func text(_ segments: [WhisperText.Segment]) -> String {
-            OutputSanitizer.collapseDots(kept(segments).map { $0.text.trimmingCharacters(in: .whitespaces) }.joined(separator: " ").trimmingCharacters(in: .whitespaces))
+        // `cut`: the segments are timed in the audio cut down to speech. A made-up phrase stretched over seconds is
+        // judged by its time in the audio Windows' faster-whisper reports it in: the evened, cut audio it decoded, or,
+        // without evening out, the recording as made (its voice filter puts the times back).
+        func kept(_ segments: [WhisperText.Segment], cut: Bool) -> [WhisperText.Segment] {
+            segments.filter { !(dropPhantoms && WhisperText.isPhantom(cut && !even ? prepared.originalTimes($0) : $0)) }
+        }
+        func text(_ segments: [WhisperText.Segment], cut: Bool) -> String {
+            OutputSanitizer.collapseDots(kept(segments, cut: cut).map { $0.text.trimmingCharacters(in: .whitespaces) }.joined(separator: " ").trimmingCharacters(in: .whitespaces))
         }
         var segments = try await decode(prepared.audio, model: id, language: language, prompt: prompt, step: 0.2, words: exact, onWindow: onWindow)
-        var result = text(segments)
-        var words = prepared.originalWords(kept(segments).flatMap(\.words))
+        var result = text(segments, cut: true)
+        var words = prepared.originalWords(kept(segments, cut: true).flatMap(\.words))
         if final && !WhisperText.hasContent(result) {
-            // Only "..." on long or odd audio: once more, more freely (and without the cut, when it was only the voice
-            // detector's); as a last resort nothing rather than junk.
+            // Only "..." on long or odd audio: twice more, more freely (and without the cut, when it was only the voice
+            // detector's: asr_server.py's (beam 1, no VAD), then (beam 5, no VAD), at temperatures 0, 0.3, 0.6). WhisperKit
+            // decodes greedily only, so the second is greedy too; it differs from the first only where a hotter decode
+            // samples differently. As a last resort nothing rather than junk.
             let again = even ? prepared.audio : samples
-            segments = try await decode(again, model: id, language: language, prompt: prompt, step: 0.3, words: exact, onWindow: onWindow)
-            result = text(segments)
-            words = kept(segments).flatMap(\.words)
-            if even { words = prepared.originalWords(words) }
-            if !WhisperText.hasContent(result) { NSLog("Whisper: no usable text for %.1f s of audio", Double(samples.count) / 16_000) }
+            for _ in 0..<2 {
+                segments = try await decode(again, model: id, language: language, prompt: prompt, step: 0.3, words: exact, onWindow: onWindow)
+                result = text(segments, cut: even)
+                words = kept(segments, cut: even).flatMap(\.words)
+                if even { words = prepared.originalWords(words) }
+                if WhisperText.hasContent(result) { break }
+            }
+            if !WhisperText.hasContent(result) {
+                CoreLog.warn(String(format: "asr: final decode produced no usable text for %.1fs of audio", Double(again.count) / 16_000))
+            }
         }
         return WhisperText.hasContent(result) ? (result, words) : ("", [])
     }
@@ -413,7 +450,8 @@ public actor WhisperEngine {
     public func segments(_ samples: [Float], model id: String, language: String?, prompt: String, even: Bool) async throws -> [WhisperPiece] {
         guard let prepared = WhisperPrep.prepare(samples, even: even) else { return [] }
         return try await decode(prepared.audio, model: id, language: language, prompt: prompt, step: 0.2).map { s in
-            let t = WhisperText.isPhantom(s) ? "" : OutputSanitizer.collapseDots(s.text.trimmingCharacters(in: .whitespaces))
+            // Judged in the time Windows' faster-whisper reports (see `transcribeTimed`).
+            let t = WhisperText.isPhantom(even ? s : prepared.originalTimes(s)) ? "" : OutputSanitizer.collapseDots(s.text.trimmingCharacters(in: .whitespaces))
             let heard = WhisperText.hasContent(t)
             return WhisperPiece(text: heard ? t : "", start: prepared.originalTime(s.start), end: prepared.originalTime(s.end),
                                 words: heard ? prepared.originalWords(s.words) : [])
@@ -477,6 +515,9 @@ final class NoSpeechProbe: LogitsFiltering, @unchecked Sendable {
 
     func found(_ segments: [TranscriptionSegment]) { lock.withLock { for s in segments { bySegment[s.id] = current } } }
 
+    /// The last decode's no-speech probability.
+    var latest: Double { lock.withLock { current } }
+
     func filterLogits(_ logits: MLMultiArray, withTokens tokens: [Int]) -> MLMultiArray {
         lock.withLock {
             // During the prompt the tokens are the whole prompt; after it, one more each step.
@@ -521,6 +562,71 @@ final class NoSpeechProbe: LogitsFiltering, @unchecked Sendable {
     }
 }
 
+/// faster-whisper's rule for decoding a window again at a higher temperature (`generate_with_fallback`), for the
+/// windows WhisperKit decodes one after another past 30 s: again when the window's text compresses more than 2.4 times
+/// (a loop) or its mean log probability is below −1, but not when Whisper itself thinks the window is silence (no-speech
+/// probability above 0.6, from `NoSpeechProbe`). WhisperKit's own rule counts the compression of token bytes, not text,
+/// and knows no no-speech probability. The one difference left: when every temperature fails, faster-whisper keeps the
+/// most confident decode that isn't a loop, WhisperKit the last one. (Within one window `WhisperEngine.decode` runs
+/// faster-whisper's fallback itself, that choice included.)
+final class FallbackRule: TextDecoding, @unchecked Sendable {
+    private(set) var inner: any TextDecoding
+    private let probe: NoSpeechProbe
+
+    init(_ inner: any TextDecoding, probe: NoSpeechProbe) { self.inner = inner; self.probe = probe }
+
+    var tokenizer: (any WhisperTokenizer)? { get { inner.tokenizer } set { inner.tokenizer = newValue } }
+    var isModelMultilingual: Bool { get { inner.isModelMultilingual } set { inner.isModelMultilingual = newValue } }
+    var supportsWordTimestamps: Bool { inner.supportsWordTimestamps }
+    var logitsSize: Int? { inner.logitsSize }
+    var logitsFilters: [any LogitsFiltering]? { get { inner.logitsFilters } set { inner.logitsFilters = newValue } }
+    var kvCacheEmbedDim: Int? { inner.kvCacheEmbedDim }
+    var kvCacheMaxSequenceLength: Int? { inner.kvCacheMaxSequenceLength }
+    var windowSize: Int? { inner.windowSize }
+    var embedSize: Int? { inner.embedSize }
+
+    func predictLogits(_ inputs: any TextDecoderInputType) async throws -> TextDecoderOutputType? {
+        try await inner.predictLogits(inputs)
+    }
+
+    func prepareDecoderInputs(withPrompt initialPrompt: [Int]) throws -> any DecodingInputsType {
+        try inner.prepareDecoderInputs(withPrompt: initialPrompt)
+    }
+
+    func prefillDecoderInputs(_ decoderInputs: any DecodingInputsType, withOptions options: DecodingOptions?) async throws -> any DecodingInputsType {
+        try await inner.prefillDecoderInputs(decoderInputs, withOptions: options)
+    }
+
+    func detectLanguage(from encoderOutput: any AudioEncoderOutputType, using decoderInputs: any DecodingInputsType,
+                        sampler tokenSampler: TokenSampling, options: DecodingOptions, temperature: FloatType) async throws -> DecodingResult {
+        try await inner.detectLanguage(from: encoderOutput, using: decoderInputs, sampler: tokenSampler, options: options, temperature: temperature)
+    }
+
+    func decodeText(from encoderOutput: any AudioEncoderOutputType, using decoderInputs: any DecodingInputsType,
+                    sampler tokenSampler: TokenSampling, options decoderOptions: DecodingOptions,
+                    callback: TranscriptionCallback?) async throws -> DecodingResult {
+        var result = try await inner.decodeText(from: encoderOutput, using: decoderInputs, sampler: tokenSampler,
+                                                options: decoderOptions, callback: callback)
+        guard let tokenizer = inner.tokenizer else { return result }
+        let text = tokenizer.decode(tokens: result.tokens.filter { $0 < tokenizer.specialTokens.specialTokenBegin })
+        let ratio = WhisperText.compressionRatio(text), noSpeech = probe.latest
+        result.compressionRatio = Float(ratio)
+        result.noSpeechProb = Float(noSpeech)
+        let reason = Self.fallback(ratio: ratio, avgLogprob: Double(result.avgLogProb), noSpeech: noSpeech)
+        result.fallback = reason.map { DecodingFallback(needsFallback: true, fallbackReason: $0) }
+        return result
+    }
+
+    /// Why a window is decoded again, or nil (faster-whisper's `generate_with_fallback` with compression_ratio_threshold
+    /// 2.4, log_prob_threshold −1, no_speech_threshold 0.6).
+    static func fallback(ratio: Double, avgLogprob: Double, noSpeech: Double) -> String? {
+        if noSpeech > 0.6, avgLogprob < -1 { return nil } // silence: a hotter decode only makes things up
+        if ratio > 2.4 { return "compressionRatioThreshold" }
+        if avgLogprob < -1 { return "logProbThreshold" }
+        return nil
+    }
+}
+
 /// Extended Notes with Whisper (asr_server.py live mode): every few seconds, the audio not yet committed is decoded and
 /// its finished sentences committed; committed audio is let go, so an hour-long session stays light.
 public enum WhisperLive {
@@ -530,6 +636,9 @@ public enum WhisperLive {
     public static let forceSeconds = 12.0
     /// Never commit a phrase ending this close to the newest audio: it may be cut off.
     public static let commitMargin = 0.8
+    /// How often the speech not committed yet is decoded (asr_server.py `_live_loop`: LIVE_PARTIAL_SECONDS on a GPU, 2.5
+    /// times that on a CPU). Apple silicon's GPU and Neural Engine are the GPU here; an Intel Mac counts as a CPU.
+    public static let interval = SpeechModelChoice.isAppleSilicon ? 1.0 : 2.5
 
     /// How much of `pieces` (decoded from `duration` seconds of audio) to commit: the text and where it ends, or nil.
     /// Prefers the last phrase that ends a sentence; after a long stretch without one, the last phrase boundary.
@@ -570,15 +679,19 @@ public final class WhisperLiveStream: @unchecked Sendable {
     public func append(_ samples: [Float]) { lock.withLock { pending.append(contentsOf: samples) } }
 
     public func start() {
+        // asr_server.py `_live_loop`: every quarter second, once `WhisperLive.interval` of new audio has come in (and 0.6 s
+        // waits), the speech not committed yet is decoded; with 5 s of it built up, its finished sentences are committed.
+        // Windows decodes in between too, for the running guess; Extended Notes on the Mac shows none, so only the
+        // decodes that can commit are run, on the same beat.
         loop = Task { [weak self] in
             var decodedAt = 0
             while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(500))
+                try? await Task.sleep(for: .milliseconds(250))
                 guard let self, !Task.isCancelled else { return }
                 let (audio, total) = self.lock.withLock { (self.pending, self.dropped + self.pending.count) }
-                // Once 5 s of new audio have built up, and not again before 2 s more.
-                guard audio.count >= Int(Self.rate * WhisperLive.chunkSeconds), total - decodedAt >= Int(Self.rate * 2) else { continue }
+                guard Double(total - decodedAt) >= Self.rate * WhisperLive.interval, Double(audio.count) >= Self.rate * 0.6 else { continue }
                 decodedAt = total
+                guard audio.count >= Int(Self.rate * WhisperLive.chunkSeconds) else { continue }
                 if let (text, at) = await self.commit(audio) { self.onPiece(text, at) }
             }
         }

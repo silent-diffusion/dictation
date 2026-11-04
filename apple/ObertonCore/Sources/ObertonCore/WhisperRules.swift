@@ -155,6 +155,15 @@ public enum WhisperPrep {
             return Double(lastRegion.upperBound) / Double(WhisperPrep.rate)
         }
 
+        /// A segment timed in `audio`, timed in the original: faster-whisper's voice filter puts its segments back in the
+        /// recording's time, so a stock phrase's length (`WhisperText.isPhantom`) counts the pauses it spans.
+        public func originalTimes(_ segment: WhisperText.Segment) -> WhisperText.Segment {
+            var s = segment
+            s.start = originalTime(segment.start)
+            s.end = originalTime(segment.end)
+            return s
+        }
+
         /// Words timed in `audio`, timed in the original.
         public func originalWords(_ words: [SpokenWord]) -> [SpokenWord] {
             words.map { SpokenWord(text: $0.text, start: originalTime($0.start), end: originalTime($0.end)) }
