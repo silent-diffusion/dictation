@@ -124,8 +124,9 @@ import Testing
         #expect(s.ttsBaseSpeed == 1.75 && s.overlayOpacity == 0.9 && s.overlayPosition == .bottomLeft)
         #expect(s.accent == .violet && !s.sidebarCollapsed && s.typingWPM == 35)
         #expect(s.historyLimit == 0 && s.historyByApp && s.keepHistory)
-        // Kept different on purpose: Apple Intelligence, and Ollama's own port.
-        #expect(s.defaultModel == .appleOnDevice && s.ollamaEndpoint == "http://127.0.0.1:11434")
+        // Windows' qwen2.5:3b at its private port where Oberton runs its own runtime (the direct download); the App
+        // Store build can't, so Apple Intelligence and Ollama's own port (LanePParityTests.defaultModelAndEndpointPerBuild).
+        #expect(AppSettings.ownsRuntime ? s.ollamaEndpoint == "http://127.0.0.1:11435" : s.defaultModel == .appleOnDevice)
         #expect((s.hotkey, s.cycleProfileHotkey, s.speakHotkey) == ("Ctrl+D", "Ctrl+Alt+D", "Ctrl+Space"))
     }
     @Test func olderSettingsKeepTheirOwnValues() throws {
