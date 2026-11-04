@@ -88,7 +88,7 @@ final class AppModel: ObservableObject {
 
     @Published var settings: AppSettings {
         didSet {
-            settingsFile.save(settings)
+            scheduleSettingsSave()
             // A new language or speech model: get it ready now, so the next dictation doesn't wait (as on Windows).
             if oldValue.language != settings.language || oldValue.speechModel != settings.speechModel {
                 warmUp()
@@ -115,6 +115,7 @@ final class AppModel: ObservableObject {
         }
     }
     private var profilesSaveTask: Task<Void, Never>?
+    private var settingsSaveTask: Task<Void, Never>?
     @Published private(set) var history: [HistoryEntry]
     /// A dictation pauses Extended Notes while it runs (both would hear the same voice).
     @Published private(set) var phase: Phase = .idle {
@@ -124,8 +125,9 @@ final class AppModel: ObservableObject {
             // that state, and from one held by the state before it (`overlayPinned`).
             if phase != oldValue, (overlayPinned && phase.isBusy) || overlayNotice?.pinned == true { overlayNotice = nil }
             if phase != oldValue {
-                // Not when the receipt clears afterwards (.done → .idle): Windows' LastActivity is the dictation's own.
-                if phase.isBusy || oldValue.isBusy { lastActivity = .now }
+                // When a dictation starts and when it ends, not between its own states, nor when the receipt clears
+                // afterwards (.done → .idle): Windows' LastActivity is stamped by StartAsync and at the end only.
+                if DictationActivity.stamps(wasBusy: oldValue.isBusy, isBusy: phase.isBusy) { lastActivity = .now }
                 stateProfile = activeProfile
             }
             if phase == .recording { meter.start() } else { meter.stop() }
@@ -145,8 +147,9 @@ final class AppModel: ObservableObject {
     /// Settings › Model unloading: unloads idle models (`ModelUnloading.swift`).
     let unloader = ModelUnloader()
     @Published private(set) var liveText = ""
-    /// The recognizer's latest words after the stop, shown only when a piece is committed.
-    private var latestHeard: String?
+    /// Type as you speak: the pieces handed out so far (Windows' `_pieces`), for the words shown after the stop and for
+    /// stitching the final text (`LiveStitch`).
+    private var livePieces: [String] = []
     @Published private(set) var level: Float = 0
     /// The overlay's level meter, running while recording (its own object, so its 20 redraws a second don't redraw
     /// everything that watches the model).
@@ -227,7 +230,16 @@ final class AppModel: ObservableObject {
     let reader = ReadAloudPlayer()
     /// Extended Notes: the sessions on disk (notes/), and the one recording now.
     let notes: NotesRecorder
-    weak var platform: PlatformServices?
+    /// Set when the app's services start (on the Mac after the setup on a first run): then both models are warmed in
+    /// the background, so the first hotkey press is quick (App.OnStartup).
+    weak var platform: PlatformServices? {
+        didSet {
+            guard platform != nil, !launchWarmed, !Self.snapshotMode else { return }
+            launchWarmed = true
+            Task { @MainActor [weak self] in self?.warmUp(atLaunch: true) }
+        }
+    }
+    private var launchWarmed = false
 
     private let settingsFile = JSONFile<AppSettings>("settings.json")
     private let profilesFile = JSONFile<[Profile]>("profiles.json")
@@ -255,6 +267,8 @@ final class AppModel: ObservableObject {
     private var warmTask: Task<Void, Never>?
     // For the turnaround: which models this dictation used, and whether they were loaded when it started.
     private var speechModelUsed = "", aiModelUsed = ""
+    /// This dictation goes to a Whisper model (Windows' speech engine), not Apple's recognizer.
+    private var usesWhisper = false
     private var speechWarm = true
     /// Whether the AI model was in memory when the dictation started, once that check has answered (nil until then).
     private var aiWarmKnown: Bool?
@@ -266,14 +280,27 @@ final class AppModel: ObservableObject {
     private var notesChange: AnyCancellable?
 
     init() {
-        let loadedSettings = settingsFile.load() ?? AppSettings()
+        // Each part of starting that takes a while is noted in the log, to find what makes opening slow (AppServices:
+        // "Startup: {what} took N ms", for a step of 40 ms or more).
+        var clock = Date()
+        func step(_ what: @autoclosure () -> String) {
+            let ms = Int(Date().timeIntervalSince(clock) * 1000)
+            if ms >= 40, !Self.snapshotMode { Log.info("Startup: \(what()) took \(ms) ms") }
+            clock = Date()
+        }
+        // Read once: a broken settings.json is logged and kept as .bad once (Infrastructure's JsonStore.Load), and its
+        // absence is a new install.
+        let settingsOnDisk = settingsFile.load()
+        let loadedSettings = settingsOnDisk ?? AppSettings()
         historyStore = Self.snapshotMode
             ? HistoryStore(dir: FileManager.default.temporaryDirectory.appending(path: "oberton-snapshot-history-\(UUID().uuidString)"))
             : HistoryStore(dir: HistoryStore.defaultDir, legacyFile: AppPaths.dataDir.appending(path: "history.json"))
         historyStore.prune(loadedSettings)
         let history = historyStore.entries
+        step("History (\(history.count) dictations)")
         settings = loadedSettings
         let notesStore = NotesStore(dir: Self.snapshotMode ? nil : NotesStore.defaultDir)
+        step("Extended Notes sessions")
         // The dashboard notepad became Extended Notes' draft (notes/draft.txt): moved there once.
         let movesNotepad = !Self.snapshotMode && !loadedSettings.notepad.isEmpty
         if movesNotepad && notesStore.draft.isEmpty { notesStore.setDraft(loadedSettings.notepad) }
@@ -282,6 +309,7 @@ final class AppModel: ObservableObject {
         let loadedProfiles = profilesFile.load() ?? []
         let freshProfiles = loadedProfiles.isEmpty
         profiles = freshProfiles ? BuiltInProfiles.create() : loadedProfiles
+        step("profiles, speech, AI and insertion")
         self.history = history
         if var loaded = usageFile.load() {
             // Sites are new (version 2): filled in once for the dictations History still has (UsageStore).
@@ -293,9 +321,11 @@ final class AppModel: ObservableObject {
             usage = seeded
             if !Self.snapshotMode { usageFile.save(seeded) }
         }
+        step("dashboard counts")
         // The first time: the tally is seeded from what History already has, so Analytics doesn't start empty.
         words = WordTally.load(wordsFile, seed: history, enabled: loadedSettings.keepWordTally, persist: !Self.snapshotMode)
-        if settingsFile.load() == nil {
+        step("word tally")
+        if settingsOnDisk == nil {
             // A new install's AI model (`LocalAISetup`): Windows' qwen2.5:3b on Oberton's own runtime in the direct
             // download, Apple Intelligence in the App Store version.
             if !Self.snapshotMode { LocalAISetup.newInstall(&settings) }
@@ -312,8 +342,8 @@ final class AppModel: ObservableObject {
         // The words so far: while recording as they come; after the stop only when a piece is committed (Windows
         // RaiseTranscript), not the final pass's text or the recognizer's late guesses.
         transcriber.onText = { [weak self] text in
-            guard let self else { return }
-            if phase == .recording { liveText = text } else { latestHeard = text }
+            guard let self, phase == .recording else { return }
+            liveText = text
         }
         transcriber.onLevel = { [weak self] level in
             guard let self else { return }
@@ -332,7 +362,9 @@ final class AppModel: ObservableObject {
         // Type as you speak: finished pieces are typed in order; the running guess too, for a profile without AI.
         transcriber.onPiece = { [weak self] piece in
             guard let self, self.phase == .recording || self.phase == .transcribing else { return }
-            if self.phase == .transcribing, let heard = self.latestHeard { self.liveText = heard }
+            self.livePieces.append(piece)
+            // After the stop: all the pieces, the running guess gone (RaiseTranscript with `_partial` cleared).
+            if self.phase == .transcribing { self.liveText = FragmentStitcher.join(self.livePieces) }
             self.live?.add(piece)
         }
         transcriber.onGuess = { [weak self] guess in
@@ -363,8 +395,8 @@ final class AppModel: ObservableObject {
         }
         reader.baseSpeed = { [weak self] in self?.settings.ttsBaseSpeed ?? 1 }
         if !Self.snapshotMode { unloader.start(self) }
-        // Warm both models in the background so the first hotkey press is quick.
-        if !Self.snapshotMode { Task { @MainActor [weak self] in self?.warmUp(atLaunch: true) } }
+        // Both models are warmed once the app's services start (`platform` set), after the setup on a first run, as
+        // Windows warms them only after its setup (App.OnStartup).
         // The new install's AI model: the direct download fetches its runtime and model once setup is done.
         if !Self.snapshotMode { LocalAISetup.shared.resume(self) }
         // A first-run speech model download that didn't finish (Oberton quit meanwhile) carries on once setup is done.
@@ -434,7 +466,7 @@ final class AppModel: ObservableObject {
         insertionContext = nil
         finalPass = false
         liveText = ""
-        latestHeard = nil
+        livePieces = []
         pending = nil
         receipt = nil
         historyAudio.begin()
@@ -477,6 +509,7 @@ final class AppModel: ObservableObject {
         let vocabulary = settings.vocabulary, hint = settings.vocabularyHint, locale = settings.speechLocale
         let speech = speechSettings(for: profile)
         let whisper = speech.whisperModel, language = speech.whisperLanguage
+        usesWhisper = whisper != nil
         let engine = Task { [transcriber] in
             if let whisper {
                 try await transcriber.startWhisper(model: whisper, language: language, prompt: hint, live: isLive)
@@ -519,31 +552,76 @@ final class AppModel: ObservableObject {
         let engine = engineTask
         work = Task {
             // If the model was still loading, it now catches up on the whole recording.
-            // Cancelled meanwhile: `cancel()` already let the recording go, and a new one may be running.
+            // Cancelled meanwhile: `cancel()` already let the recording go, and a new one may be running. Each wait a
+            // cancel cuts short ends it quietly with a line in the log (StopCancellableAsync: "A cancelled dictation
+            // ended: …", whatever the wait was).
             do { try await engine?.value } catch {
-                if Task.isCancelled { Log.info("A cancelled dictation ended: \(type(of: error))"); return }
+                if Task.isCancelled { Self.endedCancelled(error); return }
                 transcriber.cancel()
                 fail(error)
                 return
             }
-            if Task.isCancelled { return }
+            if Task.isCancelled { Self.endedCancelled(); return }
             let peak = transcriber.peak
-            let raw = NotesFormat.collapseRepeats(OutputSanitizer.collapseDots(await transcriber.stop()))
-            if Task.isCancelled { return }
+            let decode = Date()
+            let heard: String
+            do { heard = try await Self.withinFinalTimeout { [transcriber] in await transcriber.stop() } } catch {
+                if Task.isCancelled { Self.endedCancelled(error); return }
+                transcriber.cancel()
+                fail(error)
+                return
+            }
+            if usesWhisper {
+                // SpeechRecognizer's "final" line (its seconds of audio and the decode's own time).
+                Log.info("asr final: \(heard.utf16.count) chars, \(String(format: "%.1f", seconds))s audio, \(Int(Date().timeIntervalSince(decode) * 1000)) ms decode")
+            }
+            if heard.isEmpty, let problem = transcriber.finalFailure {
+                // Whisper's final pass failed with nothing to keep (SpeechRecognizer: "Speech recognition failed: …").
+                fail(UserFacingError("Speech recognition failed: " + problem.localizedDescription))
+                return
+            }
+            var raw = OutputSanitizer.collapseDots(heard)
+            if Task.isCancelled { Self.endedCancelled(); return }
             insertionContext = await platform?.insertionContext()
             await live?.drain() // let pieces already on their way finish typing
-            if Task.isCancelled { return }
+            if Task.isCancelled { Self.endedCancelled(); return }
             // No phantom text: silence, a click or a stock phrase the recognizer made up inserts nothing (unless text
             // was already typed while speaking).
             if live?.hasTyped != true, SpeechGuard.shouldDiscard(raw, recorded: seconds, peakLevel: peak) {
-                Log.info("Discarded a likely phantom transcript (\(raw.utf16.count) chars, \(String(format: "%.1f", seconds)) s, peak \(String(format: "%.2f", peak)))")
+                if OutputSanitizer.hasContent(raw) {
+                    Log.info("Discarded a likely phantom transcript (\(raw.utf16.count) chars, \(String(format: "%.1f", seconds)) s, peak \(String(format: "%.2f", peak)))")
+                }
                 live?.stop()
                 live = nil
                 phase = .idle
                 notice("I didn't catch anything. Try again.")
                 return
             }
+            // The seams between the pieces typed while speaking fixed (DictationController.Stitch); then the Mac's
+            // repeated-sentence collapse (a Mac-only addition, kept by the user's decision 3).
+            raw = NotesFormat.collapseRepeats(LiveStitch.stitch(raw: raw, pieces: livePieces, tail: transcriber.finalTail))
             await finish(raw: raw, seconds: seconds, profile: activeProfile)
+        }
+    }
+
+    /// "A cancelled dictation ended: {error type}" (StopCancellableAsync).
+    private static func endedCancelled(_ error: Error = CancellationError()) {
+        Log.info("A cancelled dictation ended: \(type(of: error))")
+    }
+
+    /// The final transcript, or "Speech recognition timed out." after 5 minutes (SpeechRecognizer.StopAsync).
+    private static func withinFinalTimeout(_ body: @escaping @MainActor @Sendable () async -> String) async throws -> String {
+        try await withThrowingTaskGroup(of: String?.self) { group in
+            group.addTask { await body() }
+            group.addTask {
+                try await Task.sleep(for: .seconds(300))
+                return nil
+            }
+            defer { group.cancelAll() }
+            guard let first = try await group.next(), let text = first else {
+                throw UserFacingError("Speech recognition timed out.")
+            }
+            return text
         }
     }
 
@@ -576,7 +654,7 @@ final class AppModel: ObservableObject {
             finalPass = live?.hasTyped == true // with live typing, this is the final pass over the whole recording
             phase = .processing
             result = await processor.process(raw, profile: profile)
-            if Task.isCancelled { return }
+            if Task.isCancelled { Self.endedCancelled(); return }
             // A safety-net rejection is reported on the receipt; any other AI problem is a HEADS UP notice of its own,
             // and the original words go in (DictationController.StopAsync).
             if let warning = result.warning, !result.safetyNet {
@@ -656,7 +734,7 @@ final class AppModel: ObservableObject {
             if let typed, typed.hasTyped {
                 // Replace what was typed while speaking with the final pass over the whole recording.
                 let (final, note) = try await typed.finish(entry.inserted, tail: transcriber.finalTail)
-                entry.inserted = final.trimmingCharacters(in: .whitespacesAndNewlines)
+                entry.inserted = final
                 if let note { entry.warning = note }
                 receipt = "Inserted into \(platform?.targetAppName ?? "the app")"
             } else {
@@ -665,7 +743,9 @@ final class AppModel: ObservableObject {
                 let profile = activeProfile
                 let rewrite = profile.rewriteWhole && profile.autoProcess && entry.inserted != entry.transcription
                 let text = ContextFit.fit(entry.inserted, context: await platform?.insertionContext(), spacingOnly: rewrite)
-                entry.inserted = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                // As it went in, spaces ContextFit added included: the receipt's PARTLY EDITED test compares it with the
+                // transcription (InsertReceipt.Edited). History keeps it trimmed (`record`).
+                entry.inserted = text
                 receipt = try await platform?.insert(text) ?? "Done"
             }
             // The turnaround runs from the stop press until the text is in place.
@@ -935,7 +1015,7 @@ final class AppModel: ObservableObject {
         let locale = speech.speechLocale, whisper = speech.whisperModel
         warmTask?.cancel()
         warmTask = Task {
-            speechStatus = whisper.map(loadingStatus) ?? "Speech: loading the speech model (\(languageName))…"
+            speechStatus = whisper.map(loadingStatus) ?? "Speech: Loading speech model (Apple Speech, \(languageName))…"
             speechOK = false
             do {
                 if reload {
@@ -983,11 +1063,12 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// "Speech: preparing Whisper large-v3 turbo for this Mac…" (first time) or "Speech: loading …".
+    /// Windows' "Speech: Loading speech model (base.en)…"; the first time on this device CoreML also prepares the model
+    /// for it, which Windows has no counterpart for, so that is said too.
     private func loadingStatus(_ id: String) -> String {
         WhisperModels.isPrepared(id)
-            ? "Speech: loading \(WhisperModels.name(of: id))…"
-            : "Speech: preparing \(WhisperModels.name(of: id)) for this \(Device.noun) (first time only; a large model takes a few minutes)…"
+            ? "Speech: Loading speech model (\(id))…"
+            : "Speech: Loading speech model (\(id)), preparing it for this \(Device.noun) (first time only; a large model takes a few minutes)…"
     }
 
     /// A Whisper load started or ended: the status line and badges follow it.
@@ -1008,8 +1089,11 @@ final class AppModel: ObservableObject {
         return Locale.current.localizedString(forIdentifier: settings.speechLocale.identifier) ?? settings.language
     }
 
+    /// Windows' "Speech: Ready · large-v3-turbo on GPU": the model's id and where it runs (Whisper's encoder on the GPU
+    /// or the Neural Engine, `WhisperModels.device`); Apple's recognizer (a Mac addition) with its language.
     private func speechReady() {
-        speechStatus = "Speech: Ready · \(speechEngineName) · \(languageName)"
+        speechStatus = activeSpeech.whisperModel.map { "Speech: Ready · \($0) on \(WhisperModels.device(of: $0))" }
+            ?? "Speech: Ready · Apple Speech (\(languageName)) on this \(Device.noun)"
         speechOK = true
         objectWillChange.send() // the dashboard's speech dial
     }
@@ -1480,9 +1564,10 @@ final class AppModel: ObservableObject {
         settings.speechModel = id
     }
 
-    /// Download a Whisper model (one at a time, as on Windows), showing its progress in the model lists.
+    /// Download a Whisper model, showing its progress in the model lists. One download at a time, as on Windows (whose
+    /// Models page runs one `_download` for every row): not while another Whisper model or a Read aloud voice downloads.
     func downloadWhisper(_ id: String) {
-        guard whisperDownload == nil else { return }
+        guard whisperDownload == nil, reader.install == nil else { return }
         whisperDownloadError = nil
         whisperDownload = (id, nil)
         whisperDownloadTask = Task {
@@ -1501,8 +1586,12 @@ final class AppModel: ObservableObject {
                 }
             } catch is CancellationError {
             } catch {
-                Log.info("Speech model download failed: \(error.localizedDescription)")
-                whisperDownloadError = error.localizedDescription
+                // A problem the user can act on is said as it is; anything else was logged where it happened and reads
+                // "The download failed. See the log for details." (ModelsPage.RunDownloadAsync).
+                if let error = error as? UserFacingError { whisperDownloadError = error.message } else {
+                    Log.error("Model download failed", error)
+                    whisperDownloadError = "The download failed. See the log for details."
+                }
             }
             whisperDownload = nil
             whisperDownloadTask = nil
@@ -1526,10 +1615,29 @@ final class AppModel: ObservableObject {
     }
 
     func saveProfilesNow() {
+        saveSettingsNow() // leaving a page and quitting flush both, as Windows' AutoSave does on Unloaded
         guard profilesSaveTask != nil else { return }
         profilesSaveTask?.cancel()
         profilesSaveTask = nil
         profilesFile.save(profiles)
+    }
+
+    /// settings.json too is written 400 ms after the last change (MainWindow's AutoSave: a slider dragged or a box
+    /// typed in is saved once, when it settles), and at once by `saveSettingsNow` (leaving a page, quitting).
+    private func scheduleSettingsSave() {
+        settingsSaveTask?.cancel()
+        settingsSaveTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            self?.saveSettingsNow()
+        }
+    }
+
+    func saveSettingsNow() {
+        guard settingsSaveTask != nil else { return }
+        settingsSaveTask?.cancel()
+        settingsSaveTask = nil
+        settingsFile.save(settings)
     }
 
     /// The installed Ollama models, after making sure the runtime answers (Windows' EnsureRunningAsync starts its own).
@@ -1570,30 +1678,24 @@ extension AppModel.Phase {
     }
 }
 
-/// The overlay's level meter: 22 columns of √level, oldest first, as OverlayWindow draws them: each level heard (one per
-/// 50 ms of audio) becomes one column. The levels come in bursts with each audio buffer, so they queue and a steady 20 Hz
-/// tick moves them in one at a time; when none came for a moment (the microphone sends nothing), the meter falls away
-/// towards a flat, calm baseline and keeps scrolling rather than freezing.
+/// The overlay's level meter: 22 columns of √level, oldest first, as OverlayWindow.SetLevel draws them (`LevelColumns`):
+/// every level heard (one per 50 ms of audio) becomes one column, none dropped and none made up, and with no levels
+/// coming it holds still. The Mac's microphone hands its levels over a few at a time, so a 20 Hz tick draws them one by
+/// one rather than in jumps.
 @MainActor
 final class LevelMeter: ObservableObject {
-    static let count = 22
-    @Published private(set) var columns = [Double](repeating: 0, count: LevelMeter.count)
-    private var queue: [Double] = []
-    private var last = 0.0
-    private var heardAt = Date.distantPast
+    static let count = LevelColumns.count
+    @Published private(set) var columns = LevelColumns().columns
+    private var state = LevelColumns()
     private var timer: Timer?
 
     /// A level from the microphone (0…1, Windows' scale).
-    func hear(_ level: Float) {
-        queue.append(Double(min(max(level, 0), 1)).squareRoot()) // perceptual: quiet speech still moves the dots
-        if queue.count > 4 { queue.removeFirst(queue.count - 4) } // never lag behind the voice
-    }
+    func hear(_ level: Float) { state.hear(level) }
 
     func start() {
         guard timer == nil else { return }
-        columns = [Double](repeating: 0, count: Self.count)
-        queue = []
-        last = 0
+        state = LevelColumns()
+        columns = state.columns
         let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
@@ -1604,19 +1706,9 @@ final class LevelMeter: ObservableObject {
     func stop() {
         timer?.invalidate()
         timer = nil
-        queue = []
     }
 
-    func tick(now: Date = .now) {
-        if !queue.isEmpty {
-            last = queue.removeFirst()
-            heardAt = now
-        } else if now.timeIntervalSince(heardAt) > 0.15 {
-            last = last * 0.6 < 0.02 ? 0 : last * 0.6 // nothing heard: settle towards flat
-        } else {
-            return // the next buffer is on its way: wait for its level rather than repeat this one
-        }
-        columns.removeFirst()
-        columns.append(last)
+    func tick() {
+        if state.tick() { columns = state.columns }
     }
 }
