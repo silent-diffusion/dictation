@@ -14,8 +14,6 @@ final class ModelUnloader {
     private var timer: Timer?
     private var soon: Task<Void, Never>?
     private var watches: Set<AnyCancellable> = []
-    /// When the Read aloud voice last stopped reading (Windows' `Tts.LastUsed`).
-    private(set) var voiceLastUsed = Date()
 
     func start(_ model: AppModel) {
         self.model = model
@@ -25,14 +23,10 @@ final class ModelUnloader {
         model.$phase.map(\.isBusy).removeDuplicates().dropFirst()
             .sink { [weak self] busy in if !busy { self?.unloadSoonIfImmediate() } }
             .store(in: &watches)
-        model.reader.$status.map { $0 == .ended }.removeDuplicates().dropFirst()
-            .sink { [weak self] _ in self?.voiceLastUsed = .now }
-            .store(in: &watches)
         // The player closed (✕, or by itself after the end): ReaderWindow.Stop starts the 3 s timer.
         model.reader.$isOpen.combineLatest(model.reader.$question.map { $0 != nil }).map { $0 || $1 }
             .removeDuplicates().dropFirst()
             .sink { [weak self] showing in
-                self?.voiceLastUsed = .now
                 if !showing { self?.unloadSoonIfImmediate() }
             }
             .store(in: &watches)
@@ -44,11 +38,13 @@ final class ModelUnloader {
         guard minutes > 0 else { return }
         let idle = TimeInterval(minutes * 60)
         // Extended Notes holds only the speech model; an idle voice still goes (App.UnloadIdleModelsAsync).
+        // Each unload logs itself ("Speech model unloaded after being idle", as Windows' engines do).
         if !model.notes.needsModels, !model.phase.isBusy, model.speechLoaded, Date.now.timeIntervalSince(model.lastActivity) > idle {
-            Log.info("Unloading the idle speech model: " + (await model.unloadNow(speech: true, ai: false, voice: false)))
+            _ = await model.unloadNow(speech: true, ai: false, voice: false)
         }
-        if !model.reader.isShowing, model.reader.isLoaded, Date.now.timeIntervalSince(voiceLastUsed) > idle {
-            Log.info("Unloading the idle Read aloud voice: " + (await model.unloadNow(speech: false, ai: false, voice: true)))
+        // The voice counts from the last sentence it was asked to speak (Windows' `Tts.LastUsed`).
+        if !model.reader.isShowing, model.reader.isLoaded, Date.now.timeIntervalSince(SpeechVoices.shared.lastUsed) > idle {
+            _ = await model.unloadNow(speech: false, ai: false, voice: true)
         }
     }
 

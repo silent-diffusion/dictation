@@ -70,17 +70,19 @@ struct OverlayPill: View {
     var body: some View {
         let opacity = model.settings.overlayOpacity
         let phase = model.phase
+        // The pill names the profile active when its state began (Windows' ShowState), not one cycled to since.
+        let profile = model.stateProfile ?? model.activeProfile
         if model.profileNotice, !model.overlayPinned {
             let i = model.profiles.firstIndex { $0.id == model.activeProfile.id } ?? 0
             ProfilePill(name: model.activeProfile.name, index: i, count: model.profiles.count, opacity: opacity)
         } else if let notice = model.overlayNotice {
             NoticePill(text: notice.text, kind: notice.kind, opacity: opacity)
         } else if phase == .preview, let pending = model.pending {
-            PreviewPill(entry: pending, profile: model.activeProfile.name, hotkey: hotkey, opacity: opacity, context: model.insertionContext,
+            PreviewPill(entry: pending, profile: profile.name, hotkey: hotkey, opacity: opacity, context: model.insertionContext,
                         onInsert: { model.confirmPreview() }, onOriginal: { model.confirmPreview(useOriginal: true) },
                         onDiscard: { model.cancel() })
         } else if phase == .placing {
-            PlacingPill(profile: model.activeProfile.name, hotkey: hotkey, opacity: opacity,
+            PlacingPill(profile: profile.name, hotkey: hotkey, opacity: opacity,
                         onCopy: { model.copyPlacingToClipboard() }, onDiscard: { model.cancel() })
         } else if case .failed(let message) = phase {
             NoticePill(text: message, kind: .error, opacity: opacity)
@@ -93,8 +95,8 @@ struct OverlayPill: View {
             }
         } else if model.settings.showOverlay, phase != .idle {
             let live = [.recording, .transcribing, .processing].contains(phase) ? model.liveText : ""
-            PillContent(phase: phase, profile: model.activeProfile.name, meterFeed: model.meter, startedAt: model.startedAt,
-                        live: live, opacity: opacity, aiModel: Self.chip(model.processor.model(for: model.activeProfile)),
+            PillContent(phase: phase, profile: profile.name, meterFeed: model.meter, startedAt: model.startedAt,
+                        live: live, opacity: opacity, aiModel: Self.chip(model.processor.model(for: profile)),
                         audioSeconds: model.stoppedAt.map { $0.timeIntervalSince(model.startedAt ?? $0) },
                         loadingSpeech: model.speechLoading, finalPass: model.finalPass, onCancel: { model.cancel() })
         }

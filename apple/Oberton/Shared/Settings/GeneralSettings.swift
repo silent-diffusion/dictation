@@ -26,6 +26,11 @@ struct GeneralSection: View {
                          isOn: $model.settings.typeWhileSpeaking)
             }
             .padding(.top, 16)
+            // macOS only lets Oberton type into other apps once it is allowed; until then the switch would do nothing.
+            if model.settings.typeWhileSpeaking, !CGPreflightPostEventAccess() {
+                Caption("Oberton isn't allowed to type into other apps yet, so the text goes in when you stop. Allow it in System Settings › Privacy & Security › Accessibility.")
+                    .padding(.top, 6)
+            }
 
             if Distribution.isDirect {
                 SwitchCard {
@@ -52,7 +57,8 @@ struct GeneralSection: View {
             FieldLabel("Maximum length of one dictation (seconds)")
             ObField("", text: Binding(get: { maxSeconds }, set: { text in
                 maxSeconds = text
-                if let n = Int(text.trimmingCharacters(in: .whitespaces)), n > 0 { model.settings.maxRecordingSeconds = Double(n) }
+                // Any whole number, as Windows' box; a dictation always gets at least 10 s.
+                if let n = Int(text.trimmingCharacters(in: .whitespaces)) { model.settings.maxRecordingSeconds = Double(n) }
             }), width: 120)
             .onAppear { maxSeconds = String(Int(model.settings.maxRecordingSeconds)) }
         }

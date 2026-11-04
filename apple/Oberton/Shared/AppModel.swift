@@ -116,10 +116,17 @@ final class AppModel: ObservableObject {
             // A new dictation state takes the pill from a notice, as on Windows: from any notice when the overlay shows
             // that state, and from one held by the state before it (`overlayPinned`).
             if phase != oldValue, (overlayPinned && phase.isBusy) || overlayNotice?.pinned == true { overlayNotice = nil }
-            if phase != oldValue { lastActivity = .now }
+            if phase != oldValue {
+                // Not when the receipt clears afterwards (.done → .idle): Windows' LastActivity is the dictation's own.
+                if phase.isBusy || oldValue.isBusy { lastActivity = .now }
+                stateProfile = activeProfile
+            }
             if phase == .recording { meter.start() } else { meter.stop() }
         }
     }
+    /// The profile active when the dictation state began: the pill's chip, TIDYING // {profile} and the AI model chip
+    /// keep naming it if the profile is cycled meanwhile (Windows draws them once per state).
+    @Published private(set) var stateProfile: Profile?
     /// When a dictation last changed state (Windows' `LastActivity`): the model unloading timer counts from here.
     @Published private(set) var lastActivity = Date()
     /// Settings › Model unloading: unloads idle models (`ModelUnloading.swift`).
@@ -234,7 +241,8 @@ final class AppModel: ObservableObject {
     // For the turnaround: which models this dictation used, and whether they were loaded when it started.
     private var speechModelUsed = "", aiModelUsed = ""
     private var speechWarm = true
-    private var aiWarm: Task<Bool, Never>?
+    /// Whether the AI model was in memory when the dictation started, once that check has answered (nil until then).
+    private var aiWarmKnown: Bool?
     /// The turnaround clock (Windows' `_finishClock`): runs from the stop press until the text is in place, paused
     /// while a preview or NO PLACE TO PASTE waits for the user (reading or choosing isn't processing time).
     private var finishClock = Stopwatch()
@@ -379,7 +387,16 @@ final class AppModel: ObservableObject {
 
     var activeProfile: Profile {
         get { profiles.first { $0.id == settings.activeProfileID } ?? profiles.first ?? BuiltInProfiles.create()[0] }
-        set { settings.activeProfileID = newValue.id }
+        set {
+            // Picking the profile that is already active (the menu bar, or the cycle hotkey with one profile) still warms
+            // its models, as Windows' SetActive always raises ActiveChanged.
+            if newValue.id == settings.activeProfileID {
+                warmUpAI(activeProfile)
+                swapSpeechModel()
+            } else {
+                settings.activeProfileID = newValue.id
+            }
+        }
     }
 
     var processor: TextProcessor { TextProcessor(settings: settings) }
@@ -399,6 +416,7 @@ final class AppModel: ObservableObject {
 
     /// Starting a dictation leaves Read aloud reading, as on Windows (DictationController.StartAsync never touches it).
     func start() {
+        dictationNumber += 1
         platform?.captureTarget(readContext: settings.matchSurroundingText)
         insertionContext = nil
         finalPass = false
@@ -414,7 +432,14 @@ final class AppModel: ObservableObject {
         speechWarm = speechModelLoaded
         aiModelUsed = aiModelName(profile)
         let aiID = processor.model(for: profile), endpoint = settings.ollamaEndpoint
-        aiWarm = profile.isRaw ? nil : Task { await Self.aiLoaded(aiID, endpoint: endpoint) }
+        aiWarmKnown = nil
+        if !profile.isRaw {
+            let number = dictationNumber
+            Task { [weak self] in
+                let loaded = await Self.aiLoaded(aiID, endpoint: endpoint)
+                if self?.dictationNumber == number { self?.aiWarmKnown = loaded }
+            }
+        }
         // Type as you speak needs the text to go straight in, so it is off for profiles that preview before inserting,
         // and when there is nowhere to type (the text then waits for a click at the end).
         live?.stop()
@@ -457,7 +482,6 @@ final class AppModel: ObservableObject {
         warmUpAI(profile, forDictation: true)
         // One timer per dictation: an earlier one (a dictation that failed) must not cut this one short.
         limitTimer?.invalidate()
-        dictationNumber += 1
         let number = dictationNumber
         let limit = Timer.scheduledTimer(withTimeInterval: max(10, settings.maxRecordingSeconds), repeats: false) { [weak self] _ in
             Task { @MainActor in
@@ -560,7 +584,7 @@ final class AppModel: ObservableObject {
             showAINotice(over: true)
             return
         }
-        await insert(entry, readBack: profile.readAloudAfterInsert ? profile.voice : nil, readBackRequested: profile.readAloudAfterInsert)
+        await insert(entry)
     }
 
     /// The AI step's problem, said when the text goes in (or the preview shows), so it isn't covered at once by the next
@@ -596,14 +620,13 @@ final class AppModel: ObservableObject {
             entry.aiEdit = nil // the original words, not the AI's
         }
         pending = nil
-        let profile = activeProfile
-        work = Task { await insert(entry, readBack: profile.voice, readBackRequested: profile.readAloudAfterInsert) }
+        work = Task { await insert(entry) }
     }
 
-    private func insert(_ entry: HistoryEntry, readBack voice: String?, readBackRequested: Bool) async {
+    private func insert(_ entry: HistoryEntry) async {
         // Nothing had the cursor when the dictation started: ask where it should go instead of pasting into nowhere.
         if live?.hasTyped != true, await platform?.nowhereToPaste == true {
-            waitForPlace(entry, readBack: voice, readBackRequested: readBackRequested)
+            waitForPlace(entry)
             return
         }
         var entry = entry
@@ -631,16 +654,18 @@ final class AppModel: ObservableObject {
                 receipt = try await platform?.insert(text) ?? "Done"
             }
             // The turnaround runs from the stop press until the text is in place.
-            entry.turnaroundSeconds = finishClock.elapsed
+            entry.turnaroundSeconds = Self.finishSeconds(finishClock.elapsed)
             await recordTurnaround(entry)
             record(entry)
             // A profile can read what went in aloud. The player then takes the receipt's place, unless the receipt has
             // a warning to show; decided once, here (App.xaml.cs Inserted).
             let text = entry.inserted.trimmingCharacters(in: .whitespacesAndNewlines)
-            let readIt = readBackRequested && !text.isEmpty
+            // The profile active now, as Windows reads Profiles.Active when the text is in.
+            let active = activeProfile
+            let readIt = active.readAloudAfterInsert && !text.isEmpty
             self.receipt = !readIt || entry.safetyNet == true || entry.warning != nil ? entry : nil
             phase = .done(entry.warning ?? receipt)
-            if readIt { reader.read(text, voice: Profile.readVoice(voice, fallback: settings.ttsVoice)) }
+            if readIt { reader.read(text, voice: Profile.readVoice(active.voice, fallback: settings.ttsVoice)) }
         } catch {
             // The text is on the clipboard now (the platform put it there): a HEADS UP, not a failure; History keeps
             // it as not inserted, and there is no receipt.
@@ -668,7 +693,7 @@ final class AppModel: ObservableObject {
 
     // MARK: Nowhere to type: wait for a click, or copy
 
-    private func waitForPlace(_ entry: HistoryEntry, readBack voice: String?, readBackRequested: Bool) {
+    private func waitForPlace(_ entry: HistoryEntry) {
         finishClock.stop() // waiting for the user isn't processing time
         placed = true
         live?.stop()
@@ -691,7 +716,7 @@ final class AppModel: ObservableObject {
                 entry.appName = platform?.targetAppName
                 entry.windowTitle = await platform?.targetWindowTitle
                 finishClock.start()
-                await insert(entry, readBack: voice, readBackRequested: readBackRequested)
+                await insert(entry)
             } else {
                 copyPlacingToClipboard(timedOut: true)
             }
@@ -906,7 +931,12 @@ final class AppModel: ObservableObject {
             } catch {
                 if Task.isCancelled { return }
                 speechStatus = "Speech: " + error.localizedDescription
-                if atLaunch { startupProblem = error.localizedDescription }
+                // A problem the user can act on opens the window with it; anything else only goes to the log
+                // (App.xaml.cs: UserFacingException → message box, else "Speech init failed").
+                if atLaunch {
+                    if let error = error as? UserFacingError { startupProblem = error.message }
+                    else { Log.error("Speech init failed", error) }
+                }
             }
         }
         warmUpAI(activeProfile)
@@ -1038,9 +1068,13 @@ final class AppModel: ObservableObject {
 
     /// The dashboard's turnaround: only a dictation that went straight in counts (not one that waited for a click),
     /// noting whether a model had to load first. Saved with the dictation's counts (`record`).
+    /// Windows' FinishSeconds: to a hundredth, half to even (Math.Round).
+    static func finishSeconds(_ s: Double) -> Double { (s * 100).rounded(.toNearestOrEven) / 100 }
+
     private func recordTurnaround(_ entry: HistoryEntry) async {
         guard !placed, entry.turnaroundSeconds > 0 else { return }
-        let aiWasWarm = await aiWarm?.value ?? true
+        // A check still running at the end counts as a model that had to load (Windows: `_aiWarm.IsCompletedSuccessfully`).
+        let aiWasWarm = aiModelUsed.isEmpty || aiWarmKnown == true
         usage.recordTurnaround(TurnaroundSample(speechModel: speechModelUsed, aiModel: aiModelUsed, seconds: entry.turnaroundSeconds,
                                                 modelLoaded: !speechWarm || !aiWasWarm))
     }
@@ -1049,8 +1083,8 @@ final class AppModel: ObservableObject {
         // As Windows saves it: the final text trimmed, seconds to a tenth, the turnaround to a hundredth.
         var entry = entry
         entry.inserted = entry.inserted.trimmingCharacters(in: .whitespacesAndNewlines)
-        entry.seconds = (entry.seconds * 10).rounded() / 10
-        entry.turnaroundSeconds = (entry.turnaroundSeconds * 100).rounded() / 100
+        entry.seconds = (entry.seconds * 10).rounded(.toNearestOrEven) / 10 // Math.Round: half to even
+        entry.turnaroundSeconds = Self.finishSeconds(entry.turnaroundSeconds)
         // The daily counts are kept whether or not History is.
         usage.record(entry)
         usageFile.save(usage)
@@ -1091,7 +1125,7 @@ final class AppModel: ObservableObject {
             let profile = profiles.first { $0.name.caseInsensitiveCompare(entry.profileName) == .orderedSame } ?? activeProfile
             let (changed, message) = try await HistoryRerun.run(entry, profiles: profiles, active: activeProfile,
                                                                 settings: speechSettings(for: profile),
-                                                                canSwapSpeechModel: !notes.needsModels, progress: progress)
+                                                                canSwapSpeechModel: !notes.needsModels && !phase.isBusy, progress: progress)
             historyStore.save(changed)
             history = historyStore.entries
             return "✓ " + message
@@ -1125,6 +1159,8 @@ final class AppModel: ObservableObject {
     /// Put a text into the app the last dictation went to (History's "Insert transcription into the last app").
     func insertIntoLastApp(_ text: String) async -> InsertNote {
         do { return InsertNote(ok: true, text: try await platform?.insert(text) ?? "Done") } catch {
+            // Logged as Windows logs it; the Mac still says what went wrong rather than nothing.
+            if !(error is UserFacingError) { Log.error("Unhandled UI exception", error) }
             return InsertNote(ok: false, text: (error as? UserFacingError)?.message ?? error.localizedDescription)
         }
     }
@@ -1349,6 +1385,7 @@ final class AppModel: ObservableObject {
             else if speechLoaded {
                 await LiveTranscriber.unloadModel()
                 await WhisperEngine.shared.unload()
+                Log.info("Speech model unloaded after being idle") // Windows' wording, on request too
                 done.append("speech model")
                 speechStatus = "Speech: Unloaded · loads again when you dictate"
                 speechOK = false
@@ -1358,14 +1395,22 @@ final class AppModel: ObservableObject {
             // Apple Intelligence keeps no session between requests here; Ollama keeps its models loaded until told.
             if notes.needsModels { skipped.append("the AI model (Extended Notes is using it)") }
             else if phase.isBusy { skipped.append("the AI model (dictating)") }
-            else if let url = try? OllamaBackend.validated(settings.ollamaEndpoint), await OllamaBackend.unloadAll(endpoint: url) > 0 {
-                done.append("AI model")
+            else if let url = try? OllamaBackend.validated(settings.ollamaEndpoint) {
+                let n = await OllamaBackend.unloadAll(endpoint: url)
+                if n > 0 {
+                    Log.info("Unloaded \(n) AI model(s) on request")
+                    done.append("AI model")
+                }
             }
         }
         if voice {
             // The player on screen counts as reading, also its DONE card (Windows' ReaderWindow.IsBusy = visible).
             if reader.isShowing { skipped.append("the Read aloud voice (reading)") }
-            else if reader.isLoaded { reader.unload(); done.append("Read aloud voice") }
+            else if reader.isLoaded {
+                reader.unload()
+                Log.info("Read aloud voice unloaded after being idle")
+                done.append("Read aloud voice")
+            }
         }
         var msg = !done.isEmpty ? "Unloaded: " + done.joined(separator: ", ") + ". They load again when needed."
             : skipped.isEmpty ? "Nothing was loaded." : ""
