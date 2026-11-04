@@ -8,11 +8,12 @@ struct SpeechToTextView: View {
     @EnvironmentObject var nav: Navigator
     @Environment(\.ob) private var ob
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @FocusState private var listFocused: Bool
 
     var body: some View {
         if sizeClass == .compact {
             if let i = selectedIndex, nav.place.profileID != nil {
-                PageScroll { ProfilePage(profile: $model.profiles[i]).padding(16) }
+                PageScroll { ProfilePage(profile: $model.profiles[i]).id(model.profiles[i].id).padding(16) }
             } else {
                 PageScroll { menu.padding(16) }
             }
@@ -23,7 +24,10 @@ struct SpeechToTextView: View {
                     .overlay(alignment: .trailing) { Rectangle().fill(ob.ink).frame(width: 1) }
                 PageScroll {
                     if let i = selectedIndex {
+                        // A page of its own for each profile, as Windows makes a new ProfilePage per selection: Try it
+                        // starts fresh, and a run still going stays with its own page.
                         ProfilePage(profile: $model.profiles[i])
+                            .id(model.profiles[i].id)
                             .padding(EdgeInsets(top: 32, leading: 40, bottom: 40, trailing: 40))
                             .frame(maxWidth: 980, alignment: .leading)
                     }
@@ -46,10 +50,10 @@ struct SpeechToTextView: View {
             }
             .padding(.horizontal, 12).padding(.bottom, 6)
             #if os(macOS)
-            Caption("Press \(model.settings.hotkey) in any app to dictate, and again to stop. The active profile decides what happens to your words.", size: 12)
+            Caption("Press \(model.settings.hotkey) in any app to dictate, and again to stop. The active profile decides what happens to your words.", bottom: 0)
                 .padding(EdgeInsets(top: 0, leading: 12, bottom: 16, trailing: 8))
             #else
-            Caption("Tap Dictate on the dashboard to dictate. The active profile decides what happens to your words.", size: 12)
+            Caption("Tap Dictate on the dashboard to dictate. The active profile decides what happens to your words.", bottom: 0)
                 .padding(EdgeInsets(top: 0, leading: 12, bottom: 16, trailing: 8))
             #endif
             HStack(alignment: .firstTextBaseline) {
@@ -68,13 +72,32 @@ struct SpeechToTextView: View {
             Rule()
             VStack(spacing: 0) {
                 ForEach(model.profiles) { p in
-                    ProfileRow(profile: p, active: p.id == model.activeProfile.id, selected: sizeClass != .compact && p.id == model.profiles[selectedIndex ?? 0].id) {
+                    let selected = sizeClass != .compact && p.id == model.profiles[selectedIndex ?? 0].id
+                    ProfileRow(profile: p, active: p.id == model.activeProfile.id, selected: selected, keyFocused: selected && listFocused) {
                         nav.goProfile(p.id)
+                        listFocused = true // a click focuses the list, as in a WPF ListBox
                     }
                 }
             }
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Profiles")
+            // Windows' ListBox: with the list focused, the arrow keys (and Home, End, Page Up, Page Down) open the
+            // next profile.
+            .focusable(sizeClass != .compact)
+            .focused($listFocused)
+            .focusEffectDisabled()
+            .onKeyPress(keys: [.upArrow, .downArrow, .home, .end, .pageUp, .pageDown]) { press in
+                guard !model.profiles.isEmpty else { return .ignored }
+                let i = selectedIndex ?? 0, last = model.profiles.count - 1
+                let next: Int = switch press.key {
+                case .upArrow: max(0, i - 1)
+                case .downArrow: min(last, i + 1)
+                case .home, .pageUp: 0
+                default: last
+                }
+                nav.goProfile(model.profiles[next].id)
+                return .handled
+            }
             Button {
                 let p = BuiltInProfiles.newProfile()
                 model.profiles.append(p)
@@ -99,11 +122,13 @@ struct SpeechToTextView: View {
     }
 }
 
-/// A two-line row: square, a hairline under it, a 3px ink bar beside the selected one.
+/// A two-line row: square, a hairline under it, a 3px ink bar beside the selected one (the accent while the list has
+/// the keyboard focus, as Windows' RowItem).
 struct ProfileRow: View {
     var profile: Profile
     var active: Bool
     var selected: Bool
+    var keyFocused = false
     var action: () -> Void
     @Environment(\.ob) private var ob
     @State private var hover = false
@@ -111,11 +136,11 @@ struct ProfileRow: View {
     var body: some View {
         Button(action: action) {
             HStack(alignment: .top, spacing: 8) {
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 1) {
                     Text(profile.name).font(Ob.sans(13.5, .semibold)).lineLimit(1)
                     Text(profile.description).font(Ob.sans(12)).foregroundStyle(ob.muted).lineLimit(1)
                 }
-                Spacer(minLength: 4)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 if active {
                     HStack(spacing: 5) {
                         Circle().fill(ob.accent).frame(width: 6, height: 6)
@@ -124,14 +149,16 @@ struct ProfileRow: View {
                     .padding(.top, 3)
                 }
             }
-            .padding(.horizontal, 12).padding(.vertical, 8)
+            // Windows' 8 padding plus the 1-px bottom border under it.
+            .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 9)
             .background(selected || hover ? ob.subtle : .clear)
-            .overlay(alignment: .leading) { if selected { Rectangle().fill(ob.ink).frame(width: 3) } }
+            .overlay(alignment: .leading) { if selected { Rectangle().fill(keyFocused ? ob.accent : ob.ink).frame(width: 3) } }
             .overlay(alignment: .bottom) { Hairline() }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }
+        .handCursor()
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
@@ -150,6 +177,9 @@ struct ProfilePage: View {
     /// The preview Try it waits on (the profile shows a preview before inserting), and where its choice goes.
     @State private var preview: HistoryEntry?
     @State private var previewChoice: CheckedContinuation<String?, Never>?
+    @State private var promptFocused = false
+    @State private var sampleFocused = false
+    @State private var moreHover = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -170,14 +200,20 @@ struct ProfilePage: View {
             }
         }
         .onChange(of: profile.autoProcess) { trial = Trial() }
-        .onChange(of: profile.id) { trial = Trial() }
+        // A real dictation ends a trial's preview, as Windows' overlay does (nothing is chosen).
+        .onChange(of: model.phase.isBusy) { _, busy in if busy && previewChoice != nil { choose(nil) } }
+        .onDisappear {
+            if previewChoice != nil { choose(nil) }
+            model.saveProfilesNow() // Windows' AutoSave flushes when the page goes
+        }
         .alert("Delete the profile \"\(profile.name)\"?", isPresented: $confirmDelete) {
-            Button("Yes", role: .destructive) {
+            Button("Yes") {
                 // As ProfileService.Delete: the default moves to the first profile, and if this one was active, the
-                // default becomes active.
+                // default becomes active. The page that opens is the one Windows' list picks while the profile goes,
+                // before the active one is updated: the active profile, or the first one when the deleted one was active.
                 let id = profile.id, wasActive = isActive
-                nav.goProfile(nil)
                 model.profiles.removeAll { $0.id == id }
+                nav.goProfile(wasActive ? model.profiles.first?.id : nil)
                 if model.settings.defaultProfileID == id { model.settings.defaultProfileID = model.profiles.first?.id }
                 if wasActive { model.settings.activeProfileID = model.settings.defaultProfileID }
             }
@@ -186,7 +222,7 @@ struct ProfilePage: View {
         .alert("You need at least one profile.", isPresented: $onlyOne) { Button("OK") {} }
         .sheet(item: $preview) { entry in
             // Windows opens its preview window for the trial; here it is the same card, over the page.
-            PreviewPill(entry: entry, profile: profile.name, hotkey: "", opacity: 1,
+            PreviewPill(entry: entry, profile: "Try it · \(profile.name)", hotkey: "", opacity: 1,
                         onInsert: { choose(entry.inserted) }, onOriginal: { choose(entry.transcription) }, onDiscard: { choose(nil) })
                 .padding(16)
                 .presentationBackground(.clear)
@@ -203,9 +239,9 @@ struct ProfilePage: View {
     private var header: some View {
         HStack(alignment: .top, spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
-                TextField("Name", text: $profile.name).textFieldStyle(.plain).font(Ob.mono(30, .bold)).padding(.vertical, 2)
+                TextField("", text: $profile.name).textFieldStyle(.plain).font(Ob.mono(30, .bold)).padding(.vertical, 2)
                     .help("Click to rename").accessibilityLabel("Profile name")
-                TextField("Description", text: $profile.description, axis: .vertical).textFieldStyle(.plain).font(Ob.sans(14))
+                TextField("", text: $profile.description, axis: .vertical).textFieldStyle(.plain).font(Ob.sans(14))
                     .foregroundStyle(ob.muted).padding(.vertical, 2)
                     .help("Description").accessibilityLabel("Description")
             }
@@ -213,7 +249,7 @@ struct ProfilePage: View {
             HStack(spacing: 8) {
                 if isActive { Chip(text: "ACTIVE", filled: true) }
                 // The profile active at every start.
-                if isDefault { Chip(text: "DEFAULT", filled: false).help("Oberton starts with this profile") }
+                if isDefault { Chip(text: "DEFAULT", filled: false) }
                 if !isActive {
                     Button("Use this profile") { model.activeProfile = profile }.buttonStyle(.primary)
                 }
@@ -225,10 +261,14 @@ struct ProfilePage: View {
                 } label: {
                     HStack(spacing: 3) { ForEach(0..<3, id: \.self) { _ in Circle().frame(width: 3.5, height: 3.5) } }
                         .frame(width: 36, height: 34)
+                        // Windows' QuietButton: the hover fill.
+                        .background(Capsule().fill(moreHover ? ob.subtle : .clear))
                         .overlay(Capsule().strokeBorder(ob.ink, lineWidth: 1))
                         .contentShape(Capsule())
                 }
                 .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+                .onHover { moreHover = $0 }
+                .handCursor()
                 .help("More")
                 .accessibilityLabel("More profile actions")
             }
@@ -243,6 +283,8 @@ struct ProfilePage: View {
         enum Box: Equatable { case placeholder(String), diff(String), text(String), problem(String) }
         var edit: Box?
         var output: Box = .text("")
+        /// The sample as it was run: the diff stays against it when the sample is edited afterwards (Windows renders it once).
+        var original = ""
         var meta = ""
         /// What each COPY takes: the AI's own text, and what would be inserted.
         var aiText = "", inserted = ""
@@ -254,16 +296,17 @@ struct ProfilePage: View {
                 Text("TRY IT").font(Ob.mono(12, .bold))
                 Text("Edit the sample, then run this profile on it.").font(Ob.sans(12)).foregroundStyle(ob.muted).lineLimit(1)
                 Spacer()
-                Button("Run") { run() }.buttonStyle(.primary).frame(minHeight: 32).disabled(running)
+                Button("Run") { run() }.buttonStyle(CapsuleButtonStyle(kind: .primary, height: 32)).disabled(running)
             }
             .padding(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 12))
             Hairline()
             let layout = sizeClass == .compact ? AnyLayout(VStackLayout(spacing: 0)) : AnyLayout(HStackLayout(alignment: .top, spacing: 0))
             layout {
                 trialColumn("01 // Transcription", copy: sample.trimmingCharacters(in: .whitespacesAndNewlines), copyName: "Copy Transcription") {
-                    TextEditor(text: $sample)
-                        .font(Ob.mono(13)).scrollContentBackground(.hidden).frame(minHeight: 72)
-                        .accessibilityLabel("Sample transcript")
+                    PlainTextBox(text: $sample, font: Ob.mono(13), nsFont: .monospacedSystemFont(ofSize: 13, weight: .regular),
+                                 label: "Sample transcript", focused: $sampleFocused)
+                        .frame(minHeight: 72, alignment: .topLeading)
+                        .modifier(FluentField(focused: sampleFocused))
                 }
                 Hairline(vertical: sizeClass != .compact)
                 trialColumn("02 // AI Edit", copy: trial.aiText, copyName: "Copy AI Edit", meta: trial.meta) {
@@ -281,10 +324,11 @@ struct ProfilePage: View {
             HStack(alignment: .firstTextBaseline, spacing: 0) {
                 Readout(title)
                 Spacer(minLength: 8)
-                if !meta.isEmpty { Readout(meta).lineLimit(1).help(meta) }
+                // Windows' MonoLabel keeps the case ("safety net: original kept", "−52% length · within limit").
+                if !meta.isEmpty { Text(meta).font(Ob.mono(10.5)).foregroundStyle(ob.muted) }
                 TextCopyButton(text: copy).padding(.leading, 10).help("Copy this box").accessibilityLabel(copyName)
             }
-            content().textSelection(.enabled)
+            content()
         }
         .padding(EdgeInsets(top: 12, leading: 16, bottom: 16, trailing: 16))
         .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -294,7 +338,7 @@ struct ProfilePage: View {
         Group {
             switch b {
             case .placeholder(let t): Text(t).foregroundStyle(ob.muted)
-            case .diff(let edited): DiffText(original: sample, edited: edited, size: 15)
+            case .diff(let edited): DiffText(original: trial.original, edited: edited, size: 15, lineSpacing: Ob.lineSpacing(15, lineHeight: 23))
             case .text(let t): Text(t).foregroundStyle(ob.ink)
             case .problem(let t): Text(t).foregroundStyle(ob.accent)
             }
@@ -315,12 +359,13 @@ struct ProfilePage: View {
             let result = p.autoProcess ? await model.processor.process(input, profile: p)
                 : ProcessResult(text: FragmentStitcher.tidy(input), modified: false) // no AI: only spacing and the first capital
             if let problem = result.error {
+                if problem == TextProcessor.somethingWentWrong { Log.error("Profile test failed") }
                 var t = Trial()
                 if p.autoProcess { t.edit = .problem(problem) } else { t.output = .problem(problem) }
                 trial = t
                 return
             }
-            var t = Trial()
+            var t = Trial(original: input)
             if p.autoProcess {
                 t.edit = .diff(result.text)
                 t.aiText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -334,8 +379,10 @@ struct ProfilePage: View {
                 trial = t
                 let chosen = await withCheckedContinuation { c in
                     previewChoice = c
+                    // The model is what tells the preview to show the AI's edit (Windows passes usesAi = AutoProcess).
                     preview = HistoryEntry(transcription: input, aiEdit: p.autoProcess ? result.text : nil, inserted: result.text,
-                                           profileName: p.name, model: nil, appName: nil, seconds: 0, turnaroundSeconds: 0,
+                                           profileName: p.name, model: p.autoProcess ? model.processor.model(for: p).description : nil,
+                                           appName: nil, seconds: 0, turnaroundSeconds: 0,
                                            warning: nil, safetyNet: result.safetyNet, wasInserted: false)
                 }
                 guard let chosen else {
@@ -349,7 +396,7 @@ struct ProfilePage: View {
             t.inserted = final.trimmingCharacters(in: .whitespacesAndNewlines)
             trial = t
             if p.readAloudAfterInsert && !t.inserted.isEmpty {
-                model.reader.read(t.inserted, voice: p.voice ?? model.settings.ttsVoice)
+                model.reader.read(t.inserted, voice: p.readVoice(fallback: model.settings.ttsVoice))
             }
         }
     }
@@ -377,7 +424,7 @@ struct ProfilePage: View {
             Caption(profile.autoProcess
                     ? "Your words go to the local AI model with these instructions before they are inserted."
                     : "Your words are inserted as the speech recognizer heard them, with the pieces typed while you speak joined into clean sentences. Nothing goes to the AI model.",
-                    size: 12)
+                    bottom: 0)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(EdgeInsets(top: 0, leading: 14, bottom: 12, trailing: 14))
             Hairline()
@@ -424,7 +471,9 @@ struct ProfilePage: View {
                 if profile.autoProcess {
                     GridRow {
                         Readout("AI edit").frame(width: 140, alignment: .leading)
-                        ObMenu(options: aiChoices, selection: Binding(get: { profile.model ?? "" }, set: { profile.model = $0.isEmpty ? nil : $0 }))
+                        // Matched in any case, as Windows' Select.
+                        ObMenu(options: aiChoices, selection: Binding(get: { Self.match(profile.model ?? "", in: aiChoices) },
+                                                                    set: { profile.model = $0.isEmpty ? nil : $0 }))
                             .frame(maxWidth: 528).accessibilityLabel("AI model")
                     }
                 }
@@ -459,7 +508,8 @@ struct ProfilePage: View {
     /// available any more stays listed, marked.
     private var aiChoices: [(String, String)] {
         let s = model.settings
-        var choices = [("", "Active model (\(s.defaultModel.shortName))")]
+        // Windows labels the default by its stored id ("Active model (anthropic:claude-haiku-4-5-20251001)").
+        var choices = [("", "Active model (\(s.defaultModel.provider == .apple ? "Apple Intelligence" : s.defaultModel.windowsForm))")]
         if AppleIntelligenceBackend.unavailableReason == nil { choices.append((ModelID.appleOnDevice.description, "Apple Intelligence")) }
         choices += model.ollamaModels.map { (ModelID(provider: .ollama, name: $0).description, $0) }
         if !s.cloud.keepOffline {
@@ -467,9 +517,13 @@ struct ProfilePage: View {
             choices += cloud.filter { KeyStore.get($0.0.provider) != nil }.map { ($0.0.description, "\($0.1) · cloud") }
         }
         if let own = profile.model, !own.isEmpty, !choices.contains(where: { $0.0.caseInsensitiveCompare(own) == .orderedSame }) {
-            choices.append((own, (ModelID(own)?.shortName ?? own) + " (not available)"))
+            choices.append((own, (ModelID(stored: own)?.windowsForm ?? own) + " (not available)"))
         }
         return choices
+    }
+
+    static func match(_ value: String, in choices: [(String, String)]) -> String {
+        choices.first { $0.0.caseInsensitiveCompare(value) == .orderedSame }?.0 ?? value
     }
 
     /// Why this profile's AI can't run now (the Mac's addition: Windows only marks the model "(not available)").
@@ -489,14 +543,12 @@ struct ProfilePage: View {
     private var instructions: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("INSTRUCTIONS").font(Ob.mono(12, .bold)).padding(.bottom, 8)
-            TextEditor(text: $profile.prompt)
-                .font(Ob.sans(13))
-                .scrollContentBackground(.hidden)
+            // A Fluent-theme TextBox (its 14 pt text), Tab leaving it rather than typing a tab into the instructions.
+            PlainTextBox(text: $profile.prompt, font: Ob.sans(14), nsFont: .systemFont(ofSize: 14), label: "Instructions", focused: $promptFocused)
                 .padding(10)
-                .frame(minHeight: 240, maxHeight: 420)
-                .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
-                .accessibilityLabel("Instructions")
-            Caption("Sent to the local AI model along with your transcript. It is told to reply with only the edited text.").padding(.top, 6)
+                .frame(minHeight: 240, maxHeight: 420, alignment: .topLeading)
+                .modifier(FluentField(focused: promptFocused))
+            Caption("Sent to the local AI model along with your transcript. It is told to reply with only the edited text.", bottom: 0).padding(.top, 6)
         }
     }
 
@@ -506,7 +558,7 @@ struct ProfilePage: View {
             VStack(spacing: 0) {
                 ObSwitch("Rewrite the whole dictation", isOn: $profile.rewriteWhole).padding(.horizontal, 14)
                 Caption("For instructions that reshape what you say, like turning your thoughts into an email. The AI gets everything at once when you stop. While you speak, your words are typed as spoken, then replaced by the rewrite. Off: long dictation is edited a few sentences at a time, which keeps the wording closer to yours.",
-                        size: 12)
+                        bottom: 0)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(EdgeInsets(top: 0, leading: 14, bottom: 12, trailing: 14))
                 Hairline()
@@ -524,7 +576,7 @@ struct ProfilePage: View {
                         .padding(.top, 6).padding(.bottom, 4).accessibilityLabel("Safety net")
                     Caption(profile.rewriteWhole
                             ? "A rewrite may change the length a lot, so only an empty or runaway result falls back to your original words."
-                            : "If the AI changes the length by more than this, your original words are inserted instead.", size: 12)
+                            : "If the AI changes the length by more than this, your original words are inserted instead.", bottom: 0)
                 }
                 .padding(EdgeInsets(top: 12, leading: 14, bottom: 14, trailing: 14))
             }
@@ -544,7 +596,7 @@ private struct Chip: View {
             .foregroundStyle(filled ? ob.onInk : ob.ink)
             .padding(.horizontal, 9).padding(.vertical, 2)
             .background(Capsule().fill(filled ? ob.ink : .clear))
-            .overlay(Capsule().strokeBorder(filled ? .clear : ob.divider, lineWidth: 1))
+            .overlay(Capsule().strokeBorder(filled ? .clear : ob.ink, lineWidth: 1)) // Windows' Chip border: Ob.Border, the ink
     }
 }
 
@@ -575,3 +627,126 @@ private struct RatioColumns: Layout {
         }
     }
 }
+
+#if os(macOS)
+/// A plain multi-line text box (a WPF TextBox that accepts Return but not Tab): Tab and Shift-Tab move to the next and
+/// previous control instead of typing a tab, and it is as tall as its text (within the frame it is given). The debug
+/// snapshots draw its text instead (the image renderer can't draw an AppKit view).
+struct PlainTextBox: View {
+    @Binding var text: String
+    var font: Font
+    var nsFont: NSFont
+    var label: String
+    var focused: Binding<Bool>?
+    @Environment(\.ob) private var ob
+
+    var body: some View {
+        if PageScroll<EmptyView>.flat {
+            Text(text).font(font).foregroundStyle(ob.ink).frame(maxWidth: .infinity, alignment: .topLeading)
+        } else {
+            TextBoxView(text: $text, nsFont: nsFont, label: label, focused: focused)
+        }
+    }
+}
+
+private struct TextBoxView: NSViewRepresentable {
+    @Binding var text: String
+    var nsFont: NSFont
+    var label: String
+    var focused: Binding<Bool>?
+    @Environment(\.ob) private var ob
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NSScrollView()
+        scroll.drawsBackground = false
+        scroll.borderType = .noBorder
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        let view = TabLeavingTextView()
+        view.isRichText = false
+        view.allowsUndo = true
+        view.drawsBackground = false
+        view.isAutomaticQuoteSubstitutionEnabled = false
+        view.isAutomaticDashSubstitutionEnabled = false
+        view.textContainerInset = .zero
+        view.textContainer?.lineFragmentPadding = 0
+        view.isVerticallyResizable = true
+        view.isHorizontallyResizable = false
+        view.autoresizingMask = [.width]
+        view.textContainer?.widthTracksTextView = true
+        view.delegate = context.coordinator
+        view.string = text
+        view.setAccessibilityLabel(label)
+        scroll.documentView = view
+        return scroll
+    }
+
+    func updateNSView(_ scroll: NSScrollView, context: Context) {
+        context.coordinator.parent = self
+        guard let view = scroll.documentView as? TabLeavingTextView else { return }
+        if view.string != text { view.string = text }
+        view.font = nsFont
+        view.textColor = NSColor(ob.ink)
+        view.insertionPointColor = NSColor(ob.ink)
+        view.onFocus = { f in focused?.wrappedValue = f }
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSScrollView, context: Context) -> CGSize? {
+        guard let view = nsView.documentView as? NSTextView, let layout = view.layoutManager, let container = view.textContainer else { return nil }
+        let width = proposal.width ?? 300
+        container.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
+        layout.ensureLayout(for: container)
+        let height = max(layout.usedRect(for: container).height, nsFont.boundingRectForFont.height)
+        return CGSize(width: width, height: min(height, proposal.height ?? height))
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: TextBoxView
+        init(_ parent: TextBoxView) { self.parent = parent }
+        func textDidChange(_ notification: Notification) {
+            guard let view = notification.object as? NSTextView else { return }
+            parent.text = view.string
+        }
+    }
+}
+
+final class TabLeavingTextView: NSTextView {
+    var onFocus: ((Bool) -> Void)?
+    override func insertTab(_ sender: Any?) { window?.selectNextKeyView(nil) }
+    override func insertBacktab(_ sender: Any?) { window?.selectPreviousKeyView(nil) }
+    override func becomeFirstResponder() -> Bool {
+        let ok = super.becomeFirstResponder()
+        if ok { onFocus?(true) }
+        return ok
+    }
+    override func resignFirstResponder() -> Bool {
+        let ok = super.resignFirstResponder()
+        if ok { onFocus?(false) }
+        return ok
+    }
+}
+#else
+/// On iPhone and iPad a plain TextEditor (a hardware Tab there moves focus already).
+struct PlainTextBox: View {
+    @Binding var text: String
+    var font: Font
+    var label: String
+    var focused: Binding<Bool>?
+    @FocusState private var isFocused: Bool
+
+    init(text: Binding<String>, font: Font, nsFont: UIFont? = nil, label: String, focused: Binding<Bool>? = nil) {
+        _text = text
+        self.font = font
+        self.label = label
+        self.focused = focused
+    }
+
+    var body: some View {
+        TextEditor(text: $text).font(font).scrollContentBackground(.hidden).focused($isFocused)
+            .onChange(of: isFocused) { _, f in focused?.wrappedValue = f }
+            .accessibilityLabel(label)
+    }
+}
+#endif
