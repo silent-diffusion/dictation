@@ -316,12 +316,26 @@ final class NotesRecorder: ObservableObject {
     private func maybeFormat(_ s: NoteSession) {
         guard !isFormatting else { return }
         let words = s.unformattedWords()
-        if words >= Self.formatWords || words >= 15 && Date().timeIntervalSince(lastFormat) >= Self.formatEvery { Task { await format(s) } }
+        // The part is taken and "formatting" set now, before the tick goes on to the summary (Windows' FormatAsync runs
+        // up to its first await at once), so the summary waits its turn rather than going out alongside.
+        if words >= Self.formatWords || words >= 15 && Date().timeIntervalSince(lastFormat) >= Self.formatEvery, let take = claimFormat(s) {
+            Task { await format(s, take) }
+        }
+    }
+
+    /// Takes the next part to format and marks formatting as running; nil when one runs already or nothing is new.
+    private func claimFormat(_ s: NoteSession, maxWords: Int? = nil) -> (heard: String, sent: String, seconds: Double)? {
+        guard !isFormatting, let take = maxWords.map({ s.beginFormatPart(maxWords: $0) }) ?? s.beginFormat() else { return nil }
+        isFormatting = true
+        return take
     }
 
     private func format(_ s: NoteSession, maxWords: Int? = nil) async {
-        guard !isFormatting, let take = maxWords.map({ s.beginFormatPart(maxWords: $0) }) ?? s.beginFormat() else { return }
-        isFormatting = true
+        guard let take = claimFormat(s, maxWords: maxWords) else { return }
+        await format(s, take)
+    }
+
+    private func format(_ s: NoteSession, _ take: (heard: String, sent: String, seconds: Double)) async {
         // The recognizer's loops go before anything else: the AI would copy them.
         let input = NotesFormat.collapseRepeats(take.sent)
         var ai = input, failed = true
@@ -353,7 +367,8 @@ final class NotesRecorder: ObservableObject {
         guard !isSummarizing, !isFormatting else { return }
         let fresh = s.unsummarizedChars()
         if fresh >= NotesSummary.sectionChars || fresh >= NotesSummary.sectionMinChars && Date().timeIntervalSince(lastSection) >= NotesSummary.sectionEvery {
-            Task { await summarize(s, final: false) }
+            isSummarizing = true // now, so a formatting due on the next tick waits for it (as Windows' SummarizeAsync)
+            Task { await summarizeClaimed(s, final: false) }
         }
     }
 
@@ -361,6 +376,11 @@ final class NotesRecorder: ObservableObject {
     private func summarize(_ s: NoteSession, final: Bool) async {
         guard !isSummarizing else { return }
         isSummarizing = true
+        await summarizeClaimed(s, final: final)
+    }
+
+    /// `summarize`, once "summarizing" is set.
+    private func summarizeClaimed(_ s: NoteSession, final: Bool) async {
         defer { isSummarizing = false; revision += 1 }
         do {
             // 1. The new formatted text, a section at a time.
@@ -412,7 +432,9 @@ final class NotesRecorder: ObservableObject {
     private func ask(_ instructions: String, _ text: String, _ maxTokens: Int) async throws -> String {
         let id = await resolveModel()
         let backend = try await TextProcessor(settings: settings()).backend(for: id, ask: true)
-        return try await backend.complete(system: instructions, examples: [], user: text, maxTokens: maxTokens)
+        // Cleaned as every AI reply is (TextProcessing's AskAsync → OutputSanitizer.Clean): think tags, transcript tags,
+        // code fences, a "Here is…:" opener and wrapping quotes go before the reply is used.
+        return OutputSanitizer.clean(try await backend.complete(system: instructions, examples: [], user: text, maxTokens: maxTokens), input: text)
     }
 
     /// The AI model for formatting and summaries (`NotesModels`): worked out again when the setting changes, and every
@@ -585,7 +607,7 @@ final class NotesRecorder: ObservableObject {
         if redoing != nil { throw UserFacingError("Another step is being redone; wait for it to finish.") }
         redoSession = s
         model = nil
-        Log.info("Extended notes: redoing \(step) for \(s.id)")
+        Log.info("Extended notes: redoing \(step.name) for \(s.id)")
         let task = Task { @MainActor in
             if step == .transcribe {
                 redoing = .transcribe
@@ -612,7 +634,7 @@ final class NotesRecorder: ObservableObject {
             redoProgress = ""
             s.resetSummary(source: self)
             await summarize(s, final: true)
-            Log.info("Extended notes: redid \(step) for \(s.id)")
+            Log.info("Extended notes: redid \(step.name) for \(s.id)")
         }
         redoTask = task
         defer {
@@ -697,6 +719,8 @@ final class Once: @unchecked Sendable {
 enum NotesRedoStep: Int, Comparable {
     case transcribe, format, summary
     static func < (a: Self, b: Self) -> Bool { a.rawValue < b.rawValue }
+    /// As Windows' NotesRedo.Step writes itself in the log: "Transcribe", "Format", "Summary".
+    var name: String { switch self { case .transcribe: "Transcribe"; case .format: "Format"; case .summary: "Summary" } }
 }
 
 extension String {
