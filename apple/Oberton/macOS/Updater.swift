@@ -71,15 +71,16 @@ final class Updater: NSObject, ObservableObject {
 
     // MARK: Settings › Updates
 
-    /// Settings › Updates opens: as Windows builds a new page each time, the last check's result is gone, unless an
-    /// update was found and is waiting (then it shows again). Nothing changes while a check or an install runs.
+    /// Settings › Updates opens: as Windows builds a new page each time, the last check's result is gone; only an update
+    /// the startup check found (App.AvailableUpdate) shows again, also after a later CHECK said otherwise. Nothing
+    /// changes while a check or an install runs (Windows' new page would be blank while it goes on unseen: kept).
     func pageOpened() {
         #if DEBUG
         guard !snapshotFrozen else { return }
         #endif
         guard !busy else { return }
-        if reply != nil || installTitle != nil, let found {
-            show(found)
+        if let startupFound {
+            show(startupFound)
         } else {
             status = ""
             notes = ""
@@ -144,6 +145,9 @@ final class Updater: NSObject, ObservableObject {
 
     /// Windows' `Show(UpdateInfo)`: the version, the release notes (at most 1,500 characters) and DOWNLOAD AND INSTALL
     /// with the download's size. A development copy (a Debug build) is told to update from the repository instead.
+    /// What the startup check found (Windows' App.AvailableUpdate): the only result a reopened page shows again.
+    private var startupFound: SUAppcastItem?
+
     private func show(_ item: SUAppcastItem) {
         busy = false
         found = item
@@ -170,10 +174,18 @@ final class Updater: NSObject, ObservableObject {
         return plain.count > 1500 ? String(plain.prefix(1500)) + "…" : plain
     }
 
+    /// The check couldn't reach the feed: no connection, or any HTTP failure but "Not Found" (HttpClient's
+    /// EnsureSuccessStatusCode → HttpRequestException, which Windows words as a connection problem and doesn't log).
+    private static func unreachable(_ error: Error) -> Bool {
+        chain(error).contains { e in
+            e.domain == NSURLErrorDomain || e.localizedDescription.range(of: #"\([1-5][0-9][0-9]\)$"#, options: .regularExpression) != nil
+        }
+    }
+
     /// Windows' wording for what went wrong, by what the user asked for.
     private func message(for error: Error) -> String {
         let chain = Self.chain(error)
-        let offline = chain.contains { $0.domain == NSURLErrorDomain }
+        let offline = asked == .install ? chain.contains { $0.domain == NSURLErrorDomain } : Self.unreachable(error)
         switch asked {
         case .install:
             if offline { return "Downloading the update failed. Check your internet connection and try again." }
@@ -225,9 +237,17 @@ extension Updater: SPUUserDriver {
             reply(.install)
             return
         }
+        // A version Windows can't read (UpdateService.ParseTag returns null) is no update there.
+        guard Distribution.netVersion(appcastItem.displayVersionString) != nil else {
+            checkWhenFree = false
+            if asked != .nothing { finish("You're up to date (\(Distribution.version)).") }
+            reply(.dismiss)
+            return
+        }
         self.reply = reply
         let startup = asked == .nothing && !checkWhenFree
         checkWhenFree = false
+        if startup { startupFound = appcastItem }
         show(appcastItem)
         if startup {
             model?.notice("Oberton \(Distribution.threePart(appcastItem.displayVersionString)) is available. Open Settings > Updates to install it.")
@@ -254,7 +274,9 @@ extension Updater: SPUUserDriver {
         } else if asked == .check, Self.nothingPublished(error) {
             finish("You're up to date (\(Distribution.version)).")
         } else {
-            Log.error("Update \(asked == .install ? "install" : "check") failed: \(error.localizedDescription)")
+            // Logged only when it's unexpected: Windows' UserFacingExceptions (no connection, an HTTP failure) aren't.
+            let expected = asked == .check ? Self.unreachable(error) : Self.chain(error).contains { $0.domain == NSURLErrorDomain }
+            if !expected { Log.error("Update \(asked == .install ? "install" : "check") failed: \(error.localizedDescription)") }
             finish(message(for: error))
         }
         acknowledgement()

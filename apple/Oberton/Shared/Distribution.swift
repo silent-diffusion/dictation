@@ -71,10 +71,25 @@ enum Distribution {
     }
 
     /// A version in three parts, as Windows prints them (AppInfo.VersionText, Version.ToString(3)): "5.19" is "5.19.0".
-    /// Anything that isn't numbers and dots is shown as it is.
-    static func threePart(_ version: String) -> String {
-        let parts = version.split(separator: ".", omittingEmptySubsequences: false)
-        guard (1...4).contains(parts.count), parts.allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isNumber) }) else { return version }
-        return (parts.compactMap { Int($0) } + [0, 0, 0]).prefix(3).map(String.init).joined(separator: ".")
+    /// What `netVersion` can't read is shown as it is.
+    static func threePart(_ version: String) -> String { netVersion(version) ?? version }
+
+    /// UpdateService.ParseTag: a leading "v" and anything from "-" or "+" on dropped, then .NET's Version.TryParse (two
+    /// to four whole numbers, each 0…Int32.max, separated by dots), printed as Major.Minor.Build ("v5.19-beta" is
+    /// "5.19.0"); nil when Windows couldn't read it ("5", "5.19 (512)"), which Windows treats as no update.
+    static func netVersion(_ tag: String) -> String? {
+        var core = Substring(tag.trimmingCharacters(in: .whitespacesAndNewlines))
+        while core.first == "v" || core.first == "V" { core = core.dropFirst() }
+        core = core.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false).first ?? ""
+        core = core.split(separator: "+", maxSplits: 1, omittingEmptySubsequences: false).first ?? ""
+        let parts = core.split(separator: ".", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+        guard (2...4).contains(parts.count) else { return nil }
+        var numbers: [Int32] = []
+        for p in parts {
+            guard !p.isEmpty, p.allSatisfy({ $0.isASCII && $0.isNumber }), let n = Int32(p) else { return nil }
+            numbers.append(n)
+        }
+        return "\(numbers[0]).\(numbers[1]).\(numbers.count > 2 ? numbers[2] : 0)"
     }
 }

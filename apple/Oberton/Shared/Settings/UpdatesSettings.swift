@@ -51,17 +51,14 @@ private struct DirectUpdates: View {
                 }
             }
             if let progress = updater.progress {
-                ZStack(alignment: .leading) {
-                    Rectangle().fill(ob.divider)
-                    Rectangle().fill(ob.ink).frame(width: 360 * max(0, min(1, progress)))
-                }
-                .frame(width: 360, height: 4)
-                .padding(.top, 12)
+                // The stock Fluent ProgressBar, Width 360, Height 4.
+                ProgressBar(fraction: progress).frame(width: 360, height: 4).padding(.top, 12)
             }
-            // Plain text in the window's size, each always taking its line (empty TextBlocks keep their height).
-            Text(updater.status.isEmpty ? " " : updater.status).font(Ob.sans(Ob.body)).textSelection(.enabled)
+            // Plain TextBlocks in the window's size (not selectable), each always taking its line (empty TextBlocks
+            // keep their height).
+            Text(updater.status.isEmpty ? " " : updater.status).font(Ob.sans(Ob.body))
                 .fixedSize(horizontal: false, vertical: true).padding(.top, 10)
-            Text(updater.notes.isEmpty ? " " : updater.notes).font(Ob.sans(Ob.body)).opacity(0.75).textSelection(.enabled)
+            Text(updater.notes.isEmpty ? " " : updater.notes).font(Ob.sans(Ob.body)).opacity(0.75)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxHeight: 220, alignment: .topLeading).clipped().padding(.top, 8)
             SwitchCard(horizontal: 16) { // UpdatesPage: the switch's Margin is 16,4

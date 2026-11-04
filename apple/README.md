@@ -30,7 +30,16 @@ cd ObertonCore && swift test
 On first launch the setup window asks for the **microphone** and for **Accessibility** (to paste at the cursor; in the
 direct download also to read the text around the cursor, the selection and window titles) and downloads the speech model.
 Then press `Ctrl+D` in any app, speak, press it again. `Ctrl+Space` reads the selection aloud; `Ctrl+Alt+D` switches
-profile. The app lives in the menu bar; closing the window keeps it running.
+profile. The app lives in the menu bar; closing the window keeps it running. If macOS's own "Select the previous input
+source" shortcut is on, `Ctrl+Space` may switch the keyboard layout instead: setup and *Settings › Hotkeys* say so and
+offer another key for Read aloud with one click.
+
+### Updating
+
+The direct download: *Settings › Updates › Check for updates* (or the menu bar's *Check for updates…*). If there's a newer
+release it downloads it and updates in place; your settings, profiles and downloaded models are kept. *Check for updates
+when Oberton starts* is on by default (turn it off there to make no network request at all unless you ask). The App
+Store build updates through the App Store (or TestFlight).
 
 ## Layout
 
