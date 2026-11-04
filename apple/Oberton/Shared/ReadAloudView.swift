@@ -16,8 +16,10 @@ private struct ReadAloudPage: View {
     @ObservedObject private var reader: ReadAloudPlayer
     /// The model whose voices the VOICE list shows (follows the voice until another model is picked).
     @State private var shownModel: String?
-    /// A download started here (the page cancels it when left, as Windows does) and its failure.
+    /// A download started here, for which voice (the page shows only its own, and cancels it when left, as Windows
+    /// does), and its failure.
     @State private var downloading = false
+    @State private var downloadingVoice: String?
     @State private var failure: String?
     #if os(iOS)
     @State private var text = ""
@@ -30,7 +32,8 @@ private struct ReadAloudPage: View {
     var body: some View {
         PageScroll {
             VStack(alignment: .leading, spacing: 0) {
-                PageTitle(title: "Read aloud", japanese: "読上", readout: "Voice // on this \(Device.noun)")
+                // PageHeader's 14 below the rule, then the intro.
+                PageTitle(title: "Read aloud", japanese: "読上", readout: "Voice // on this \(Device.noun)").padding(.bottom, 14)
                 Caption(intro)
                 status.padding(.top, 8)
 
@@ -61,7 +64,8 @@ private struct ReadAloudPage: View {
                 FieldLabel("Player position")
                 ObSwitch("Same place as the dictation overlay", isOn: ReaderPositionPicker.samePlaceBinding(model)).fixedSize()
                 HStack(spacing: 14) {
-                    ReaderPositionPicker(stroke: ob.divider, fill: ob.paper, radius: 8)
+                    // A Border in Ob.Border (ink) on Ob.Window, radius 8.
+                    ReaderPositionPicker(fill: ob.paper, radius: 8)
                     Text(ReaderPositionPicker.placeName(model.settings)).font(Ob.sans(12.5)).foregroundStyle(ob.muted)
                         .opacity(model.settings.readerPosition == .withOverlay ? 0.45 : 1)
                 }
@@ -78,10 +82,10 @@ private struct ReadAloudPage: View {
                     .frame(minHeight: 110)
                     .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
                 HStack {
-                    Button("Read this") { model.reader.read(text, voice: model.settings.ttsVoice, speed: model.settings.ttsBaseSpeed) }
+                    Button("Read this") { model.reader.read(text, voice: model.settings.ttsVoice) }
                         .buttonStyle(.primary).disabled(text.isEmpty)
                     Button("Read the clipboard") {
-                        if let s = model.platform?.clipboardText() { text = s; model.reader.read(s, voice: model.settings.ttsVoice, speed: model.settings.ttsBaseSpeed) }
+                        if let s = model.platform?.clipboardText() { text = s; model.reader.read(s, voice: model.settings.ttsVoice) }
                     }
                     .buttonStyle(.quiet)
                 }
@@ -110,23 +114,31 @@ private struct ReadAloudPage: View {
     /// "Heart is ready" / "… isn't downloaded yet" / "… isn't installed" / "Kokoro isn't downloaded yet", or how the
     /// download goes; DOWNLOAD VOICE and TRY IT (ReadAloudPage.ShowStatus).
     private var status: some View {
-        let progress = reader.install
-        return HStack(spacing: 16) {
+        // Only this page's own download; until its first report the status stays, over an empty bar.
+        let progress = downloading ? reader.install?.progress : nil
+        let reported = progress.map { !$0.title.isEmpty } ?? false
+        return HStack(spacing: 0) {
+            // A DockPanel: the text column takes the room left of the buttons, 16 from them. The title stays on one
+            // line and is cut off (no TextWrapping on Windows).
             VStack(alignment: .leading, spacing: 0) {
-                Text(progress?.progress.title ?? statusTitle).font(Ob.sans(Ob.body, .semibold))
-                Text(failure ?? progress?.progress.detail ?? statusDetail).font(Ob.sans(12)).foregroundStyle(ob.muted)
+                Text(reported ? progress!.title : statusTitle).font(Ob.sans(Ob.body, .semibold))
+                    .lineLimit(1).fixedSize(horizontal: true, vertical: false)
+                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading).clipped()
+                Text(failure ?? (reported ? progress!.detail : statusDetail)).font(Ob.sans(12)).foregroundStyle(ob.muted)
                     .fixedSize(horizontal: false, vertical: true).padding(.top, 2)
                 if let progress {
-                    ProgressBar(fraction: progress.progress.fraction).frame(height: 4).padding(.top, 8)
+                    ProgressBar(fraction: progress.fraction).frame(height: 4).padding(.top, 8)
                 }
             }
-            Spacer(minLength: 0)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.trailing, 16)
             HStack(spacing: 8) {
                 if !installed && !VoiceCatalog.isSystemVoice(voice) {
-                    Button("Download voice") { download() }.buttonStyle(.quiet).disabled(progress != nil)
+                    Button("Download voice") { download() }.buttonStyle(.quiet).disabled(downloading)
                 }
-                Button("Try it") { reader.read(Self.sample, voice: voice, speed: model.settings.ttsBaseSpeed) }
-                    .buttonStyle(.primary).disabled(progress != nil)
+                // Picking another voice during the download gives TRY IT back (ReadAloudPage.ShowStatus).
+                Button("Try it") { reader.read(Self.sample, voice: voice) }
+                    .buttonStyle(.primary).disabled(downloading && downloadingVoice == voice)
             }
         }
         .padding(EdgeInsets(top: 14, leading: 18, bottom: 14, trailing: 18))
@@ -153,8 +165,10 @@ private struct ReadAloudPage: View {
     private func download() {
         failure = nil
         downloading = true
+        downloadingVoice = voice
         reader.installVoice(voice) { result in
             downloading = false
+            downloadingVoice = nil
             switch result {
             case .success, .failure(is CancellationError): break
             case .failure(let error as UserFacingError): failure = error.message
@@ -196,7 +210,9 @@ private struct ReadAloudPage: View {
         let items = VoiceCatalog.voicesOf(currentModel).map { v in
             (v.id, v.name + (VoiceCatalog.isInstalled(v.id) ? "" : VoiceCatalog.findPiper(v.id).map { " · download \($0.mb) MB" } ?? " · download"))
         }
-        return items.contains { $0.0 == voice } ? items : items + [(voice, VoiceCatalog.shortName(voice))]
+        // The saved voice is listed even when it isn't (any more), but only under its own model: under a model with no
+        // voices the list stays empty, as on Windows.
+        return items.contains { $0.0 == voice } || VoiceCatalog.modelOf(voice) != currentModel ? items : items + [(voice, VoiceCatalog.shortName(voice))]
     }
 
     private var voiceBinding: Binding<String> {

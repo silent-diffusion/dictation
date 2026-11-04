@@ -189,8 +189,8 @@ private struct PositionCell: View {
         .focused($focused)
         .onHover { hover = $0 }
         .handCursor()
-        .help(place.title)
-        .accessibilityLabel(place.title)
+        .help(ReaderPositionPicker.describe(place)) // "Center of the screen" (LayoutPage.Describe)
+        .accessibilityLabel(ReaderPositionPicker.describe(place))
         .accessibilityAddTraits(chosen ? .isSelected : [])
     }
 }

@@ -26,11 +26,12 @@ struct ReaderCard: View {
     var body: some View {
         if player.isShowing {
             let expanded = model.settings.readerExpanded
-            WidthCap(width: min((expanded ? Self.expandedWidth : Self.compactWidth) + 28, room.width)) {
+            // The padding plus WPF's 1 px border, which sits outside it (16,12,12,14 inside a 1 px line).
+            WidthCap(width: min((expanded ? Self.expandedWidth : Self.compactWidth) + 30, room.width)) {
                 Group {
                     if let q = player.question { question(q) } else { playerView(expanded: expanded) }
                 }
-                .padding(EdgeInsets(top: 12, leading: 16, bottom: 14, trailing: 12))
+                .padding(EdgeInsets(top: 13, leading: 17, bottom: 15, trailing: 13))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(RoundedRectangle(cornerRadius: 16).fill(darkInk.opacity(min(max(opacity, 0.3), 1))))
                 .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Self.ink.opacity(0.14), lineWidth: 1))
@@ -56,20 +57,20 @@ struct ReaderCard: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .center, spacing: 0) {
                 HStack(spacing: 8) {
-                    RoundButton(size: 36, help: "Back 15 seconds") { player.skip(seconds: -15) } label: { fifteen("arrow.counterclockwise") }
+                    RoundButton(size: 36, help: "Back 15 seconds") { player.skip(seconds: -15) } label: { fifteen("arrow.uturn.backward") }
                     Button { player.togglePause() } label: {
                         Image(systemName: player.status == .playing || player.status == .preparing ? "pause.fill" : "play.fill")
-                            .font(.system(size: 16)).foregroundStyle(darkInk)
+                            .font(.system(size: 17)).foregroundStyle(darkInk)
                             .frame(width: 44, height: 44).background(Circle().fill(Self.ink))
                     }
                     .buttonStyle(ReaderPress())
                     .help(playHelp).accessibilityLabel("Play or pause")
-                    RoundButton(size: 36, help: "Forward 15 seconds") { player.skip(seconds: 15) } label: { fifteen("arrow.clockwise") }
+                    RoundButton(size: 36, help: "Forward 15 seconds") { player.skip(seconds: 15) } label: { fifteen("arrow.uturn.forward") }
                 }
                 Spacer(minLength: 8)
                 HStack(spacing: 2) {
                     RoundButton(size: 30, help: "Slower") { setSpeed(player.speed - ReadAloudPlayer.speedStep) } label: {
-                        Image(systemName: "minus").font(.system(size: 10, weight: .semibold))
+                        Image(systemName: "minus").font(.system(size: 11))
                     }
                     .disabled(player.speed <= ReadAloudPlayer.minSpeed + 0.001)
                     Button { speeds.toggle() } label: {
@@ -86,7 +87,7 @@ struct ReaderCard: View {
                     .popover(isPresented: $speeds, arrowEdge: .top) { speedGrid }
                     #endif
                     RoundButton(size: 30, help: "Faster") { setSpeed(player.speed + ReadAloudPlayer.speedStep) } label: {
-                        Image(systemName: "plus").font(.system(size: 10, weight: .semibold))
+                        Image(systemName: "plus").font(.system(size: 11))
                     }
                     .disabled(player.speed >= ReadAloudPlayer.maxSpeed - 0.001)
                 }
@@ -99,10 +100,9 @@ struct ReaderCard: View {
                 HStack(spacing: 6) {
                     let help = expanded ? "Show the current sentence only" : "Show the whole text"
                     RoundButton(size: 30, help: help) { model.settings.readerExpanded.toggle() } label: {
-                        Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.system(size: 10, weight: .semibold))
+                        Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.system(size: 11))
                     }
-                    RoundButton(size: 30, help: "Stop") { player.stop() } label: { cross }
-                        .accessibilityLabel("Stop reading")
+                    RoundButton(size: 30, help: "Stop", name: "Stop reading") { player.stop() } label: { cross }
                 }
                 .frame(maxHeight: .infinity, alignment: .top)
             }
@@ -145,7 +145,8 @@ struct ReaderCard: View {
     private func fifteen(_ arrow: String) -> some View {
         VStack(spacing: 1) {
             Text("15").font(.system(size: 10, weight: .semibold)).frame(height: 11)
-            Image(systemName: arrow).font(.system(size: 11, weight: .medium))
+            // Windows' Undo/Redo hooks (E7A7/E7A6) at 12.
+            Image(systemName: arrow).font(.system(size: 12))
         }
     }
 
@@ -161,7 +162,8 @@ struct ReaderCard: View {
     private var speedGrid: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("SPEED").font(Ob.mono(10.5)).foregroundStyle(Self.ink.opacity(0.6)).padding(EdgeInsets(top: 0, leading: 4, bottom: 6, trailing: 0))
-            Grid(horizontalSpacing: 6, verticalSpacing: 6) {
+            // A UniformGrid of pills with Margin 3: 6 between them, 3 more to the edge and under "SPEED".
+            Grid(horizontalSpacing: 0, verticalSpacing: 0) {
                 ForEach(0..<3, id: \.self) { row in
                     GridRow {
                         ForEach(Self.presets[row * 4 ..< row * 4 + 4], id: \.self) { s in
@@ -171,8 +173,9 @@ struct ReaderCard: View {
                                     .frame(minWidth: 56).frame(height: 30)
                                     .background(Capsule().fill(on ? Self.ink : Self.ink.opacity(0.1)))
                             }
-                            .buttonStyle(ReaderPress())
+                            .buttonStyle(PillPress())
                             .accessibilityLabel(String(format: "%g times speed", s))
+                            .padding(3)
                         }
                     }
                 }
@@ -211,8 +214,7 @@ struct ReaderCard: View {
     private var sentenceLine: AttributedString {
         guard player.sentences.indices.contains(player.index) else { return AttributedString() }
         let span = player.sentences[player.index]
-        let sentence = ((player.text as NSString).substring(with: span) as NSString)
-            .replacingOccurrences(of: "\n", with: " ") as NSString
+        let sentence = ReadAloudText.lineEndingsAsSpaces((player.text as NSString).substring(with: span)) as NSString
         let word = currentWord
         let n = sentence.length
         let wordStart = min(max(word.location - span.location, 0), n)
@@ -289,9 +291,9 @@ struct ReaderCard: View {
                 Button { q.action() } label: {
                     pill(q.primary.uppercased(), fill: Self.ink, text: darkInk, weight: .semibold)
                 }
-                .buttonStyle(ReaderPress())
+                .buttonStyle(PillPress())
                 Button { player.stop() } label: { pill("CANCEL", fill: Self.ink.opacity(0.1), text: Self.ink, weight: .regular) }
-                    .buttonStyle(ReaderPress())
+                    .buttonStyle(PillPress())
             }
             .padding(.top, 14)
     }
@@ -306,6 +308,8 @@ struct ReaderCard: View {
 private struct RoundButton<Label: View>: View {
     var size: CGFloat
     var help: String
+    /// What a screen reader calls it, when that isn't the tooltip ("Stop reading" for the ✕ "Stop").
+    var name: String? = nil
     var action: () -> Void
     @ViewBuilder var label: Label
     @Environment(\.isEnabled) private var enabled
@@ -320,11 +324,12 @@ private struct RoundButton<Label: View>: View {
         .buttonStyle(ReaderPress())
         .opacity(enabled ? 1 : 0.35)
         .help(help)
-        .accessibilityLabel(help)
+        .accessibilityLabel(name ?? help)
     }
 }
 
-/// Hover 0.8, pressed 0.6, the hand cursor, as on Windows; a disabled button doesn't react.
+/// Hover 0.8, pressed 0.6, the hand cursor, as on Windows; a disabled button doesn't react. The cursor is pushed on
+/// hover, since the player's panel is never key and cursor rects don't apply there.
 private struct ReaderPress: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View { Look(configuration: configuration) }
 
@@ -336,7 +341,23 @@ private struct ReaderPress: ButtonStyle {
             configuration.label
                 .opacity(configuration.isPressed ? 0.6 : hover && enabled ? 0.8 : 1)
                 .onHover { hover = $0 }
-                .handCursor(enabled)
+                .overlayHandCursor(enabled)
+        }
+    }
+}
+
+/// Windows' PillButton (READ CLIPBOARD, CANCEL, the speed choices): 0.85 under the pointer, no pressed look.
+private struct PillPress: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View { Look(configuration: configuration) }
+
+    private struct Look: View {
+        let configuration: Configuration
+        @State private var hover = false
+        var body: some View {
+            configuration.label
+                .opacity(hover ? 0.85 : 1)
+                .onHover { hover = $0 }
+                .overlayHandCursor()
         }
     }
 }
@@ -352,7 +373,7 @@ private struct SpeedPress: ButtonStyle {
             configuration.label
                 .background(Capsule().fill(Color.white.opacity(hover ? 0.1 : 0)))
                 .onHover { hover = $0 }
-                .handCursor()
+                .overlayHandCursor()
         }
     }
 }
@@ -391,12 +412,19 @@ private struct FloatingMenu<Content: View>: NSViewRepresentable {
                 p.backgroundColor = .clear
                 p.hasShadow = false
                 p.becomesKeyOnlyIfNeeded = true
+                p.allowsToolTipsWhenApplicationIsInactive = true
                 p.level = parent.level
                 return p
             }()
             panel.contentView = host
+            // WPF's Placement="Top": the menu's left edge on the button's, 6 above it; below it when there is no room
+            // above, and kept on the screen.
             let button = parent.convertToScreen(anchor.convert(anchor.bounds, to: nil))
-            panel.setFrame(CGRect(x: (button.midX - size.width / 2).rounded(), y: button.maxY + 6, width: size.width, height: size.height), display: true)
+            let screen = (parent.screen ?? NSScreen.main)?.visibleFrame ?? .infinite
+            var frame = CGRect(x: button.minX.rounded(), y: button.maxY + 6, width: size.width, height: size.height)
+            if frame.maxY > screen.maxY { frame.origin.y = button.minY - 6 - size.height }
+            frame.origin.x = max(screen.minX, min(frame.origin.x, screen.maxX - size.width))
+            panel.setFrame(frame, display: true)
             if self.panel == nil {
                 self.panel = panel
                 panel.alphaValue = 0
@@ -469,13 +497,18 @@ struct ReaderFullText {
     var onClick: (Int) -> Void
 
     static let maxHeight: CGFloat = 380
+    nonisolated(unsafe) static var userScrolledAt = Date.distantPast
     static let followPause: TimeInterval = 5
     private static let dim = ReaderCard.ink.opacity(0.45)
 
     final class Coordinator: NSObject {
         var shown: MarkdownDoc?
-        /// Windows doesn't forget a scroll when the next reading starts, so this isn't reset for a new text.
-        var userScrolledAt = Date.distantPast
+        /// When the user last scrolled the text: kept by the one player (Windows' ReaderWindow), so closing the card,
+        /// a new reading or switching the view doesn't forget it.
+        var userScrolledAt: Date {
+            get { ReaderFullText.userScrolledAt }
+            set { ReaderFullText.userScrolledAt = newValue }
+        }
         /// The follow is scrolling (that isn't the user's).
         var following = false
         var onClick: (Int) -> Void = { _ in }
@@ -618,11 +651,19 @@ struct ReaderDisplay {
         return max(line.plain, shown - line.delta)
     }
 
-    private static func italic(_ f: PlatformFont) -> PlatformFont {
+    /// The font's italic, or, for a font without one (the bundled Cascadia Mono), the upright face slanted, as WPF
+    /// draws an italic it has no face for.
+    static func italic(_ f: PlatformFont) -> PlatformFont {
         #if os(macOS)
-        return NSFont(descriptor: f.fontDescriptor.withSymbolicTraits(f.fontDescriptor.symbolicTraits.union(.italic)), size: f.pointSize) ?? f
+        if let i = NSFont(descriptor: f.fontDescriptor.withSymbolicTraits(f.fontDescriptor.symbolicTraits.union(.italic)), size: f.pointSize),
+           i.fontDescriptor.symbolicTraits.contains(.italic), i.familyName == f.familyName { return i }
+        return NSFont(descriptor: f.fontDescriptor.withMatrix(AffineTransform(m11: 1, m12: 0, m21: 0.2, m22: 1, tX: 0, tY: 0)), size: f.pointSize) ?? f
         #else
-        return f.fontDescriptor.withSymbolicTraits(f.fontDescriptor.symbolicTraits.union(.traitItalic)).map { UIFont(descriptor: $0, size: f.pointSize) } ?? f
+        if let d = f.fontDescriptor.withSymbolicTraits(f.fontDescriptor.symbolicTraits.union(.traitItalic)) {
+            let i = UIFont(descriptor: d, size: f.pointSize)
+            if i.fontDescriptor.symbolicTraits.contains(.traitItalic), i.familyName == f.familyName { return i }
+        }
+        return UIFont(descriptor: f.fontDescriptor.withMatrix(CGAffineTransform(a: 1, b: 0, c: 0.2, d: 1, tx: 0, ty: 0)), size: f.pointSize)
         #endif
     }
 }
@@ -641,7 +682,9 @@ extension ReaderFullText: NSViewRepresentable {
         textView.autoresizingMask = [.width]
         textView.toolTip = "Click a word to read from there"
         let coordinator = context.coordinator
-        textView.onClick = { coordinator.userScrolledAt = .distantPast; coordinator.onClick($0) }
+        // Any click on the text follows the reading again at once, even one that misses the words (as Windows).
+        textView.onPress = { coordinator.userScrolledAt = .distantPast }
+        textView.onClick = { coordinator.onClick($0) }
         let scroll = FollowScrollView()
         // Any scroll that isn't the follow's (wheel, bar, arrows, page clicks) pauses the follow.
         scroll.onUserScroll = { if !coordinator.following { coordinator.userScrolledAt = Date() } }
@@ -689,28 +732,54 @@ extension ReaderFullText: NSViewRepresentable {
         return CGSize(width: width, height: height(width: width, context.coordinator.shown == doc ? context.coordinator.display : ReaderDisplay(doc: doc)))
     }
 
-    /// Reports the user's own scrolling (wheel, trackpad, scroll bar), not the follow's.
+    /// Reports the user's own scrolling (wheel, trackpad, scroll bar, keys), not the follow's, and not the text being
+    /// rebuilt or resized (Windows ignores a scroll that comes with an extent or viewport change).
     final class FollowScrollView: NSScrollView {
         var onUserScroll: () -> Void = {}
-        override func scrollWheel(with event: NSEvent) {
-            onUserScroll()
-            super.scrollWheel(with: event)
-        }
+        private var last = (y: CGFloat(0), viewport: CGFloat(0), extent: CGFloat(0))
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             NotificationCenter.default.removeObserver(self)
             contentView.postsBoundsChangedNotifications = true
             NotificationCenter.default.addObserver(self, selector: #selector(scrolled), name: NSView.boundsDidChangeNotification, object: contentView)
+            remember()
         }
-        @objc private func scrolled() { onUserScroll() }
+        @objc private func scrolled() {
+            let before = last
+            remember()
+            guard last.y != before.y, last.viewport == before.viewport, last.extent == before.extent else { return }
+            onUserScroll()
+        }
+        private func remember() {
+            last = (contentView.bounds.origin.y, contentView.bounds.height, documentView?.frame.height ?? 0)
+        }
     }
 
     /// A click reads from the word under the pointer.
     final class ClickTextView: NSTextView {
         var onClick: (Int) -> Void = { _ in }
+        var onPress: () -> Void = {}
+        private var pushed = false
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
         override func resetCursorRects() { addCursorRect(visibleRect, cursor: .pointingHand) }
+        // The hand while another app is active too: the panel is never key, so cursor rects alone don't show it.
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            trackingAreas.filter { $0.owner === self && $0.userInfo?["hand"] != nil }.forEach(removeTrackingArea)
+            addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                           owner: self, userInfo: ["hand": true]))
+        }
+        override func mouseEntered(with event: NSEvent) {
+            if !pushed { NSCursor.pointingHand.push(); pushed = true }
+        }
+        override func mouseExited(with event: NSEvent) {
+            if pushed { NSCursor.pop(); pushed = false }
+        }
+        override func viewWillMove(toWindow newWindow: NSWindow?) {
+            if newWindow == nil, pushed { NSCursor.pop(); pushed = false }
+            super.viewWillMove(toWindow: newWindow)
+        }
         override func mouseDown(with event: NSEvent) {
             // The player can be dragged by its text too (Windows' WindowDrag): a press that moves drags the panel; one
             // that doesn't is a click on a word.
@@ -718,17 +787,20 @@ extension ReaderFullText: NSViewRepresentable {
             let start = event.locationInWindow
             while let next = window.nextEvent(matching: [.leftMouseUp, .leftMouseDragged]) {
                 if next.type == .leftMouseUp { break }
-                if hypot(next.locationInWindow.x - start.x, next.locationInWindow.y - start.y) > 3 {
+                // Windows' system drag distance: 4 either way.
+                if abs(next.locationInWindow.x - start.x) >= 4 || abs(next.locationInWindow.y - start.y) >= 4 {
                     window.performDrag(with: event)
                     return
                 }
             }
+            onPress()
             guard let layout = layoutManager, let container = textContainer else { return }
             var point = convert(event.locationInWindow, from: nil)
             point.x -= textContainerOrigin.x
             point.y -= textContainerOrigin.y
+            // Only a click on a character counts (GetPositionFromPoint with snapToText false).
             let glyph = layout.glyphIndex(for: point, in: container)
-            guard layout.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: container).insetBy(dx: -2, dy: -4).contains(point)
+            guard layout.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: container).contains(point)
             else { return }
             onClick(layout.characterIndexForGlyph(at: glyph))
         }
@@ -787,9 +859,9 @@ extension ReaderFullText.Coordinator: UITextViewDelegate {
         point.y -= textView.textContainerInset.top
         let layout = textView.layoutManager
         let glyph = layout.glyphIndex(for: point, in: textView.textContainer)
+        userScrolledAt = .distantPast
         guard layout.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: textView.textContainer)
             .insetBy(dx: -4, dy: -6).contains(point) else { return }
-        userScrolledAt = .distantPast
         onClick(layout.characterIndexForGlyph(at: glyph))
     }
 }
@@ -857,7 +929,10 @@ struct ReaderPreview: View {
                 (Text("Select any text and press the shortcut ").foregroundStyle(ReaderCard.ink)
                  + Text("to").foregroundStyle(Color(hex: ob.accentChoice.hex.dark))
                  + Text(" hear it read aloud.").foregroundStyle(ReaderCard.ink.opacity(0.45)))
-                    .font(Ob.sans(12)).frame(maxWidth: 220, alignment: .leading).fixedSize(horizontal: false, vertical: true)
+                    .font(Ob.sans(12))
+                    // TextBlock MaxWidth 220: only as wide as its longest line.
+                    .fixedSize(horizontal: false, vertical: true)
+                    .modifier(CapWidth(width: 220))
                 HStack(spacing: 10) {
                     // Windows' sharp triangle, M 8,6 L 16,11 L 8,16.
                     Path { p in p.move(to: CGPoint(x: 8, y: 6)); p.addLine(to: CGPoint(x: 16, y: 11)); p.addLine(to: CGPoint(x: 8, y: 16)); p.closeSubpath() }
@@ -866,7 +941,8 @@ struct ReaderPreview: View {
                     Text("1.0×").font(Ob.mono(11)).foregroundStyle(ReaderCard.ink.opacity(0.72))
                 }
             }
-            .padding(EdgeInsets(top: 10, leading: 14, bottom: 10, trailing: 14))
+            // Padding 14,10 inside WPF's 1 px border.
+            .padding(EdgeInsets(top: 11, leading: 15, bottom: 11, trailing: 15))
             .background(RoundedRectangle(cornerRadius: 16).fill(darkInk.opacity(opacity)))
             .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
             .padding(EdgeInsets(top: 0, leading: 20, bottom: 18, trailing: 20))
@@ -874,4 +950,10 @@ struct ReaderPreview: View {
         .clipped()
         .background(ob.subtle)
     }
+}
+
+/// At most `width` wide, and no wider than the content needs (WPF's MaxWidth on a TextBlock).
+private struct CapWidth: ViewModifier {
+    var width: CGFloat
+    func body(content: Content) -> some View { WidthCap(width: width) { content } }
 }

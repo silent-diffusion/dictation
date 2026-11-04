@@ -63,7 +63,7 @@ struct ReadAloudVoiceRows: View {
             #endif
             return ModelRow(name: "\(Device.noun) voices", badges: badges,
                             detail: voices.isEmpty ? "No \(Device.noun) voices found. Add some under \(add)."
-                                : "\(voices.count) installed with \(Device.system) (\(names.prefix(12).joined(separator: ", "))\(names.count > 12 ? ", …" : "")); instant, no download")
+                                : "\(names.count) installed with \(Device.system) (\(names.joined(separator: ", "))); instant, no download")
         }
 
         private func row(_ name: String, badges: [(String, Badge.Kind)], detail: String, voice id: String, installed: Bool, canUse: Bool) -> ModelRow {

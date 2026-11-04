@@ -37,6 +37,8 @@ final class ReaderController {
         panel.hasShadow = false
         panel.becomesKeyOnlyIfNeeded = true
         panel.hidesOnDeactivate = false
+        // Its tooltips ("Estimated time left", "Stop"…) show while the app being read is in front, as on Windows.
+        panel.allowsToolTipsWhenApplicationIsInactive = true
         panel.isMovableByWindowBackground = true
         panel.title = "Oberton read aloud"
         host = NSHostingView(rootView: AnyView(EmptyView()))
