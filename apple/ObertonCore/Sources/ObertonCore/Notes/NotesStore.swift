@@ -96,7 +96,7 @@ public final class NotesStore: @unchecked Sendable {
     }
 
     /// "3 Nov 14:05": the day before the month, a 24-hour time (Windows' `d MMM HH:mm`), in the user's language.
-    static let titleDate: DateFormatter = { let f = DateFormatter(); f.dateFormat = "d MMM HH:mm"; return f }()
+    static let titleDate: DateFormatter = { let f = DateFormatter(); f.locale = NotesExport.userLocale; f.dateFormat = "d MMM HH:mm"; return f }()
 
     /// Save a session: encoded here (the main thread owns it), written in the background.
     public func save(_ s: NoteSession) {

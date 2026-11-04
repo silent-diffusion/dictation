@@ -225,7 +225,7 @@ struct NotesLanding: View {
 
     @ViewBuilder private var list: some View {
         let q = search.trimmed
-        let sessions = notes.store.sessions.filter { q.isEmpty || [$0.title, $0.transcript, $0.summary].contains { $0.range(of: q, options: .caseInsensitive) != nil } }
+        let sessions = notes.store.sessions.filter { q.isEmpty || [$0.title, $0.transcript, $0.summary].contains { $0.range(of: q, options: [.caseInsensitive, .literal]) != nil } }
         if sessions.isEmpty {
             // Margin 2,6,0,0 replaces the Caption style's bottom 12 (NotesPage.xaml.cs:168).
             Caption(q.isEmpty ? "No sessions yet. Start one above and it appears here." : "No session matches.", bottom: 0).padding(.top, 6).padding(.leading, 2)
@@ -429,7 +429,7 @@ struct NoteSessionView: View {
             TimelineView(.periodic(from: .now, by: 0.4)) { _ in
                 Text(timer).font(Ob.mono(14, .bold)).foregroundStyle(live ? ob.ink : ob.muted).padding(.leading, 16).lineLimit(1)
             }
-            Spacer(minLength: 12)
+            Spacer(minLength: 6) // Mark/Full's left margin 6 is the least gap
             HStack(spacing: 6) {
                 if live {
                     Button("⚑ Mark") { notes.addMarker() }.buttonStyle(.quiet).disabled(notes.isFinishing)
@@ -470,6 +470,7 @@ struct NoteSessionView: View {
     /// The sidebar's state before Full screen folded it, given back on the way out (MainWindow.SetFullScreen).
     private static var sidebarBefore: Bool?
     private static var exitWatch: NSObjectProtocol?
+    private static var quitWatch: NSObjectProtocol?
 
     /// The window fills the screen and the sidebar folds away (the dashboard's Full screen does the same); leaving full
     /// screen, however it is left, puts the sidebar back as it was.
@@ -480,6 +481,16 @@ struct NoteSessionView: View {
             model.settings.sidebarCollapsed = true
             if exitWatch == nil {
                 exitWatch = NotificationCenter.default.addObserver(forName: NSWindow.didExitFullScreenNotification, object: nil, queue: .main) { [weak model] _ in
+                    MainActor.assumeIsolated {
+                        if let before = sidebarBefore { model?.settings.sidebarCollapsed = before }
+                        sidebarBefore = nil
+                    }
+                }
+            }
+            // Windows folds the sidebar without saving it: quitting in full screen leaves the saved state as it was
+            // before, so the next start opens with the sidebar as the user had it.
+            if quitWatch == nil {
+                quitWatch = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak model] _ in
                     MainActor.assumeIsolated {
                         if let before = sidebarBefore { model?.settings.sidebarCollapsed = before }
                         sidebarBefore = nil

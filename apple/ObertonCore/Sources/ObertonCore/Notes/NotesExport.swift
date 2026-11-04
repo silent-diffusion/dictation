@@ -15,8 +15,20 @@ public enum NotesExport {
         return out.replacingOccurrences(of: #"\s+$"#, with: "", options: .regularExpression) + "\n"
     }
 
-    /// The language dates are written in (the user's; tests pin one).
-    nonisolated(unsafe) public static var locale = Locale.current
+    /// The language dates are written in (tests pin one): the user's own, as Windows' current culture. Oberton itself is
+    /// in English only, which `Locale.current` would follow, so the language is the user's first preferred one, with
+    /// their region; digits are always 0-9, as .NET's custom date formats write them.
+    nonisolated(unsafe) public static var locale = userLocale
+
+    public static var userLocale: Locale {
+        var c = Locale.Components(locale: .current)
+        if let first = Locale.preferredLanguages.first, let lang = Locale(identifier: first).language.languageCode {
+            c.languageComponents.languageCode = lang
+            c.languageComponents.script = Locale(identifier: first).language.script
+        }
+        c.numberingSystem = "latn"
+        return Locale(components: c)
+    }
 
     /// The line under the title: the date and the length recorded.
     static func when(_ s: NoteSession) -> String {

@@ -91,6 +91,7 @@ final class EditedTextController: NSObject {
         let text = Self.attributed(NotesEdits.build(s), palette: palette)
         #if os(macOS)
         guard let tv = textView, let storage = tv.textStorage else { return }
+        tv.selectedTextAttributes = [.backgroundColor: PlatformColor(palette.ink).withAlphaComponent(0.4)]
         let origin = tv.enclosingScrollView?.contentView.bounds.origin
         storage.setAttributedString(text)
         if let origin { tv.enclosingScrollView?.contentView.scroll(to: origin); tv.enclosingScrollView?.reflectScrolledClipView(tv.enclosingScrollView!.contentView) }

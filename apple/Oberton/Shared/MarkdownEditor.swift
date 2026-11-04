@@ -103,6 +103,10 @@ final class MarkdownEditorController: NSObject {
         guard look != styler.look else { return }
         styler.look = look
         layout.look = look
+        #if os(macOS)
+        // A selection in ink at WPF's 0.4 selection opacity, whatever the system highlight colour (Windows' accent is ink).
+        textView?.selectedTextAttributes = [.backgroundColor: look.ink.withAlphaComponent(0.4)]
+        #endif
         restyle()
         refreshCaret()
     }

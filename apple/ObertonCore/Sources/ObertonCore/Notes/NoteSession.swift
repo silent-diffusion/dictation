@@ -126,6 +126,21 @@ public final class NoteSession: Codable, Identifiable, @unchecked Sendable {
              heardFormattedThrough, summarizedThrough, digests, summaryByAi, chunks, transcriptAnchors, formattedAnchors, markers, words
     }
 
+    /// A missing or null field takes its default and the rest is kept, as System.Text.Json fills one on Windows (a
+    /// hand-edited or older file still loads).
+    public required init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        func take<T: Decodable>(_ key: CodingKeys, _ value: inout T) throws { if let v = try c.decodeIfPresent(T.self, forKey: key) { value = v } }
+        try take(.title, &title); try take(.started, &started); try take(.seconds, &seconds); try take(.source, &source)
+        try take(.finished, &finished); try take(.formatVersion, &formatVersion); try take(.heard, &heard)
+        try take(.transcript, &transcript); try take(.formatted, &formatted); try take(.summary, &summary)
+        try take(.formattedThrough, &formattedThrough); try take(.heardFormattedThrough, &heardFormattedThrough)
+        try take(.summarizedThrough, &summarizedThrough); try take(.digests, &digests); try take(.summaryByAi, &summaryByAi)
+        try take(.chunks, &chunks); try take(.transcriptAnchors, &transcriptAnchors); try take(.formattedAnchors, &formattedAnchors)
+        try take(.markers, &markers)
+        words = try c.decodeIfPresent([SpokenWord].self, forKey: .words)
+    }
+
     /// Words heard, timed in the recording.
     public func appendWords(_ new: [SpokenWord]) {
         guard !new.isEmpty else { return }

@@ -672,6 +672,14 @@ private final class DocxParagraphs: NSObject, XMLParserDelegate {
         #expect(NotesModels.pickBest([cloud], gpuBytes: 6 * Self.gb) == nil)
     }
 
+    // System.Text.Json fills a missing field with its default: a session.json missing some still loads.
+    @Test func aSessionMissingFieldsStillLoads() throws {
+        let raw = #"{"title":"Old one","transcript":"hello there","finished":true}"#
+        let s = try JSONDecoder().decode(NoteSession.self, from: Data(raw.utf8))
+        #expect(s.title == "Old one" && s.transcript == "hello there" && s.finished)
+        #expect(s.formatted == "" && s.chunks.isEmpty && s.words == nil)
+    }
+
     // Windows writes a usage day as a DateTime at its midnight; the Mac reads it as that day.
     @Test func aWindowsUsageDayIsReadAsThatDay() throws {
         let raw = #"{"day":"2026-11-03T00:00:00","sessions":2}"#
