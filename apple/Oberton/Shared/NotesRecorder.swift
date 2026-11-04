@@ -106,8 +106,12 @@ final class NotesRecorder: ObservableObject {
         }
     }
 
-    /// Extended Notes was opened afresh (Windows builds a new page each time): the idle model is worked out again at once.
-    func forgetIdleModel() { idleResolved = .distantPast }
+    /// Extended Notes was opened afresh (Windows builds a new page each time, whose `_idleModel` starts empty): the idle
+    /// model is forgotten, so FORMAT / SUMMARY read "…" until it has been worked out again, at once.
+    func forgetIdleModel() {
+        idleModel = nil
+        idleResolved = .distantPast
+    }
 
     // MARK: Start
 
@@ -467,9 +471,16 @@ final class NotesRecorder: ObservableObject {
     private func ask(_ instructions: String, _ text: String, _ maxTokens: Int) async throws -> String {
         let id = await resolveModel()
         let backend = try await TextProcessor(settings: settings()).backend(for: id, ask: true)
+        let started = Date()
+        let reply = try await backend.complete(system: instructions, examples: [], user: text, maxTokens: maxTokens)
+        // TextProcessing.AskAsync logs a local model's answer ("llm <model>: asked 1200->1180 chars in 3456 ms", UTF-16
+        // lengths, the reply as it came); a cloud model's goes straight to its provider, unlogged.
+        if id.provider == .ollama {
+            Log.info("llm \(id.name): asked \(text.utf16.count)->\(reply.utf16.count) chars in \(Int(Date().timeIntervalSince(started) * 1000)) ms")
+        }
         // Cleaned as every AI reply is (TextProcessing's AskAsync → OutputSanitizer.Clean): think tags, transcript tags,
         // code fences, a "Here is…:" opener and wrapping quotes go before the reply is used.
-        return OutputSanitizer.clean(try await backend.complete(system: instructions, examples: [], user: text, maxTokens: maxTokens), input: text)
+        return OutputSanitizer.clean(reply, input: text)
     }
 
     /// The AI model for formatting and summaries (`NotesModels`): worked out again when the setting changes, and every
@@ -489,8 +500,10 @@ final class NotesRecorder: ObservableObject {
 
     /// The model and why (NotesModels.ResolveAsync); a chosen model that is gone is said in the log.
     static func resolveWhy(_ st: AppSettings) async -> (model: ModelID, why: String) {
-        var installed: [NotesModels.Installed] = []
-        if let url = try? OllamaBackend.validated(st.ollamaEndpoint) { installed = await OllamaBackend.installedDetails(endpoint: url) }
+        let setting0 = st.notesModel.trimmed
+        // The active model, or a cloud model chosen by name, needs no list (ResolveAsync returns before listing).
+        let noList = setting0.lowercased() == NotesModels.active || (ModelID(setting0).map { $0.provider != .ollama } ?? false)
+        let installed = noList ? [] : await listModels(st)
         let r = NotesModels.resolve(st.notesModel, activeModel: st.defaultModel, installed: installed, gpuBytes: gpuBytes, ramBytes: LocalModel.systemRam)
         let setting = st.notesModel.trimmed
         let named = !setting.isEmpty && setting.lowercased() != NotesModels.active && (ModelID(setting).map { $0.provider == .ollama } ?? true)
@@ -498,6 +511,37 @@ final class NotesRecorder: ObservableObject {
             Log.warn("Extended notes: the chosen AI model \(setting) isn't installed; using the best one instead")
         }
         return r
+    }
+
+    /// The installed Ollama models with their details, as Windows' ListModelDetailsAsync: Oberton's own runtime is started
+    /// first when nothing answers (Direct; EnsureRunningAsync), and a failure is logged ("Listing models failed: …") and
+    /// reads as no model installed.
+    static func listModels(_ st: AppSettings) async -> [NotesModels.Installed] {
+        do {
+            let url = try OllamaBackend.validated(st.ollamaEndpoint)
+            try await OllamaRuntime.ensureRunning(settings: st)
+            let (_, response) = try await URLSession.shared.data(from: url.appending(path: "api/tags"))
+            if let error = HTTPStatusError(response) { throw error }
+            return await OllamaBackend.installedDetails(endpoint: url)
+        } catch {
+            Log.warn("Listing models failed: " + error.localizedDescription)
+            return []
+        }
+    }
+
+    /// keep_alive 0 for one model (Windows' PostAsJsonAsync + EnsureSuccessStatusCode): nil once Ollama took it, else
+    /// why not, as the exception's message says it.
+    static func unloadFailure(endpoint: URL, model: String) async -> String? {
+        var req = URLRequest(url: endpoint.appending(path: "api/generate"), timeoutInterval: 15)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["model": model, "keep_alive": 0] as [String: Any])
+        do {
+            let (_, response) = try await URLSession.shared.data(for: req)
+            return HTTPStatusError(response)?.localizedDescription
+        } catch {
+            return error.localizedDescription
+        }
     }
 
     /// The memory the GPU may use (Metal's recommended working set): what an Ollama model has to fit in.
@@ -610,8 +654,11 @@ final class NotesRecorder: ObservableObject {
               await OllamaBackend.isLoaded(endpoint: url, model: model.name) else { return }
         // keep_alive 0, then wait for the runner to stop (up to 10 s), so the log says whether the memory came back
         // (TextProcessing.ReleaseIfLargeAsync).
-        guard await OllamaBackend.unload(endpoint: url, model: model.name) else {
-            Log.warn("Unloading \(model.name) failed: Ollama didn't take the request")
+        // A refusal is logged with its reason ("Unloading <m> failed: Response status code does not indicate success:
+        // 404 (Not Found).", or the connection's error). Windows' outer "letting the AI model go failed" catch is never
+        // reached (ReleaseIfLargeAsync catches everything but a cancellation, and it is given no token): nothing here.
+        if let why = await Self.unloadFailure(endpoint: url, model: model.name) {
+            Log.warn("Unloading \(model.name) failed: \(why)")
             return
         }
         for _ in 0..<40 where await OllamaBackend.isLoaded(endpoint: url, model: model.name) { try? await Task.sleep(for: .milliseconds(250)) }
@@ -715,17 +762,24 @@ final class NotesRecorder: ObservableObject {
         redoProgress = "reading the recording"
         let st = settings()
         if let whisper = Self.whisperModel(st) {
-            // "reading the recording" while the engine loads, then how far it got (NotesRecorder.RetranscribeAsync).
-            if WhisperEngine.loadedModel == whisper { redoProgress = "0%" }
+            // NotesRecorder.RetranscribeAsync: "reading the recording" until the engine is in, then before each part how
+            // far the parts done so far got ("{i*100/n}%": 0% while the first runs, never 100%).
+            try await WhisperEngine.shared.load(whisper)
+            try Task.checkCancellation()
+            redoProgress = "0%"
+            let done = PartCount()
             let heard = try await WhisperAudio.redoTimed(url, model: whisper, language: st.whisperLanguage, vocabulary: st.vocabularyHint,
                                                          even: st.evenOutVolume) { fraction in
-                await MainActor.run { self.redoProgress = "\(Int(min(99, fraction * 100)))%" }
+                // Told after part i of n with (i + 1) / n: what Windows shows as the next part starts.
+                done.add()
+                guard fraction < 1 else { return }
+                await MainActor.run { self.redoProgress = "\(Int(fraction * 100 + 1e-9))%" }
             }
             try Task.checkCancellation()
             s.replaceTranscript(heard.pieces, source: self)
             s.words = heard.words
             store.save(s)
-            Log.info("Extended notes: transcribed \(s.id) again")
+            Log.info("Extended notes: transcribed \(s.id) again in \(done.count) parts")
             return
         }
         let locale = try await LiveTranscriber.prepare(locale: st.speechLocale)
@@ -766,6 +820,28 @@ final class NotesRecorder: ObservableObject {
     }
 }
 
+/// The parts a redo has transcribed so far (one progress report each).
+final class PartCount: @unchecked Sendable {
+    private let lock = NSLock()
+    private var n = 0
+    func add() { lock.withLock { n += 1 } }
+    var count: Int { lock.withLock { n } }
+}
+
+/// An HTTP answer other than 2xx, worded as .NET's EnsureSuccessStatusCode ("Response status code does not indicate
+/// success: 404 (Not Found).").
+struct HTTPStatusError: LocalizedError {
+    var code: Int
+    init?(_ response: URLResponse) {
+        guard let code = (response as? HTTPURLResponse)?.statusCode, code / 100 != 2 else { return nil }
+        self.code = code
+    }
+    var errorDescription: String? {
+        let reason = HTTPURLResponse.localizedString(forStatusCode: code).capitalized
+        return "Response status code does not indicate success: \(code) (\(reason))."
+    }
+}
+
 /// Lets exactly one of several racing callers through.
 final class Once: @unchecked Sendable {
     private let lock = NSLock()
@@ -801,7 +877,9 @@ final class NotesFeed: @unchecked Sendable {
     private var paused = true
     private var samples = 0
     private var backlog: [Float] = []
-    private var backlogChunks = 0
+    /// The size of each piece waiting, oldest first: a full backlog drops whole pieces from the front, as Windows'
+    /// queue of chunks does, so the count is of the pieces still there.
+    private var backlogSizes: [Int] = []
     private var input: AsyncStream<AnalyzerInput>.Continuation?
     private var analyzerFormat: AVAudioFormat?
     private var converter: AVAudioConverter?
@@ -825,11 +903,11 @@ final class NotesFeed: @unchecked Sendable {
     /// Seconds of audio waiting for the recognizer to start.
     var backlogSeconds: Double { lock.withLock { Double(backlog.count) / Double(WavWriter.sampleRate) } }
     /// How many pieces of audio (capture buffers) are waiting, for the log (Windows counts its queued chunks).
-    var backlogPieces: Int { lock.withLock { backlogChunks } }
+    var backlogPieces: Int { lock.withLock { backlogSizes.count } }
 
     func begin(wav url: URL) throws {
         let w = try WavWriter(url: url)
-        lock.withLock { wav = w; samples = 0; backlog = []; backlogChunks = 0; paused = true }
+        lock.withLock { wav = w; samples = 0; backlog = []; backlogSizes = []; paused = true }
     }
 
     func setPaused(_ on: Bool) { lock.withLock { paused = on } }
@@ -842,8 +920,10 @@ final class NotesFeed: @unchecked Sendable {
             samples += chunk.count
             if let _whisper { _whisper.append(chunk) } else if let input { send(chunk, to: input) } else {
                 backlog += chunk
-                backlogChunks += 1
-                if backlog.count > NotesRecorder.maxBacklog { backlog.removeFirst(backlog.count - NotesRecorder.maxBacklog) }
+                backlogSizes.append(chunk.count)
+                var drop = 0
+                while backlog.count - drop > NotesRecorder.maxBacklog, !backlogSizes.isEmpty { drop += backlogSizes.removeFirst() }
+                if drop > 0 { backlog.removeFirst(drop) }
             }
         }
     }
@@ -858,7 +938,7 @@ final class NotesFeed: @unchecked Sendable {
             let start = Double(samples - backlog.count) / Double(WavWriter.sampleRate)
             if !backlog.isEmpty { send(backlog, to: input) }
             backlog = []
-            backlogChunks = 0
+            backlogSizes = []
             return start
         }
     }
@@ -870,7 +950,7 @@ final class NotesFeed: @unchecked Sendable {
             let start = Double(samples - backlog.count) / Double(WavWriter.sampleRate)
             if !backlog.isEmpty { whisper.append(backlog) }
             backlog = []
-            backlogChunks = 0
+            backlogSizes = []
             return start
         }
     }
@@ -882,7 +962,7 @@ final class NotesFeed: @unchecked Sendable {
     func flush() { lock.withLock { wav }?.flush() }
 
     func end() {
-        let w = lock.withLock { () -> WavWriter? in let w = wav; wav = nil; _analyzer = nil; _whisper = nil; leveller = nil; backlog = []; backlogChunks = 0; return w }
+        let w = lock.withLock { () -> WavWriter? in let w = wav; wav = nil; _analyzer = nil; _whisper = nil; leveller = nil; backlog = []; backlogSizes = []; return w }
         w?.close()
     }
 
