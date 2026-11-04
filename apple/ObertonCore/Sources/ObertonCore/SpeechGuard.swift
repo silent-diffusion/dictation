@@ -30,17 +30,21 @@ public enum SpeechGuard {
         return false
     }
 
-    /// .NET's `char.IsLetterOrDigit` over the text: a letter (any L category) or a decimal digit (Nd); "²", "½" or "Ⅻ"
-    /// alone don't count.
+    /// .NET's `text.Any(char.IsLetterOrDigit)`: a UTF-16 unit that is a letter (any L category) or a decimal digit (Nd).
+    /// "²", "½" or "Ⅻ" alone don't count, and neither do letters outside the Basic Multilingual Plane ("𠀀", "𝐀"):
+    /// .NET sees only their surrogate halves, which are no letters.
     static func hasLetterOrDigit(_ text: String) -> Bool {
-        text.unicodeScalars.contains {
-            switch $0.properties.generalCategory {
-            case .uppercaseLetter, .lowercaseLetter, .titlecaseLetter, .modifierLetter, .otherLetter, .decimalNumber: true
-            default: false
+        text.utf16.contains { unit in
+            guard let scalar = Unicode.Scalar(unit) else { return false } // a surrogate half
+            switch scalar.properties.generalCategory {
+            case .uppercaseLetter, .lowercaseLetter, .titlecaseLetter, .modifierLetter, .otherLetter, .decimalNumber: return true
+            default: return false
             }
         }
     }
 
+    /// Windows' stock phrases; a subtitle credit too, which Windows checks only on Whisper's segments (asr_server.py
+    /// SUBTITLE_CREDIT): a Mac addition, kept by the user's decision 3 (the subtitle-credit and marker filters).
     public static func isStockPhrase(_ text: String) -> Bool {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if subtitleCredit.firstMatch(in: t, range: NSRange(t.startIndex..., in: t)) != nil { return true }

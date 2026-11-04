@@ -45,11 +45,9 @@ public enum Microphones {
         #endif
     }
 
-    /// Windows' MicCapture: "Microphone '{name}' not found; using the default device.", once per name in a row.
-    nonisolated(unsafe) private static var lastMissing: String?
-    private static func logMissing(_ name: String) {
-        guard lastMissing != name else { return }
-        lastMissing = name
+    /// Windows' MicCapture.Start: "Microphone '{name}' not found; using the default device.", at every start (each
+    /// dictation, each meter start) while the chosen microphone is missing.
+    static func logMissing(_ name: String) {
         CoreLog.warn("Microphone '\(name)' not found; using the default device.")
     }
 
@@ -58,10 +56,7 @@ public enum Microphones {
     /// none chosen, or one that isn't there any more (logged, and the default is used).
     private static func device(named name: String?) -> AudioDeviceID? {
         guard let name, !name.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
-        if let id = inputDevices().first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame })?.id {
-            lastMissing = nil
-            return id
-        }
+        if let id = inputDevices().first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame })?.id { return id }
         logMissing(name)
         return nil
     }
@@ -76,9 +71,9 @@ public enum Microphones {
         func pending() -> Bool { node.inputFormat(forBus: 0).sampleRate != node.outputFormat(forBus: 0).sampleRate }
         for _ in 0..<20 where pending() { Thread.sleep(forTimeInterval: 0.05) }
         node.removeTap(onBus: 0)
-        let busy = node.inputFormat(forBus: 0).sampleRate > 0
-            ? UserFacingError("The microphone is still switching over. Try again in a moment.")
-            : UserFacingError("The microphone isn't giving any sound. Check that Oberton may use it (Privacy & Security › Microphone), or pick another one in Settings › Microphone.")
+        // Windows has two messages for a microphone that won't start (MicCapture): none found, and one that won't
+        // open. A device still switching over, or giving no format at all, is one that won't open.
+        let busy = UserFacingError(LiveTranscriber.micWontOpen)
         #if compiler(>=6.4)
         if #available(macOS 27, iOS 27, *) {
             do { try node.__installTap(onBus: 0, bufferSize: bufferSize, format: nil, error: (), block: block) } catch { throw busy }
