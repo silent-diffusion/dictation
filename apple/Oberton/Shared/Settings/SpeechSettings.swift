@@ -16,17 +16,21 @@ struct SpeechSection: View {
             FieldLabel("Language")
             ObMenu(options: [("", "Auto-detect")] + ["en-US", "en-GB", "en-AU", "en-IN", "de-DE", "fr-FR", "es-ES", "it-IT", "pt-BR", "ja-JP", "zh-CN", "ko-KR"]
                 .map { ($0, Locale.current.localizedString(forIdentifier: $0) ?? $0) }, selection: $model.settings.language, width: 260)
-            Caption(languageNote, size: 12.5).padding(.top, 6).frame(maxWidth: 560, alignment: .leading)
+            Caption(languageNote, bottom: 0).padding(.top, 4).frame(maxWidth: 560, alignment: .leading)
             FieldLabel("Quiet speech")
-            SwitchCard {
-                ObSwitch("Even out the volume before transcribing",
-                         detail: "Brings quiet stretches up to the level of the rest, and finds the words by how far they stand above the room's background noise, so a quiet microphone or turning away from it doesn't lose whole sentences. Silence still gives nothing. On by default; applies to dictation and Extended Notes.",
-                         isOn: $model.settings.evenOutVolume)
-            }
-            .frame(maxWidth: 560)
+            // A bare switch on the page, as Windows' (no card around it).
+            ObSwitch("Even out the volume before transcribing",
+                     detail: "Brings quiet stretches up to the level of the rest, and finds the words by how far they stand above the room's background noise, so a quiet microphone or turning away from it doesn't lose whole sentences. Silence still gives nothing. On by default; applies to dictation and Extended Notes.",
+                     isOn: $model.settings.evenOutVolume)
+                .frame(maxWidth: 560)
             FieldLabel("Vocabulary hint")
-            ObField("", text: $model.settings.vocabularyHint).frame(maxWidth: 560).accessibilityLabel("Vocabulary hint")
-            Caption("Optional names and jargon to bias recognition, e.g. Kubernetes, Dr. Nguyen, Acme Corp.", size: 12.5).padding(.top, 6)
+            // Taken when the box is left (Windows' LostFocus binding), not on every keystroke.
+            CommitField(value: $model.settings.vocabularyHint).frame(maxWidth: 560).accessibilityLabel("Vocabulary hint")
+            Caption("Optional names and jargon to bias recognition, e.g. Kubernetes, Dr. Nguyen, Acme Corp.", bottom: 0).padding(.top, 4)
+            // Loads the speech model again now: a change already applies at once, but a model that failed to load can be
+            // retried here (Windows' save-and-restart button).
+            Button("Apply and restart speech engine") { model.warmUp() }
+                .buttonStyle(.quiet).padding(.top, 16)
         }
     }
 

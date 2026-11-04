@@ -27,12 +27,12 @@ struct CloudSection: View {
             label("OpenAI or a compatible service", top: 22)
             keyCard(text: $openai, provider: .openai, name: "OpenAI API key") {
                 VStack(alignment: .leading, spacing: 0) {
-                    Text("Model").font(Ob.sans(13)).padding(.top, 12).padding(.bottom, 6)
+                    Text("Model").font(Ob.sans(Ob.body)).padding(.top, 12).padding(.bottom, 6)
                     // Saved when the box is left, as Windows' LostFocus binding: a half-typed id never goes live.
                     CommitField(value: $model.settings.cloud.openAIModel, width: 280).accessibilityLabel("OpenAI model")
-                    Text("Service address").font(Ob.sans(13)).padding(.top, 12).padding(.bottom, 6)
+                    Text("Service address").font(Ob.sans(Ob.body)).padding(.top, 12).padding(.bottom, 6)
                     CommitField(value: $model.settings.cloud.openAIBaseURL).accessibilityLabel("Service address")
-                    Caption("https://api.openai.com/v1 for OpenAI. Services with the same API (OpenRouter, Groq and others) work too.", size: 12).padding(.top, 6)
+                    Caption("https://api.openai.com/v1 for OpenAI. Services with the same API (OpenRouter, Groq and others) work too.", bottom: 0).padding(.top, 6)
                 }
             }
             Caption("Keys are encrypted in the Keychain and stored only on this \(Device.noun). To use a cloud model, pick it on a profile's page or under Settings › Models; cloud models are marked CLOUD there.")
@@ -46,7 +46,7 @@ struct CloudSection: View {
 
     private func keyCard<Extra: View>(text: Binding<String>, provider: ModelID.Provider, name: String, @ViewBuilder extra: () -> Extra) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("API key").font(Ob.sans(13)).padding(.bottom, 6)
+            Text("API key").font(Ob.sans(Ob.body)).padding(.bottom, 6)
             HStack(spacing: 8) {
                 ObField("", text: text, mono: true, secure: true).accessibilityLabel(name)
                     .onSubmit { save(text, provider) }
@@ -57,7 +57,7 @@ struct CloudSection: View {
                 }
                 .buttonStyle(.quiet)
             }
-            Caption(hasKey(provider) ? "A key is saved (encrypted)." : "No key saved.", size: 12).padding(.top, 6)
+            Caption(hasKey(provider) ? "A key is saved (encrypted)." : "No key saved.", bottom: 0).padding(.top, 6)
             extra()
         }
         .padding(EdgeInsets(top: 14, leading: 18, bottom: 14, trailing: 18))
@@ -80,27 +80,34 @@ struct CloudSection: View {
 }
 
 /// A text box that hands its text over when it is left or Return is pressed (WPF's UpdateSourceTrigger=LostFocus).
+/// With `isValid`, text it refuses isn't handed over and the box gets WPF's red validation border until fixed.
 struct CommitField: View {
     @Binding var value: String
     var width: CGFloat?
+    var isValid: ((String) -> Bool)? = nil
     @State private var text = ""
+    @State private var invalid = false
     @FocusState private var focused: Bool
     @Environment(\.ob) private var ob
 
     var body: some View {
         TextField("", text: $text)
             .textFieldStyle(.plain)
-            .font(Ob.sans(13.5))
+            .font(Ob.sans(Ob.body)) // a stock WPF TextBox: the window's 12
             .focused($focused)
             .padding(.horizontal, 8).padding(.vertical, 6)
             .frame(maxWidth: width ?? .infinity, alignment: .leading)
-            .overlay(Rectangle().strokeBorder(focused ? ob.ink : ob.divider, lineWidth: 1))
+            .overlay(Rectangle().strokeBorder(invalid ? Color.red : focused ? ob.ink : ob.divider, lineWidth: 1))
             .onAppear { text = value }
-            .onChange(of: value) { if !focused { text = value } }
+            .onChange(of: value) { if !focused { text = value; invalid = false } }
             .onChange(of: focused) { if !focused { commit() } }
             .onSubmit(commit)
             .onDisappear(perform: commit)
     }
 
-    private func commit() { if text != value { value = text } }
+    private func commit() {
+        if let isValid, !isValid(text) { invalid = true; return }
+        invalid = false
+        if text != value { value = text }
+    }
 }

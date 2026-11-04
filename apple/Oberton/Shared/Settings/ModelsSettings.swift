@@ -10,29 +10,30 @@ struct ModelsSection: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var nav: Navigator
     @Environment(\.ob) private var ob
+    /// The direct download's own runtime, downloading in the background or from the runtime row.
+    @ObservedObject private var localAI = LocalAISetup.shared
     /// The Ollama models installed and loaded now (nil while checking), and whether the runtime answers.
     @State private var installed: [String]?
     @State private var loaded: [String] = []
     @State private var runtimeUp = false
+    /// Extended Notes' "best on this Mac", for the explanation under its menu.
+    @State private var notesInstalled: [NotesModels.Installed] = []
     /// The download running now (an Ollama model, or `runtimeID` for the runtime itself) and how far it got.
     @State private var download: (id: String, fraction: Double?)?
     @State private var downloadTask: Task<Void, Never>?
     @State private var failure: String?
-    /// "Use this" on an AI model: its warm-up line while it loads (Windows' status line).
-    @State private var warming: String?
-
-    private static let runtimeID = "ollama-runtime"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Caption("Download the models you want and choose which one is active. Local models run on this \(Device.noun); downloading is the only time they use the internet.")
             heading("Speech recognition", top: 18)
-            SpeechModelList()
+            // Each Windows row card has 8 below it, the last one too.
+            SpeechModelList().padding(.bottom, 8)
             HStack {
                 Readout("AI cleanup · on this \(Device.noun)")
                 Spacer()
                 #if os(macOS)
-                Button("Refresh") { Task { await rebuild() } }.buttonStyle(.quietSmall)
+                Button("Refresh") { Task { await rebuild() } }.buttonStyle(CapsuleButtonStyle(kind: .quiet, padding: 10))
                 #endif
             }
             .padding(.top, 22).padding(.bottom, 8)
@@ -40,40 +41,42 @@ struct ModelsSection: View {
                 // The Mac's own on-device model, beside Windows' list.
                 ModelRow(name: "Apple Intelligence", badges: appleBadges,
                          detail: AppleIntelligenceBackend.unavailableReason ?? "Apple's on-device model. Nothing to install; nothing leaves this \(Device.noun).",
-                         action: isDefault(.appleOnDevice) ? nil : ("Use this", { use(.appleOnDevice) }), primary: true, enabled: !busy)
+                         action: isDefault(.appleOnDevice) ? nil : ("Use this", { use(.appleOnDevice) }), primary: true)
                 #if os(macOS)
                 localRows
                 #endif
             }
-            if let warming { Caption(warming, size: 12.5).padding(.top, 6) }
-            Caption("The active model is the default for profiles that don't pick their own.", size: 12.5).padding(.top, 2)
+            .padding(.bottom, 8)
+            // Windows' second sentence is about a PC's graphics card ("With 6 GB of GPU memory, 3–4B models run fully on the
+            // GPU…"); a Mac's GPU shares its memory, so only the first one holds here.
+            Caption("The active model is the default for profiles that don't pick their own.", bottom: 0).padding(.top, 2)
             heading("Extended notes · AI", top: 22)
             NotesModelMenu(width: 528)
-            Caption("Extended Notes formats and sums up long sessions in the background, so it can use a bigger model than dictation needs. " +
-                    "Best on this \(Device.noun) is the largest installed Ollama model that fits in the memory the GPU may use" +
-                    (NotesRecorder.gpuBytes.map { " (\(NotesModels.gb($0)) here)" } ?? "") +
-                    "; with no Ollama model, the active model. A cloud model would send the whole transcript to that service.", size: 12.5)
-                .padding(.top, 6)
+            Caption(notesExplanation, bottom: 0).padding(.top, 6)
             heading("AI cleanup · cloud", top: 22)
             Caption(model.settings.cloud.keepOffline
                         ? "\"Keep everything offline\" is on, so cloud models are blocked. Change that and add keys under Settings › Cloud AI."
                         : "Text you dictate with a profile set to one of these is sent to that service. Keys are set under Settings › Cloud AI.",
-                    size: 12.5)
-                .padding(.bottom, 8)
+                    bottom: 8)
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(CloudCatalog.anthropic) { m in cloudRow(m.id, name: m.title, detail: "Anthropic · " + m.blurb) }
                 let openai = ModelID(provider: .openai, name: model.settings.cloud.openAIModel)
                 cloudRow(openai, name: openai.name, detail: "OpenAI-compatible · From \(model.settings.cloud.openAIBaseURL)")
             }
+            .padding(.bottom, 8)
             heading("Read aloud voice", top: 22)
-            ReadAloudVoiceRows(busy: download != nil || model.whisperDownload != nil)
+            // As on Windows, the other rows' buttons stay usable while a download runs (a second download waits its turn).
+            ReadAloudVoiceRows(busy: false).padding(.bottom, 8)
             #if os(macOS)
             advanced.padding(.top, 24)
             #endif
         }
         #if os(macOS)
         .task { await rebuild() }
+        // Windows cancels the page's download when the page goes (Unloaded); the runtime's own setup carries on.
         .onDisappear { downloadTask?.cancel() }
+        #else
+        .task { await loadNotesModels() }
         #endif
         .alert("Oberton", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
             Button("OK") {}
@@ -84,10 +87,35 @@ struct ModelsSection: View {
         Readout(text).padding(.top, top).padding(.bottom, 8)
     }
 
-    /// One download at a time, and nothing else changes meanwhile (Windows disables every row's button).
-    private var busy: Bool { download != nil || model.whisperDownload != nil }
+    /// One download at a time on the page: another Download waits (Windows' `if (Busy) return;`). Windows leaves the
+    /// other rows' buttons as they were when the download began, so they look and stay usable; Use this still works.
+    private var busy: Bool { download != nil || model.whisperDownload != nil || localAI.isRunning }
 
-    private func isDefault(_ id: ModelID) -> Bool { model.settings.defaultModel == id }
+    /// The active model, matched as Windows does (`string.Equals(…, OrdinalIgnoreCase)`).
+    private func isDefault(_ id: ModelID) -> Bool {
+        let d = model.settings.defaultModel
+        return d.provider == id.provider && d.name.caseInsensitiveCompare(id.name) == .orderedSame
+    }
+
+    /// NotesModelChoices.Explain, with the Mac's GPU (the share of memory Metal may use) for the PC's graphics card.
+    private var notesExplanation: String {
+        let gpu = NotesRecorder.gpuBytes, ram = LocalModel.systemRam
+        let best = NotesModels.pickBest(notesInstalled, gpuBytes: gpu, ramBytes: ram)?.name
+        return "Extended Notes formats and sums up long sessions in the background, so it can use a bigger model than " +
+            "dictation needs. Best on this \(Device.noun) is the largest installed model that " +
+            (gpu.map { "fits in the GPU's memory (\(NotesModels.gb($0)) here)" }
+                ?? "runs well without a GPU (up to \(String(format: "%g", NotesModels.maxBillionsWithoutGpu))B)") +
+            (best.map { ": \($0)." } ?? ".") +
+            " A mixture-of-experts model such as Qwen3 30B-A3B counts too when it fits in this \(Device.noun)'s memory (\(NotesModels.gb(ram))): " +
+            "only about 3B of its 30B parameters work on each word, so it runs from memory, with as much of it on the GPU as there is room for. " +
+            "It is much better at formatting and summing up, at the cost of speed: a step takes it tens of seconds, which notes have time for. " +
+            "A cloud model would send the whole transcript to that service."
+    }
+
+    private func loadNotesModels() async {
+        guard let url = try? OllamaBackend.validated(model.settings.ollamaEndpoint) else { notesInstalled = []; return }
+        notesInstalled = await OllamaBackend.installedDetails(endpoint: url)
+    }
 
     private var appleBadges: [(String, Badge.Kind)] {
         (isDefault(.appleOnDevice) ? [("Active", .active)] : []) + [AppleIntelligenceBackend.unavailableReason == nil ? ("Ready", .ok) : ("Unavailable", .outline)]
@@ -98,10 +126,17 @@ struct ModelsSection: View {
     #if os(macOS)
     @ViewBuilder private var localRows: some View {
         if let installed {
-            if !runtimeUp { runtimeRow }
+            // Windows puts this first whenever nothing is listed, with the AI status line after it.
+            if OllamaRuntime.canManage && !OllamaRuntime.isInstalled && !runtimeUp {
+                runtimeRow
+            } else if installed.isEmpty {
+                Caption("The local AI runtime isn't answering, so downloaded models can't be listed. " +
+                        (OllamaRuntime.canManage ? model.aiStatus
+                            : "Install Ollama from ollama.com and start it; the models here then download through it."))
+            }
             ForEach(catalogue(installed), id: \.id) { m in localRow(m, installed: installed) }
         } else {
-            Caption("Checking…", size: 12.5)
+            Caption("Checking…")
         }
     }
 
@@ -121,7 +156,7 @@ struct ModelsSection: View {
         else { action = ("Use this", { use(id) }) }
         let fraction: Double?? = fetching ? .some(download?.fraction) : nil
         return ModelRow(name: m.name, badges: badges, detail: detail, action: action, progress: fraction,
-                        primary: downloaded && !fetching, enabled: fetching || !busy)
+                        primary: downloaded && !fetching)
     }
 
     /// Windows' list, then what else Ollama has ("Installed on this Mac.").
@@ -130,20 +165,14 @@ struct ModelsSection: View {
             .map { LocalCatalogModel(id: $0, name: $0, description: "Installed on this \(Device.noun).", size: "") }
     }
 
-    /// The runtime isn't answering. The direct download can install Oberton's own copy (as Windows bundles one); the
-    /// App Store version can't run a downloaded program, so it points to ollama.com.
-    @ViewBuilder private var runtimeRow: some View {
-        if OllamaRuntime.canManage && !OllamaRuntime.isInstalled {
-            let fetching = download?.id == Self.runtimeID
-            ModelRow(name: "Ollama (local AI runtime)", badges: [("Not downloaded", .outline)],
-                     detail: "Runs the local models on this \(Device.noun), only for Oberton. Downloads Ollama \(OllamaRuntime.version) (about 190 MB), then \(LocalCatalog.all[0].name), the default model (\(LocalCatalog.all[0].size)).",
-                     action: fetching ? ("Cancel", { downloadTask?.cancel() }) : ("Download", { installRuntime() }),
-                     progress: fetching ? .some(download?.fraction) : nil, enabled: fetching || !busy)
-        } else {
-            Caption("The local AI runtime isn't answering, so downloaded models can't be listed. " +
-                    (OllamaRuntime.canManage ? OllamaBackend.notRunning
-                        : "Install Ollama from ollama.com and start it; the models here then download through it."), size: 12.5)
-        }
+    /// The direct download without its runtime yet (Windows bundles one; here setup's background download or this row
+    /// fetches it). The App Store version can't run a downloaded program; there the user installs Ollama.
+    private var runtimeRow: some View {
+        let fetching = localAI.isRunning
+        return ModelRow(name: "Ollama (local AI runtime)", badges: [("Not downloaded", .outline)],
+                        detail: "Runs the local models on this \(Device.noun), only for Oberton. Downloads Ollama \(OllamaRuntime.version) (about 190 MB), then \(LocalCatalog.all[0].name), the default model (\(LocalCatalog.all[0].size)).",
+                        action: fetching ? ("Cancel", { localAI.cancel() }) : ("Download", { installRuntime() }),
+                        progress: fetching ? .some(localAI.progress ?? nil) : nil)
     }
 
     private func rebuild() async {
@@ -153,6 +182,7 @@ struct ModelsSection: View {
         installed = runtimeUp ? await OllamaBackend.installedModels(endpoint: endpoint) : []
         loaded = runtimeUp ? await OllamaBackend.loadedModels(endpoint: endpoint) : []
         await model.refreshOllama()
+        await loadNotesModels()
     }
 
     /// Download a model through Ollama, with its progress on the row and Cancel (Windows' DownloadLocalAsync).
@@ -166,20 +196,11 @@ struct ModelsSection: View {
 
     /// Install Oberton's own runtime, start it, and download the default model, as Windows' setup does.
     private func installRuntime() {
-        let id = Self.runtimeID
-        run(id) {
-            try await OllamaRuntime.install { f in Task { @MainActor in progress(id, f) } }
-            try await OllamaRuntime.ensureRunning(settings: model.settings)
-            let endpoint = try OllamaBackend.validated(model.settings.ollamaEndpoint)
-            let qwen = LocalCatalog.defaultModel
-            if !(await OllamaBackend.installedModels(endpoint: endpoint)).contains(where: { LocalCatalog.same($0, qwen) }) {
-                await MainActor.run { download = (id, 0) }
-                try await OllamaBackend.pull(endpoint: endpoint, model: qwen) { f in Task { @MainActor in progress(id, f) } }
-            }
-            // Windows' local default, unless the model in use already works.
-            if await MainActor.run(body: { model.settings.defaultModel == .appleOnDevice && AppleIntelligenceBackend.unavailableReason != nil }) {
-                await MainActor.run { use(ModelID(provider: .ollama, name: qwen)) }
-            }
+        guard !busy else { return }
+        localAI.start(model) { error in
+            failure = (error as? UserFacingError)?.message ?? "The download failed. See the log for details."
+            if !(error is UserFacingError) { Log.error("Model download failed: \(error)") }
+            Task { await rebuild() }
         }
     }
 
@@ -194,7 +215,7 @@ struct ModelsSection: View {
             } catch let e as UserFacingError {
                 failure = e.message
             } catch {
-                Log.error("Model download failed: \(error.localizedDescription)")
+                Log.error("Model download failed: \(error)")
                 failure = "The download failed. See the log for details."
             }
             download = nil
@@ -204,17 +225,19 @@ struct ModelsSection: View {
     }
     #endif
 
-    /// Make a model the active one and load it now (Windows' UseAiAsync), showing its warm-up line meanwhile.
+    /// Make a model the active one and load it now (Windows' UseAiAsync: save, rebuild, warm up, rebuild). The warm-up's
+    /// lines go to the status line only (`settings.didSet` → `warmUpAI`), as on Windows.
     private func use(_ id: ModelID) {
         model.settings.defaultModel = id
         let settings = model.settings
         Task {
-            await AIStatus.warmUp(id, settings: settings) { line, _ in await MainActor.run { warming = "AI: " + line } }
             #if os(macOS)
             await rebuild()
             #endif
-            try? await Task.sleep(for: .seconds(4))
-            warming = nil
+            await AIStatus.warmUp(id, settings: settings) { _, _ in }
+            #if os(macOS)
+            await rebuild()
+            #endif
         }
     }
 
@@ -227,7 +250,7 @@ struct ModelsSection: View {
         badges.append(hasKey ? ("Key set", .plain) : ("No key", .outline))
         if model.settings.cloud.keepOffline { badges.append(("Blocked · offline", .outline)) }
         let action: (String, () -> Void)? = !hasKey ? ("Add key", { nav.goSettings(.cloud) }) : isDefault(id) ? nil : ("Use this", { use(id) })
-        return ModelRow(name: name, badges: badges, detail: detail, action: action, primary: hasKey, enabled: !busy)
+        return ModelRow(name: name, badges: badges, detail: detail, action: action, primary: hasKey)
     }
 
     private static var system: String {
@@ -252,19 +275,21 @@ struct ModelsSection: View {
                     model.settings.ollamaEndpoint = new
                     model.settings.enforceLocalEndpoint()
                 }), width: 300)
-                Caption("Must be a local address (127.0.0.1 / localhost); other addresses are rejected.", size: 12.5).padding(.top, 4)
+                Caption("Must be a local address (127.0.0.1 / localhost); other addresses are rejected.", bottom: 0).padding(.top, 4)
                 if OllamaRuntime.canManage {
                     Toggle("Start the bundled Ollama automatically", isOn: $model.settings.startOllama)
-                        .toggleStyle(.checkbox).font(Ob.sans(13)).padding(.top, 10)
+                        .toggleStyle(.checkbox).font(Ob.sans(Ob.body)).padding(.top, 10)
                 }
                 FieldLabel("Give up after (seconds)")
+                // Windows binds an int: any whole number is taken (0 and below too, which then means the 10 s floor);
+                // anything else is refused with a red border and the setting stays.
                 CommitField(value: Binding(get: { String(Int(model.settings.aiTimeoutSeconds)) },
-                                           set: { if let v = Double($0.trimmingCharacters(in: .whitespaces)), v > 0 { model.settings.aiTimeoutSeconds = v } }),
-                            width: 100)
+                                           set: { if let v = Int($0.trimmingCharacters(in: .whitespaces)) { model.settings.aiTimeoutSeconds = Double(v) } }),
+                            width: 100, isValid: { Int($0.trimmingCharacters(in: .whitespaces)) != nil })
             }
             .padding(.top, 8)
         }
-        .font(Ob.sans(13))
+        .font(Ob.sans(Ob.body))
         .tint(ob.ink)
     }
     #endif
