@@ -33,8 +33,9 @@ public struct PiperVoice: Hashable, Sendable {
 
 /// The text-to-speech models Read aloud can use, and their voices (Windows' VoiceCatalog): Kokoro (natural, one
 /// download), Piper (light and fast, one small download per voice) and the voices that come with the system (no
-/// download). A voice id also says its model: a Kokoro id ("af_heart"), "piper:<name>", or a system voice's
-/// AVSpeechSynthesisVoice identifier.
+/// download). A voice id also says its model, as on Windows: "piper:<name>", a system voice's AVSpeechSynthesisVoice
+/// identifier (where Windows writes "win:<name>"), and anything else is Kokoro's ("af_heart"; an id Kokoro doesn't know
+/// reads with Heart).
 public enum VoiceCatalog {
     public static let kokoro = "kokoro", piper = "piper", system = "system"
     public static let piperPrefix = "piper:"
@@ -82,13 +83,18 @@ public enum VoiceCatalog {
 
     public static func isPiperVoice(_ id: String?) -> Bool { id?.hasPrefix(piperPrefix) == true }
 
-    /// A Kokoro voice id: a language letter, f/m, "_", a name ("af_heart", "bm_george").
-    public static func isKokoroVoice(_ id: String?) -> Bool {
-        guard let id, !id.isEmpty else { return true } // no voice = the default, Heart
-        return id.range(of: #"^[a-z][fm]_[a-z]+$"#, options: .regularExpression) != nil
+    /// A Kokoro voice id: anything that isn't Piper's or the system's (Windows' ModelOf: no "win:"/"piper:" prefix).
+    public static func isKokoroVoice(_ id: String?) -> Bool { !isPiperVoice(id) && !isSystemVoice(id) }
+
+    /// A system voice: an AVSpeechSynthesisVoice identifier ("com.apple.voice.compact.en-US.Samantha"), or the id of a
+    /// voice the system has (another vendor's).
+    public static func isSystemVoice(_ id: String?) -> Bool {
+        guard let id, !id.isEmpty, !isPiperVoice(id) else { return false }
+        return id.hasPrefix(systemPrefix) || AVSpeechSynthesisVoice(identifier: id) != nil
     }
 
-    public static func isSystemVoice(_ id: String?) -> Bool { !isPiperVoice(id) && !isKokoroVoice(id) }
+    /// How the system's voice identifiers start.
+    static let systemPrefix = "com.apple."
 
     /// The model a voice belongs to.
     public static func modelOf(_ voiceID: String?) -> String {
@@ -132,21 +138,33 @@ public enum VoiceCatalog {
 
     // MARK: System voices
 
-    /// The system's voices in the user's language (Windows lists all its installed voices; the Mac has dozens per
-    /// language, so only those that can read the user's language are offered), sorted by label as Windows sorts its
-    /// voices: "Samantha (English (United States), female)". A name the Mac has in several qualities says which.
+    /// The system's voices, every one it has, as Windows lists every enabled voice, sorted by label:
+    /// "Samantha (English (United States), female)".
     public static func systemVoices() -> [VoiceOption] {
-        let language = Locale.current.language.languageCode?.identifier ?? "en"
-        return AVSpeechSynthesisVoice.speechVoices()
-            .filter { $0.language.hasPrefix(language) && !$0.voiceTraits.contains(.isNoveltyVoice) }
-            .map { VoiceOption(id: $0.identifier, name: systemLabel($0), model: system) }
-            .sorted { $0.name.compare($1.name, options: [.caseInsensitive, .numeric]) == .orderedAscending }
+        let voices = AVSpeechSynthesisVoice.speechVoices()
+        let labels = voices.map(systemLabel)
+        // The Mac has some voices in more than one quality (Windows never lists two alike): only those say which.
+        var counts: [String: Int] = [:]
+        labels.forEach { counts[$0, default: 0] += 1 }
+        return zip(voices, labels)
+            .map { v, label in VoiceOption(id: v.identifier, name: counts[label, default: 0] > 1 ? label + qualitySuffix(v) : label, model: system) }
+            .sorted { sortsBefore($0.name, $1.name) }
     }
 
+    /// .NET's OrderBy on strings: the current culture's comparison.
+    static func sortsBefore(_ a: String, _ b: String) -> Bool {
+        a.compare(b, options: [], range: nil, locale: .current) == .orderedAscending
+    }
+
+    /// "Name (Language, gender)" as WindowsSpeech.InstalledVoices. A voice with no gender leaves it out: Windows would
+    /// print its enum's name ("notset"), which no one would want to read.
     static func systemLabel(_ v: AVSpeechSynthesisVoice) -> String {
         let language = Locale.current.localizedString(forIdentifier: v.language) ?? v.language
         let gender = v.gender == .female ? ", female" : v.gender == .male ? ", male" : ""
-        let quality = v.quality == .premium ? ", premium" : v.quality == .enhanced ? ", enhanced" : ""
-        return "\(v.name) (\(language)\(gender)\(quality))"
+        return "\(v.name) (\(language)\(gender))"
+    }
+
+    private static func qualitySuffix(_ v: AVSpeechSynthesisVoice) -> String {
+        v.quality == .premium ? ", premium" : v.quality == .enhanced ? ", enhanced" : ""
     }
 }

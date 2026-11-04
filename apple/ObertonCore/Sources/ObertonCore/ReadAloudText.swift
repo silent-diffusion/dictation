@@ -94,8 +94,11 @@ public enum ReadAloudText {
         var start = 0
         // A sentence ends after . ! ? … (and any closing quotes or brackets) followed by space, or at a line break.
         for m in sentenceEnd.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
-            addPiece(ns, start, m.range.location, &spans)
-            start = m.range.location + m.range.length
+            // Windows' lookbehind (?<=[.!?…]+["'”’)\]]*) has no length limit, which ICU's can't do: the marks are
+            // matched instead and the piece ends where the space (group 1) starts.
+            let space = m.range(at: 1).location == NSNotFound ? m.range : m.range(at: 1)
+            addPiece(ns, start, space.location, &spans)
+            start = space.location + space.length
         }
         addPiece(ns, start, ns.length, &spans)
         return spans
@@ -109,7 +112,7 @@ public enum ReadAloudText {
     /// How many words a text has, as the usage counts them.
     public static func words(_ text: String) -> Int { text.split(whereSeparator: \.isWhitespace).count }
 
-    private static let sentenceEnd = try! NSRegularExpression(pattern: #"(?<=[.!?…]{1,20}["'”’)\]]{0,20})\s+|\n\s*"#)
+    private static let sentenceEnd = try! NSRegularExpression(pattern: #"[.!?…]+["'”’)\]]*(\s+)|\n\s*"#)
 
     private static func addPiece(_ text: NSString, _ start: Int, _ end: Int, _ spans: inout [NSRange]) {
         var (start, end) = (start, end)

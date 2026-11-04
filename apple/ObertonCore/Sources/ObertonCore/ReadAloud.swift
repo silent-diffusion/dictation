@@ -40,8 +40,11 @@ public final class ReadAloudPlayer: ObservableObject {
     @Published public private(set) var status = Status.ended
     @Published public private(set) var question: ReaderQuestion?
     @Published public private(set) var speed: Double = 1.0
-    /// A voice download (from here, the Read aloud page or Models): which voice, and how it is going.
-    @Published public private(set) var install: (voice: String, progress: VoiceProgress)?
+    /// The voice downloads running (from here, the Read aloud page or Models), oldest first. Like Windows, where the page
+    /// and the player each run their own installer, two voices can download at once.
+    @Published public private(set) var downloads: [VoiceDownload] = []
+    /// The latest voice download: which voice, and how it is going.
+    public var install: (voice: String, progress: VoiceProgress)? { downloads.last.map { ($0.voice, $0.progress) } }
     /// Called when a reading starts, with how many words it has (UsageStore.RecordReading at StartSession: it counts
     /// at once, and stays counted if Oberton quits mid-reading).
     public var onStartedReading: ((Int) -> Void)?
@@ -64,9 +67,9 @@ public final class ReadAloudPlayer: ObservableObject {
 
     private var session: ReadAloudSession?
     private var tick: Timer?
-    private var installTask: Task<Void, Never>?
-    /// The player asked for the download running now (so ✕ cancels it and the reading follows).
-    private var installFromPlayer = false
+    private var installTasks: [UUID: Task<Void, Never>] = [:]
+    /// The download the player asked for (so ✕ cancels it and the reading follows).
+    private var playerDownload: UUID?
 
     public init() {}
 
@@ -167,11 +170,10 @@ public final class ReadAloudPlayer: ObservableObject {
     }
 
     private func downloadThenRead(_ raw: String, voice: String, speed: Double?) {
-        installFromPlayer = true
-        showDownload(VoiceProgress(step: 1, totalSteps: 1, title: "", fraction: 0, detail: ""))
-        installVoice(voice) { [weak self] result in
+        showDownload(.waiting)
+        playerDownload = installVoice(voice) { [weak self] result in
             guard let self else { return }
-            self.installFromPlayer = false
+            self.playerDownload = nil
             switch result {
             case .success: self.start(raw, voice: voice, speed: speed)
             case .failure(let error as UserFacingError): self.showError(error.message)
@@ -189,36 +191,57 @@ public final class ReadAloudPlayer: ObservableObject {
         question = ReaderQuestion(title: "Downloading the voice…", body: detail, primary: "", action: {}, progress: .some(p.fraction))
     }
 
-    /// Download a voice's model (Kokoro, or one Piper voice) and report back on the main thread. One at a time.
-    public func installVoice(_ voice: String, done: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }) {
-        guard install == nil else { done(.failure(UserFacingError("Another voice is downloading. Wait for it to finish, and try again."))); return }
+    /// Fetches a voice's files (tests put a stand-in here).
+    var installer: @Sendable (String, @escaping @Sendable (VoiceProgress) -> Void) async throws -> Void = { voice, report in
+        if let piper = VoiceCatalog.findPiper(voice) { try await VoiceInstaller.installPiper(piper, progress: report) }
+        else { try await VoiceInstaller.installKokoro(progress: report) }
+    }
+
+    /// How a download started with `installVoice` is going (nil once it has ended).
+    public func progress(of id: UUID) -> VoiceProgress? { downloads.first { $0.id == id }?.progress }
+
+    /// Download a voice's model (Kokoro, or one Piper voice) and report back on the main thread. Each caller gets its
+    /// own download, as each Windows page makes its own installer; only the same files can't be fetched twice at once
+    /// (on Windows the second one then fails writing the same ".part" file), so that one is refused. Returns the
+    /// download's id (nil when refused).
+    @discardableResult
+    public func installVoice(_ voice: String, done: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }) -> UUID? {
+        let files = VoiceDownload.files(voice)
+        guard !downloads.contains(where: { $0.files == files }) else {
+            done(.failure(UserFacingError("This voice is already downloading. Wait for it to finish, and try again.")))
+            return nil
+        }
+        let id = UUID()
         // No title until the installer's first report: the page keeps its status, over an empty bar.
-        install = (voice, VoiceProgress(step: 1, totalSteps: 1, title: "", fraction: 0, detail: ""))
+        downloads.append(VoiceDownload(id: id, voice: voice, files: files, progress: .waiting))
         // The player lives as long as the app, so the download may hold on to it.
-        installTask = Task { [self] in
+        installTasks[id] = Task { [self] in
             let report: @Sendable (VoiceProgress) -> Void = { p in
                 Task { @MainActor in
-                    guard self.install?.voice == voice else { return }
-                    self.install = (voice, p)
-                    if self.installFromPlayer, self.question?.progress != nil { self.showDownload(p) }
+                    guard let i = self.downloads.firstIndex(where: { $0.id == id }) else { return }
+                    self.downloads[i].progress = p
+                    if self.playerDownload == id, self.question?.progress != nil { self.showDownload(p) }
                 }
             }
             let result: Result<Void, Error>
             do {
-                if let piper = VoiceCatalog.findPiper(voice) { try await VoiceInstaller.installPiper(piper, progress: report) }
-                else { try await VoiceInstaller.installKokoro(progress: report) }
+                try await installer(voice, report)
                 result = .success(())
             } catch {
                 result = .failure(Task.isCancelled ? CancellationError() : error)
             }
-            self.install = nil
-            self.installTask = nil
+            self.downloads.removeAll { $0.id == id }
+            self.installTasks[id] = nil
             done(result)
         }
+        return id
     }
 
-    /// Stop the voice download (the player's ✕, leaving the Read aloud page).
-    public func cancelInstall() { installTask?.cancel() }
+    /// Stop a voice download (the player's ✕, leaving the Read aloud page); nil = the latest one (Models' CANCEL).
+    public func cancelInstall(_ id: UUID? = nil) {
+        guard let id = id ?? downloads.last?.id else { return }
+        installTasks[id]?.cancel()
+    }
 
     /// The player's error card: "Read aloud couldn't start", the reason, and OK.
     public func showError(_ message: String) {
@@ -234,7 +257,7 @@ public final class ReadAloudPlayer: ObservableObject {
 
     /// Stop reading (or cancel the question or the player's download) and close the player.
     public func stop() {
-        if installFromPlayer { installTask?.cancel() }
+        if let playerDownload { cancelInstall(playerDownload) }
         tick?.invalidate()
         tick = nil
         if let s = session {
@@ -368,11 +391,46 @@ public final class ReadAloudPlayer: ObservableObject {
         guard sentences.indices.contains(i) else { return nil }
         let span = sentences[i]
         let ns = text as NSString
-        let upto = Int((fraction * Double(span.length)).rounded())
+        let upto = Int((fraction * Double(span.length)).rounded(.toNearestOrEven)) // Math.Round: a half to even
         var start = span.location + min(upto, span.length)
         while start > span.location, !ReadAloudText.isWordBreak(ns.character(at: start - 1)) { start -= 1 }
         var end = span.location + min(upto, span.length)
         while end < NSMaxRange(span), !ReadAloudText.isWordBreak(ns.character(at: end)) { end += 1 }
         return NSRange(location: start, length: end - start)
+    }
+}
+
+/// The Read aloud page's and Settings › Layout's sliders and the speeds the player shows, as Windows has them.
+public enum ReadAloudSliders {
+    /// A XAML Binding's StringFormat formats with the element's Language: en-US, as Oberton sets none.
+    static let xaml = Locale(identifier: "en_US")
+    public static let speedRange = 0.25...4.0, opacityRange = 0.3...1.0
+    /// TickFrequency with IsSnapToTickEnabled.
+    public static let speedTick = 0.05, opacityTick = 0.02
+    /// WPF Slider's SmallChange (the arrow keys) and LargeChange (Page Up / Down): the pages keep the defaults.
+    public static let smallChange = 0.1, largeChange = 1.0
+
+    /// BASE SPEED's readout, StringFormat {0:0.00}×: "1.75×" in every region.
+    public static func speedReadout(_ v: Double) -> String { NetNumber.fixed(v, digits: 2, locale: xaml) + "×" }
+    /// PLAYER OPACITY's (and Layout's) readout, StringFormat {0:P0}: "90%" in every region.
+    public static func opacityReadout(_ v: Double) -> String { NetNumber.percent(v, locale: xaml) }
+
+    /// On the ticks (both ranges start on one), to two decimals so no float noise is saved.
+    public static func snap(_ v: Double, tick: Double) -> Double { ((v / tick).rounded() * tick * 100).rounded() / 100 }
+
+    /// An arrow key on a snapping slider: SmallChange, kept in the range, onto the nearest tick (MoveToNextTick).
+    public static func step(_ v: Double, by delta: Double, range: ClosedRange<Double>, tick: Double) -> Double {
+        snap(min(max(v + delta, range.lowerBound), range.upperBound), tick: tick)
+    }
+
+    /// The player's speed, {s.Speed:0.0#}× in C#, so in the region: "1.0×", "1.65×" ("1,65×" in German).
+    public static func playerSpeed(_ s: Double, locale: Locale = .current) -> String {
+        let two = NetNumber.fixed(s, digits: 2, locale: locale)
+        return (two.hasSuffix("0") ? String(two.dropLast()) : two) + "×"
+    }
+
+    /// A speed in the player's menu, {speed:0.##}× in C#: "1×", "1.25×" ("1,25×").
+    public static func presetSpeed(_ s: Double, locale: Locale = .current) -> String {
+        NetNumber.fixed(s, digits: 2, optional: true, locale: locale) + "×"
     }
 }

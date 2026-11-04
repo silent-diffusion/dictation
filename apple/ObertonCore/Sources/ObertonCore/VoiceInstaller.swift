@@ -18,6 +18,22 @@ public struct VoiceProgress: Equatable, Sendable {
     }
 }
 
+extension VoiceProgress {
+    /// A download that hasn't reported yet: no title, an empty bar.
+    public static let waiting = VoiceProgress(step: 1, totalSteps: 1, title: "", fraction: 0, detail: "")
+}
+
+/// One voice download under way: which voice, which files it fetches (all of Kokoro's voices share one model), and
+/// how it is going.
+public struct VoiceDownload: Identifiable, Equatable, Sendable {
+    public let id: UUID
+    public let voice: String
+    let files: String
+    public var progress: VoiceProgress
+
+    static func files(_ voice: String) -> String { VoiceCatalog.findPiper(voice)?.id ?? VoiceCatalog.kokoro }
+}
+
 /// Downloads Read aloud's voices as data into models/kokoro and models/piper (Windows' RuntimeInstaller
 /// InstallReadAloudAsync / InstallPiperVoiceAsync): the same Kokoro v1.0 model and voices, and the same Piper files.
 /// Instead of Windows' voice engine (Python with espeak-ng), the Mac fetches the pronunciation dictionary its own
@@ -101,30 +117,38 @@ public enum VoiceInstaller {
         }
     }
 
-    /// Fetch `url` into `destination`, reporting the fraction done (nil while the size is unknown). The file only
-    /// appears once it is complete.
+    /// Fetch `url` into `destination`, reporting the fraction done (nil while the size is unknown) each time another
+    /// MB has arrived, as Windows' DownloadAsync (so nothing before the first MB, and nothing at the end). The file only
+    /// appears once it is complete. A network or server failure gives Windows' message.
     static func download(_ url: URL, to destination: URL, progress: @escaping @Sendable (Double?) -> Void) async throws {
         try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-        progress(nil)
         let fetcher = Fetcher(progress: progress)
         let temp: URL
         do {
             temp = try await fetcher.fetch(url)
         } catch {
             if Task.isCancelled || (error as? URLError)?.code == .cancelled { throw CancellationError() }
-            CoreLog.warn("Voice download failed: \(url.lastPathComponent): \(error.localizedDescription)")
-            throw UserFacingError("The download failed (\(error.localizedDescription)). Check the connection and try again.")
+            guard error is URLError else { throw error }
+            throw UserFacingError(networkFailure)
         }
         try? FileManager.default.removeItem(at: destination)
-        try FileManager.default.moveItem(at: temp, to: destination)
-        progress(1)
+        do {
+            try FileManager.default.moveItem(at: temp, to: destination)
+        } catch where FileManager.default.fileExists(atPath: destination.path) {
+            // Another download (the dictionary is shared by Kokoro and Piper) put it there first.
+            try? FileManager.default.removeItem(at: temp)
+        }
     }
 
+    /// RuntimeInstaller's text for a failed download (HttpRequestException).
+    static let networkFailure = "A download failed. Check your internet connection and click Retry."
+
     /// One download with progress, on its own URLSession (its delegate gets the byte counts).
-    private final class Fetcher: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+    final class Fetcher: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
         let progress: @Sendable (Double?) -> Void
         private var continuation: CheckedContinuation<URL, Error>?
         private let lock = NSLock()
+        private var lastReport: Int64 = 0
 
         init(progress: @escaping @Sendable (Double?) -> Void) { self.progress = progress }
 
@@ -150,7 +174,15 @@ public enum VoiceInstaller {
 
         func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData _: Int64, totalBytesWritten: Int64,
                         totalBytesExpectedToWrite: Int64) {
+            // Once more than 1 MB has come since the last report (`done - lastReport > 1 << 20`).
+            guard Self.shouldReport(written: totalBytesWritten, last: &lastReport) else { return }
             progress(totalBytesExpectedToWrite > 0 ? Double(totalBytesWritten) / Double(totalBytesExpectedToWrite) : nil)
+        }
+
+        static func shouldReport(written: Int64, last: inout Int64) -> Bool {
+            guard written - last > 1 << 20 else { return false }
+            last = written
+            return true
         }
 
         func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
