@@ -157,7 +157,8 @@ public struct AppSettings: Codable, Sendable, Equatable {
     public var insertion = InsertionMode.auto
     /// Per-app insertion override, keyed by the app's bundle identifier (Windows: by process name, e.g. "notepad").
     public var appOverrides: [String: InsertionMode] = [:]
-    /// In Auto mode, text longer than this (or containing line breaks) is pasted instead of typed.
+    /// Kept with Windows' settings file (`TypingMaxChars`), which defines it but whose inserter doesn't use it: typing
+    /// switches to pasting only for text with a line break, whatever its length.
     public var typingMaxChars = 400
     /// Read a sentence or two around the cursor to fix capitalization, trailing periods and spacing when inserting
     /// into the middle of existing text.
