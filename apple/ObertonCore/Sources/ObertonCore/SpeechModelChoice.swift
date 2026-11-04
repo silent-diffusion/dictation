@@ -34,7 +34,7 @@ public enum SpeechModelChoice {
 /// A new install's speech model while it downloads (Windows' RuntimeInstaller.ChooseModels at setup, ModelsChosen):
 /// picked once, when there was no settings.json at launch, and kept in speech-setup.json until it is downloaded and in
 /// use, so the launch's own settings save (or quitting before the download ends) can't lose it.
-public struct FirstRunSpeech: Sendable {
+public struct FirstRunSpeech {
     struct Setup: Codable { var model: String }
     private let file: JSONFile<Setup>
 
