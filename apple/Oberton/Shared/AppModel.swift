@@ -335,7 +335,7 @@ final class AppModel: ObservableObject {
         // when it starts (App.VoiceFor, TtsBaseSpeed).
         reader.currentVoice = { [weak self] in
             guard let self else { return nil }
-            return self.activeProfile.voice ?? self.settings.ttsVoice
+            return self.activeProfile.readVoice(fallback: self.settings.ttsVoice)
         }
         reader.baseSpeed = { [weak self] in self?.settings.ttsBaseSpeed ?? 1 }
         if !Self.snapshotMode { unloader.start(self) }
