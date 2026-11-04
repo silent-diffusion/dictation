@@ -118,7 +118,8 @@ private struct HotkeyBox: View {
             .font(Ob.sans(Ob.body)).lineLimit(1)
             .padding(.horizontal, 8).padding(.vertical, 6)
             .frame(width: 240, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 4).fill(ob.subtle))
+            // Fluent's ControlFillColorDefault: a little lighter than the page (white 70% / 6%).
+            .background(RoundedRectangle(cornerRadius: 4).fill(Color.white.opacity(ob.dark ? 0.06 : 0.7)))
             .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(ob.divider, lineWidth: 1))
             .overlay(alignment: .bottom) {
                 Rectangle().fill(recording ? ob.ink : ob.muted).frame(height: recording ? 2 : 1).padding(.horizontal, 2)
