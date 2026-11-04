@@ -74,8 +74,10 @@ public enum FragmentStitcher {
     static func dropRepeatedWord(before: String, piece: String) -> String {
         // Only when nothing ends the sentence in between ("…the. The…" is two sentences).
         if before.firstMatch(of: #/[.!?]\W*$/#) != nil { return piece }
+        // `\b` as .NET reads it (between a word character and any other), not Swift's default Unicode word rule, which
+        // keeps "3.5" as one word: "version 3" + "3.5 percent" drops the repeated "3" on both.
         guard let lastWord = before.firstMatch(of: #/([\p{L}\p{N}']+)\W*$/#)?.output.1,
-              let first = piece.firstMatch(of: #/^([\p{L}\p{N}']+)\b,?\s*/#) else { return piece }
+              let first = piece.firstMatch(of: #/^([\p{L}\p{N}']+)\b,?\s*/#.wordBoundaryKind(.simple)) else { return piece }
         return lastWord.lowercased() == first.output.1.lowercased() ? String(piece[first.range.upperBound...]) : piece
     }
 
