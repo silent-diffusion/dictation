@@ -527,7 +527,8 @@ struct NoteSessionView: View {
                 ZStack {
                     ForEach([Tab.transcript, .formatted, .summary], id: \.self) { t in
                         let doc = Self.doc(t)
-                        MarkdownEditor(text: text(doc), size: 14.5, label: t.rawValue, shown: tab == t,
+                        // Padding 14,12 inside the box's 1-px border.
+                        MarkdownEditor(text: text(doc), size: 14.5, label: t.rawValue, inset: CGSize(width: 15, height: 13), shown: tab == t,
                                        onEdit: { edit($0, doc) }, onCaret: { carets[t] = $0 }, jump: { jumpItem($0, doc) },
                                        playback: tab == t ? playback : nil)
                     }
@@ -1287,10 +1288,19 @@ struct FlowRow: Layout {
 struct NotesModelMenu: View {
     var width: CGFloat?
     @EnvironmentObject var model: AppModel
-    @State private var installed: [NotesModels.Installed] = []
+    /// The list as last filled: empty until Ollama first answers (Windows' box is empty until FillAsync), then kept
+    /// for the next time the menu shows, and filled again.
+    @State private var installed: [NotesModels.Installed]? = Self.lastInstalled ?? (PageScroll<EmptyView>.flat ? [] : nil)
+    private static var lastInstalled: [NotesModels.Installed]?
 
     var body: some View {
-        ObMenu(options: options, selection: Binding(get: { model.settings.notesModel }, set: { v in
+        let options = installed.map { self.options($0) } ?? []
+        ObMenu(options: options, selection: Binding(get: {
+            // The choice as stored, matched without regard to case (and an older "ollama:<name>" as that model).
+            let v = model.settings.notesModel
+            return options.first { $0.0.caseInsensitiveCompare(v) == .orderedSame }?.0
+                ?? options.first { $0.0.caseInsensitiveCompare(Self.bare(v)) == .orderedSame }?.0 ?? v
+        }, set: { v in
             guard v != model.settings.notesModel else { return }
             model.settings.notesModel = v
             Log.info("Extended notes: AI model set to " + (v.isEmpty ? "the best on this \(Device.noun)" : v))
@@ -1298,11 +1308,20 @@ struct NotesModelMenu: View {
             .help("Formats and sums up the session. Also under Settings › Models.")
             .accessibilityLabel("AI model for Extended Notes")
             .task {
-                if let url = try? OllamaBackend.validated(model.settings.ollamaEndpoint) { installed = await OllamaBackend.installedDetails(endpoint: url) }
+                var list: [NotesModels.Installed] = []
+                if let url = try? OllamaBackend.validated(model.settings.ollamaEndpoint) { list = await OllamaBackend.installedDetails(endpoint: url) }
+                installed = list
+                Self.lastInstalled = list
             }
     }
 
-    private var options: [(String, String)] {
+    /// An Ollama model is stored by its own name, as Windows stores it ("qwen3:8b"); older settings have "ollama:qwen3:8b".
+    static func bare(_ v: String) -> String {
+        if let id = ModelID(v), id.provider == .ollama { return id.name }
+        return v
+    }
+
+    private func options(_ installed: [NotesModels.Installed]) -> [(String, String)] {
         let st = model.settings
         let gpu = NotesRecorder.gpuBytes, ram = LocalModel.systemRam
         let best = NotesModels.pickBest(installed, gpuBytes: gpu, ramBytes: ram)
@@ -1313,27 +1332,33 @@ struct NotesModelMenu: View {
         if st.defaultModel != .appleOnDevice && AppleIntelligenceBackend.unavailableReason == nil {
             list.append((ModelID.appleOnDevice.description, ModelID.appleOnDevice.displayName))
         }
-        list += installed.filter(NotesModels.isChatModel).sorted { ($0.billions, $1.name) > ($1.billions, $0.name) }.map { m in
-            (ModelID(provider: .ollama, name: m.name).description,
+        // Largest first, then by name as the user's language sorts it (Windows' culture comparer).
+        list += installed.filter(NotesModels.isChatModel).sorted {
+            $0.billions != $1.billions ? $0.billions > $1.billions : $0.name.compare($1.name, locale: .current) == .orderedAscending
+        }.map { m in
+            (m.name,
              "\(m.name) · \(Self.billions(m.billions))B"
                 + (m.runsFromMemory(gpuBytes: gpu, ramBytes: ram) ? " (\(Self.billions(m.activeBillions))B at work) · runs from memory"
                    : NotesModels.fits(m, gpuBytes: gpu, ramBytes: ram) ? "" : " · slow on this \(Device.noun)"))
         }
         if !st.cloud.keepOffline {
             // Ollama's cloud models run on ollama.com, so they are listed as cloud models.
-            list += installed.filter { ModelID.isOllamaCloud($0.name) }.sorted { $0.name < $1.name }.map { m in
-                (ModelID(provider: .ollama, name: m.name).description, "\(m.name) · cloud: the transcript goes to ollama.com")
+            list += installed.filter { ModelID.isOllamaCloud($0.name) }.sorted { $0.name.compare($1.name, locale: .current) == .orderedAscending }.map { m in
+                (m.name, "\(m.name) · cloud: the transcript goes to ollama.com")
             }
             for c in CloudCatalog.anthropic where KeyStore.get(.anthropic) != nil { list.append((c.id.description, "\(c.title) · cloud: the transcript goes to Anthropic")) }
             if KeyStore.get(.openai) != nil { list.append(("openai:\(st.cloud.openAIModel)", "\(st.cloud.openAIModel) · cloud: the transcript goes to OpenAI-compatible")) }
         }
-        if !list.contains(where: { $0.0.lowercased() == st.notesModel.lowercased() }) { list.append((st.notesModel, st.notesModel + " · not available")) }
+        let current = st.notesModel
+        if !list.contains(where: { $0.0.caseInsensitiveCompare(current) == .orderedSame || $0.0.caseInsensitiveCompare(Self.bare(current)) == .orderedSame }) {
+            list.append((current, Self.bare(current) + " · not available"))
+        }
         return list
     }
 
-    /// "7.6", "30" (Windows' {0:0.#}, in the user's own decimal mark).
+    /// "7.6", "30" (Windows' {0:0.#}, a tie rounded away from zero, in the user's own decimal mark).
     static func billions(_ b: Double) -> String {
-        b.formatted(.number.precision(.fractionLength(0...1)).grouping(.never))
+        ((b * 10).rounded(.toNearestOrAwayFromZero) / 10).formatted(.number.precision(.fractionLength(0...1)).grouping(.never))
     }
 }
 

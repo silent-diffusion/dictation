@@ -196,7 +196,7 @@ final class EditedTextController: NSObject {
         tv.isSelectable = true
         tv.isRichText = true
         tv.drawsBackground = false
-        tv.textContainerInset = CGSize(width: 10, height: 8)
+        tv.textContainerInset = CGSize(width: 11, height: 9) // Padding 10,8 inside the box's 1-px border
         tv.textContainer?.lineFragmentPadding = 0
         tv.isVerticallyResizable = true
         tv.isHorizontallyResizable = false
@@ -234,7 +234,7 @@ final class EditedTextController: NSObject {
         tv.isEditable = false
         tv.isSelectable = true
         tv.backgroundColor = .clear
-        tv.textContainerInset = UIEdgeInsets(top: 8, left: 10, bottom: 8, right: 10)
+        tv.textContainerInset = UIEdgeInsets(top: 9, left: 11, bottom: 9, right: 11)
         tv.textContainer.lineFragmentPadding = 0
         tv.delegate = self
         tv.accessibilityLabel = "Edited: every change, in colour"

@@ -16,6 +16,8 @@ extension NSAttributedString.Key {
     static let obHidden = NSAttributedString.Key("ob.md.hidden")
     /// A list's marker character, drawn as "•".
     static let obBullet = NSAttributedString.Key("ob.md.bullet")
+    /// A numbered item's ")" drawn as "." (Windows writes every number as "N.").
+    static let obDot = NSAttributedString.Key("ob.md.dot")
     /// Drawn behind the line: a quote's bar, a code block's ground, a rule, the open line's ground (`MdDecor`).
     static let obDecor = NSAttributedString.Key("ob.md.decor")
 }
@@ -34,8 +36,8 @@ struct MarkdownLook: Equatable {
     var accent: PlatformColor { PlatformColor(palette.accent) }
     var subtle: PlatformColor { PlatformColor(palette.subtle) }
     var divider: PlatformColor { PlatformColor(palette.divider) }
-    /// The quote's bar (Windows' Ob.Border).
-    var border: PlatformColor { PlatformColor(palette.divider) }
+    /// The quote's bar (Windows' Ob.Border: solid ink).
+    var border: PlatformColor { PlatformColor(palette.ink) }
 
     static func headingScale(_ level: Int) -> CGFloat { level == 0 ? 1 : level == 1 ? 1.55 : level == 2 ? 1.32 : level == 3 ? 1.16 : 1.05 }
 
@@ -49,7 +51,7 @@ struct MarkdownLook: Equatable {
         Ob.monoFont(size, bold ? .bold : .regular)
     }
 
-    private static func italic(_ f: PlatformFont) -> PlatformFont {
+    static func italic(_ f: PlatformFont) -> PlatformFont {
         #if os(macOS)
         return NSFont(descriptor: f.fontDescriptor.withSymbolicTraits(f.fontDescriptor.symbolicTraits.union(.italic)), size: f.pointSize) ?? f
         #else
@@ -70,12 +72,19 @@ struct MarkdownLook: Equatable {
     }
 
     /// The open line's look (and what is typed into it): plain text, a heading keeping its size so the text doesn't
-    /// jump as the cursor goes in and out.
+    /// jump as the cursor goes in and out. Its height is a TextBox's own line (the face's line spacing, 1.33 of the size)
+    /// with the box's 1-px padding above and below.
     func openAttributes(headingLevel: Int) -> [NSAttributedString.Key: Any] {
         let scale = Self.headingScale(headingLevel)
         return [.font: sans(size * scale, bold: headingLevel > 0), .foregroundColor: ink,
-                .paragraphStyle: paragraph(lineHeight: (size * scale * 1.5).rounded(), after: size * 0.3, indent: 0),
+                .paragraphStyle: paragraph(lineHeight: size * scale * 1.33 + 2, after: size * 0.3, indent: 0),
                 .obDecor: MdDecor.open.rawValue]
+    }
+
+    /// New text from elsewhere, before it is styled: not shown until the next restyle (Windows shows nothing of it
+    /// until its 300 ms render), on body lines so the text below hardly moves.
+    var pendingAttributes: [NSAttributedString.Key: Any] {
+        [.font: sans(size), .foregroundColor: PlatformColor.clear, .paragraphStyle: paragraph(lineHeight: size * 1.55)]
     }
 }
 
@@ -98,7 +107,7 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
         var newGlyphs = Array(UnsafeBufferPointer(start: glyphs, count: glyphRange.length))
         var newProps = Array(UnsafeBufferPointer(start: props, count: glyphRange.length))
         var changed = false
-        var bullet: CGGlyph = 0
+        var bullet: CGGlyph = 0, dot: CGGlyph = 0
         for i in 0..<glyphRange.length {
             let c = charIndexes[i]
             guard c < storage.length else { continue }
@@ -112,6 +121,12 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
                     CTFontGetGlyphsForCharacters(aFont as CTFont, &ch, &bullet, 1)
                 }
                 if bullet != 0 { newGlyphs[i] = bullet; changed = true }
+            } else if storage.attribute(.obDot, at: c, effectiveRange: nil) != nil {
+                if dot == 0 {
+                    var ch: UniChar = 0x2E
+                    CTFontGetGlyphsForCharacters(aFont as CTFont, &ch, &dot, 1)
+                }
+                if dot != 0 { newGlyphs[i] = dot; changed = true }
             }
         }
         guard changed else { return 0 }
@@ -139,13 +154,21 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
             if rect.isNull, range.location >= storage.length || glyphs.length == 0 { rect = extraLineFragmentRect }
             guard !rect.isNull, rect.height > 0 else { return }
             rect = rect.offsetBy(dx: origin.x, dy: origin.y)
+            // The space after the block (its margin) belongs to the gap, not to the block: a quote's bar and a code
+            // block's ground cover its padding box only, as a WPF paragraph's border and background do.
+            let last = max(range.location, NSMaxRange(range) - 1)
+            let after = last < storage.length ? ((storage.attribute(.paragraphStyle, at: last, effectiveRange: nil) as? NSParagraphStyle)?.paragraphSpacing ?? 0) : 0
+            let before = range.location < storage.length ? ((storage.attribute(.paragraphStyle, at: range.location, effectiveRange: nil) as? NSParagraphStyle)?.paragraphSpacingBefore ?? 0) : 0
             switch decor {
             case .quote:
-                Self.fill(CGRect(x: rect.minX, y: rect.minY + 2, width: 2, height: rect.height - 4), look.border)
+                let pad: CGFloat = 2
+                let top = rect.minY + max(0, before - pad)
+                Self.fill(CGRect(x: rect.minX, y: top, width: 2, height: rect.maxY - max(0, after - pad) - top), look.border)
             case .code:
-                Self.fill(CGRect(x: rect.minX, y: rect.minY, width: width, height: rect.height), look.subtle)
+                Self.fill(CGRect(x: rect.minX, y: rect.minY + before, width: width, height: rect.height - before - after), look.subtle)
             case .rule:
-                Self.fill(CGRect(x: rect.minX, y: rect.midY.rounded(), width: width, height: 1), look.divider)
+                // A 2-high paragraph with a 1-px line under it (MarkdownRender: FontSize 2, LineHeight 2, bottom border 1).
+                Self.fill(CGRect(x: rect.minX, y: (rect.minY + before + 2).rounded(), width: width, height: 1), look.divider)
             case .open:
                 Self.fill(CGRect(x: rect.minX - 4, y: rect.minY, width: width + 8, height: rect.height - look.size * 0.3), look.subtle, radius: 3)
             }
@@ -177,6 +200,26 @@ final class MarkdownStyler {
         var level = 0
         var first = true
         var last = true
+        /// The space before the block once its margin has collapsed with the one after the block above (a WPF
+        /// FlowDocument keeps the larger of two touching margins; TextKit would add them).
+        var before: CGFloat = 0
+    }
+
+    /// A block's own margins (MarkdownRender.MakeParagraph): above its first line, below its last.
+    private func margins(_ info: LineInfo) -> (before: CGFloat, after: CGFloat) {
+        let size = look.size
+        switch info.kind {
+        case .blank: return (0, 0)
+        case .fence: return (0, info.last ? size * 0.75 : 0)
+        case .block(let kind):
+            switch kind {
+            case .heading: return (info.first ? size * 0.5 : 0, info.last ? size * 0.4 : 0)
+            case .bullet, .numbered: return (0, info.last ? size * 0.3 : 0)
+            case .rule: return (size * 0.3, size * 0.9)
+            case .code: return (0, 0) // its fences carry its space
+            case .quote, .marker, .paragraph: return (0, info.last ? size * 0.75 : 0)
+            }
+        }
     }
 
     /// The lines of a text: each one's range without its line break (and a "\r" before it), and with it.
@@ -234,6 +277,14 @@ final class MarkdownStyler {
             }
             for s in b.spans where !s.isBreak && !s.text.isEmpty { spans[Self.lineIndex(lines, s.offset)].append(s) }
         }
+        // Margins collapse across blank lines: the space between two blocks is the larger of the two.
+        var above: CGFloat = 0
+        for i in info.indices {
+            if case .blank = info[i].kind { continue }
+            let m = margins(info[i])
+            info[i].before = max(0, m.before - above)
+            above = m.after
+        }
 
         var changed = false
         storage.beginEditing()
@@ -268,7 +319,10 @@ final class MarkdownStyler {
     private func style(_ storage: NSTextStorage, _ ns: NSString, _ content: NSRange, _ full: NSRange, _ info: LineInfo,
                        _ block: NotesMarkdown.Block?, _ spans: [NotesMarkdown.Span]) {
         let size = look.size
-        let body = look.paragraph(lineHeight: (size * 1.55).rounded(), after: info.last ? size * 0.75 : 0)
+        let after = margins(info).after
+        // Windows' FlowDocument line height, size × 1.55, as it is (not rounded).
+        let line = size * 1.55
+        let body = look.paragraph(lineHeight: line, before: info.before, after: after)
         var base: [NSAttributedString.Key: Any] = [.font: look.sans(size), .foregroundColor: look.ink, .paragraphStyle: body]
         var color = look.ink
         var scale: CGFloat = 1
@@ -276,38 +330,42 @@ final class MarkdownStyler {
         var mono = false
         switch info.kind {
         case .blank:
-            // A blank line between blocks takes no room of its own: the blocks' own spacing is the gap.
+            // A blank line between blocks takes no room (Windows makes no paragraph of it): the blocks' own margins are
+            // the gap.
             base[.font] = look.sans(1)
-            base[.paragraphStyle] = look.paragraph(lineHeight: 1)
+            base[.paragraphStyle] = look.paragraph(lineHeight: 0.01)
         case .fence:
-            // The fences are the code block's padding; the closing one its space below.
+            // The fences are the code block's padding (6 above and below); the closing one its margin below.
             base[.font] = look.sans(1)
-            base[.paragraphStyle] = look.paragraph(lineHeight: 6, after: info.last ? size * 0.75 : 0)
+            base[.paragraphStyle] = look.paragraph(lineHeight: 6, before: info.before, after: after)
             base[.obDecor] = MdDecor.code.rawValue
         case .block(let kind):
             switch kind {
             case .heading:
                 scale = MarkdownLook.headingScale(info.level)
                 bold = true
-                base[.paragraphStyle] = look.paragraph(lineHeight: (size * scale * 1.3).rounded(), before: size * 0.5, after: size * 0.4)
+                base[.paragraphStyle] = look.paragraph(lineHeight: size * scale * 1.3, before: info.before, after: after)
             case .bullet, .numbered:
                 let indent = 20 + CGFloat(info.level) * 20
-                base[.paragraphStyle] = look.paragraph(lineHeight: (size * 1.55).rounded(), after: size * 0.3, indent: indent, firstIndent: indent - 16)
+                base[.paragraphStyle] = look.paragraph(lineHeight: line, before: info.before, after: after, indent: indent, firstIndent: indent - 16)
             case .quote:
+                // Padding 12,2,0,2 inside a 2-px bar: 2 above the first line and below the last, then the margin.
                 color = look.muted
-                base[.paragraphStyle] = look.paragraph(lineHeight: (size * 1.55).rounded(), before: info.first ? 2 : 0,
-                                                       after: info.last ? size * 0.75 + 2 : 0, indent: 14)
+                base[.paragraphStyle] = look.paragraph(lineHeight: line, before: info.first ? info.before + 2 : 0,
+                                                       after: info.last ? after + 2 : 0, indent: 14)
                 base[.obDecor] = MdDecor.quote.rawValue
             case .code:
+                // The code inherits the document's line height (only its size is 0.92).
                 mono = true
-                base[.paragraphStyle] = look.paragraph(lineHeight: (size * 1.4).rounded(), indent: 10, tail: -10)
+                base[.paragraphStyle] = look.paragraph(lineHeight: line, indent: 10, tail: -10)
                 base[.obDecor] = MdDecor.code.rawValue
             case .rule:
-                base[.paragraphStyle] = look.paragraph(lineHeight: size, before: size * 0.3, after: size * 0.9)
+                base[.font] = look.sans(1)
+                base[.paragraphStyle] = look.paragraph(lineHeight: 3, before: info.before, after: after)
                 base[.obDecor] = MdDecor.rule.rawValue
             case .marker:
                 color = look.accent
-                base[.paragraphStyle] = look.paragraph(lineHeight: (size * 1.55).rounded(), after: size * 0.75)
+                base[.paragraphStyle] = look.paragraph(lineHeight: line, before: info.before, after: after)
             case .paragraph:
                 break
             }
@@ -322,25 +380,36 @@ final class MarkdownStyler {
             storage.removeAttribute(.obHidden, range: r)
             var font: PlatformFont
             if case .block(.marker) = info.kind { font = look.mono(size * 0.9, bold: true) }
-            else if mono || s.code { font = look.mono(size * 0.92) }
+            else if mono { font = look.mono(size * 0.92) }
+            else if s.code {
+                // Inline code keeps the run's bold and italic, and a heading's bold (MarkdownRender keeps them on the run).
+                font = look.mono(size * 0.92, bold: bold || s.bold)
+                if s.italic { font = MarkdownLook.italic(font) }
+            }
             else { font = look.sans(size * scale, bold: bold || s.bold, italic: s.italic) }
             storage.addAttribute(.font, value: font, range: r)
             if s.code && !mono { storage.addAttribute(.backgroundColor, value: look.subtle, range: r) }
         }
-        // A list item's bullet or number, muted, with room after it.
+        // A list item's bullet or number, muted, at the body size, then two spaces' room ("•  ", "N.  "): every
+        // number is written with a dot.
         if case .block(let kind) = info.kind, kind == .bullet || kind == .numbered, info.first {
             let lead = (ns.substring(with: content) as String).utf16.prefix { NotesMarkdown.white($0) }.count
             let at = content.location + lead
             let markLength = kind == .bullet ? 1 : (block?.number.utf16.count ?? 1) + 1
             let mark = NSRange(location: at, length: min(markLength + 1, NSMaxRange(content) - at))
+            let face = look.sans(size)
             storage.removeAttribute(.obHidden, range: mark)
             storage.addAttribute(.foregroundColor, value: look.muted, range: mark)
-            storage.addAttribute(.font, value: look.sans(size), range: mark)
+            storage.addAttribute(.font, value: face, range: mark)
             if kind == .bullet {
                 storage.addAttribute(.obBullet, value: true, range: NSRange(location: at, length: 1))
-                storage.addAttribute(.font, value: look.sans(size * 1.25), range: NSRange(location: at, length: 1)) // "•" reads small in SF
+            } else if markLength <= mark.length, ns.character(at: at + markLength - 1) == 0x29 {
+                storage.addAttribute(.obDot, value: true, range: NSRange(location: at + markLength - 1, length: 1))
             }
-            if mark.length > markLength { storage.addAttribute(.kern, value: size * 0.45, range: NSRange(location: at + markLength, length: 1)) }
+            if mark.length > markLength {
+                let space = (" " as NSString).size(withAttributes: [.font: face]).width
+                storage.addAttribute(.kern, value: space, range: NSRange(location: at + markLength, length: 1))
+            }
         }
     }
 }

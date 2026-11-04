@@ -120,7 +120,7 @@ final class MarkdownEditorController: NSObject {
         let selection = selectedRange
         applying = true
         if new.hasPrefix(old) {
-            storage.append(NSAttributedString(string: (new as NSString).substring(from: (old as NSString).length), attributes: [.font: styler.look.sans(styler.look.size)]))
+            storage.append(NSAttributedString(string: (new as NSString).substring(from: (old as NSString).length), attributes: styler.look.pendingAttributes))
             selectedRange = selection
         } else {
             let (offset, removed, added) = NoteSession.change(old, new)
@@ -214,11 +214,57 @@ final class MarkdownEditorController: NSObject {
         refreshCaret()
     }
 
-    /// Esc: back to the whole text rendered; typing then goes on at the end.
+    /// Esc: back to the whole text rendered, nothing left selected (the view is drawn afresh); typing then goes on at the end.
     func escape() {
         closed = true
+        let sel = selectedRange
+        if sel.length > 0 { applying = true; selectedRange = NSRange(location: sel.location, length: 0); applying = false }
         setOpen(nil)
         refreshCaret()
+    }
+
+    /// Up and Down on the open line's first or last row (MarkdownPresenter.OnKey): the line above or below opens with the
+    /// cursor at the same character; at the first or last line of the text nothing moves. Returns whether it was
+    /// handled here (elsewhere in a wrapped line the cursor moves row by row as usual).
+    func moveLine(_ step: Int) -> Bool {
+        guard !closed, let o = open else { return false }
+        let sel = selectedRange
+        guard sel.length == 0 else { return false }
+        let ls = lines
+        guard o < ls.count else { return false }
+        let content = ls[o].content
+        func row(_ offset: Int) -> CGFloat {
+            let g = layout.glyphIndexForCharacter(at: min(offset, max(0, storage.length - 1)))
+            return layout.lineFragmentRect(forGlyphAt: g, effectiveRange: nil).minY
+        }
+        if storage.length > 0, content.length > 0 {
+            let edge = step < 0 ? content.location : max(content.location, NSMaxRange(content) - 1)
+            if row(sel.location) != row(edge) && !(step > 0 && sel.location == NSMaxRange(content) && row(sel.location - 1) == row(edge)) { return false }
+        }
+        let target = o + step
+        guard target >= 0, target < ls.count else { return true }
+        let col = sel.location - content.location
+        selectedRange = NSRange(location: ls[target].content.location + min(col, ls[target].content.length), length: 0)
+        return true
+    }
+
+    /// A selection made from the keyboard stays inside the open line (it is a one-line box on Windows).
+    func keepInOpenLine() {
+        guard !closed, let o = open else { return }
+        let ls = lines
+        guard o < ls.count else { return }
+        let c = ls[o].content, sel = selectedRange
+        let a = min(max(sel.location, c.location), NSMaxRange(c)), b = min(max(NSMaxRange(sel), c.location), NSMaxRange(c))
+        if a != sel.location || b != NSMaxRange(sel) { selectedRange = NSRange(location: a, length: b - a) }
+    }
+
+    /// ⌘↑ / ⌘↓ on the open line: its start or end (Ctrl+Home/End in Windows' one-line box), not the whole text's.
+    func toLineEdge(end: Bool) -> Bool {
+        guard !closed, let o = open else { return false }
+        let ls = lines
+        guard o < ls.count else { return false }
+        selectedRange = NSRange(location: end ? NSMaxRange(ls[o].content) : ls[o].content.location, length: 0)
+        return true
     }
 
     func lostFocus() {
@@ -288,11 +334,18 @@ final class MarkdownEditorController: NSObject {
         }
     }
 
+    /// The view's name for VoiceOver ("Transcript, formatted for reading; click a line to edit it"), and while a line is
+    /// open "Transcript, the line being edited" (the open line's own name on Windows).
+    var label = ""
+
     private func refreshCaret() {
+        let editing = !closed && open != nil
         #if os(macOS)
-        textView?.insertionPointColor = closed || open == nil ? .clear : styler.look.ink
+        textView?.insertionPointColor = editing ? styler.look.ink : .clear
+        textView?.setAccessibilityLabel(label + (editing ? ", the line being edited" : ", formatted for reading; click a line to edit it"))
         #else
         textView?.tintColor = styler.look.ink
+        textView?.accessibilityLabel = label + (editing ? ", the line being edited" : ", formatted for reading; click a line to edit it")
         #endif
     }
 
@@ -607,9 +660,30 @@ final class MarkdownTextView: NSTextView {
 
     override func cancelOperation(_ sender: Any?) { controller?.escape() }
 
-    /// Tab moves to the next control rather than typing a tab (Windows' AcceptsTab="False").
-    override func insertTab(_ sender: Any?) { window?.selectNextKeyView(nil) }
-    override func insertBacktab(_ sender: Any?) { window?.selectPreviousKeyView(nil) }
+    /// Tab moves to the next control rather than typing a tab (Windows' AcceptsTab="False"); with no other control to
+    /// go to (buttons take the keyboard only with Keyboard navigation on), the keyboard leaves the text all the same,
+    /// so the open line renders again as on Windows.
+    override func insertTab(_ sender: Any?) {
+        window?.selectNextKeyView(nil)
+        if window?.firstResponder === self { window?.makeFirstResponder(nil) }
+    }
+    override func insertBacktab(_ sender: Any?) {
+        window?.selectPreviousKeyView(nil)
+        if window?.firstResponder === self { window?.makeFirstResponder(nil) }
+    }
+
+    override func moveUp(_ sender: Any?) { if controller?.moveLine(-1) != true { super.moveUp(sender) } }
+    override func moveDown(_ sender: Any?) { if controller?.moveLine(1) != true { super.moveDown(sender) } }
+    override func moveToBeginningOfDocument(_ sender: Any?) { if controller?.toLineEdge(end: false) != true { super.moveToBeginningOfDocument(sender) } }
+    override func moveToEndOfDocument(_ sender: Any?) { if controller?.toLineEdge(end: true) != true { super.moveToEndOfDocument(sender) } }
+    override func moveUpAndModifySelection(_ sender: Any?) { super.moveUpAndModifySelection(sender); controller?.keepInOpenLine() }
+    override func moveDownAndModifySelection(_ sender: Any?) { super.moveDownAndModifySelection(sender); controller?.keepInOpenLine() }
+    override func moveLeftAndModifySelection(_ sender: Any?) { super.moveLeftAndModifySelection(sender); controller?.keepInOpenLine() }
+    override func moveRightAndModifySelection(_ sender: Any?) { super.moveRightAndModifySelection(sender); controller?.keepInOpenLine() }
+    override func moveWordLeftAndModifySelection(_ sender: Any?) { super.moveWordLeftAndModifySelection(sender); controller?.keepInOpenLine() }
+    override func moveWordRightAndModifySelection(_ sender: Any?) { super.moveWordRightAndModifySelection(sender); controller?.keepInOpenLine() }
+    override func moveToBeginningOfDocumentAndModifySelection(_ sender: Any?) { super.moveToBeginningOfDocumentAndModifySelection(sender); controller?.keepInOpenLine() }
+    override func moveToEndOfDocumentAndModifySelection(_ sender: Any?) { super.moveToEndOfDocumentAndModifySelection(sender); controller?.keepInOpenLine() }
 
     /// While nothing is open, the keys scroll; deleting does nothing.
     override func keyDown(with event: NSEvent) {
@@ -647,6 +721,7 @@ extension MarkdownEditor: NSViewRepresentable {
         let scroll = context.coordinator.makeView()
         context.coordinator.watchClicks()
         context.coordinator.textView.textContainerInset = inset
+        context.coordinator.label = label
         context.coordinator.textView.setAccessibilityLabel(label + ", formatted for reading; click a line to edit it")
         update(context.coordinator, palette: context.environment.ob)
         return scroll
@@ -699,7 +774,8 @@ extension MarkdownEditor: UIViewRepresentable {
     func makeUIView(context: Context) -> MarkdownUITextView {
         let tv = context.coordinator.makeView()
         tv.textContainerInset = UIEdgeInsets(top: inset.height, left: inset.width, bottom: inset.height, right: inset.width)
-        tv.accessibilityLabel = label
+        context.coordinator.label = label
+        tv.accessibilityLabel = label + ", formatted for reading; click a line to edit it"
         update(context.coordinator, palette: context.environment.ob)
         return tv
     }
