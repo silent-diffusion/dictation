@@ -81,10 +81,10 @@ struct MarkdownLook: Equatable {
                 .obDecor: MdDecor.open.rawValue]
     }
 
-    /// New text from elsewhere, before it is styled: not shown until the next restyle (Windows shows nothing of it
-    /// until its 300 ms render), on body lines so the text below hardly moves.
+    /// New text from elsewhere, before it is styled: not shown, and taking next to no room, until the next restyle
+    /// (Windows shows nothing of it, and lays nothing out for it, until its 300 ms render: READ-127).
     var pendingAttributes: [NSAttributedString.Key: Any] {
-        [.font: sans(size), .foregroundColor: PlatformColor.clear, .paragraphStyle: paragraph(lineHeight: size * 1.55)]
+        [.font: sans(0.1), .foregroundColor: PlatformColor.clear, .paragraphStyle: paragraph(lineHeight: 0.1)]
     }
 }
 
@@ -260,7 +260,7 @@ final class MarkdownStyler {
         func isFence(_ i: Int) -> Bool {
             i < lines.count && fence.firstMatch(in: storage.string, range: lines[i].content) != nil
         }
-        for b in NotesMarkdown.parse(storage.string) {
+        for b in NotesMarkdown.parse(storage.string, escapesApart: true) { // rendered in place: each span at its own characters
             let first = Self.lineIndex(lines, b.offset)
             var last = b.spans.last.map { Self.lineIndex(lines, $0.offset) } ?? first
             if b.kind == .code {
@@ -280,6 +280,13 @@ final class MarkdownStyler {
         // Margins collapse across blank lines: the space between two blocks is the larger of the two.
         var above: CGFloat = 0
         for i in info.indices {
+            // The open line is Windows' line box (a BlockUIContainer, Margin 0,0,0,0.3 × size): its own gap below
+            // collapses with the next block's top margin, whatever block the line belongs to (READ-130, READ-N019).
+            if i == open {
+                info[i].before = 0
+                above = look.size * 0.3
+                continue
+            }
             if case .blank = info[i].kind { continue }
             let m = margins(info[i])
             info[i].before = max(0, m.before - above)

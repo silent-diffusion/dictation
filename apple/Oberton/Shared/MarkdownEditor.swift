@@ -37,6 +37,8 @@ struct MarkdownEditor {
     var jump: ((Int) -> MarkdownJump?)? = nil
     /// While the recording plays: the word being said is lit in the accent (nil: nothing is lit).
     var playback: PlaybackWords? = nil
+    /// Only a click on a control marked `takesFocusOnClick()` renders the open line again (macOS; see `watchClicks`).
+    var focusClicksOnly = false
 
     func makeCoordinator() -> MarkdownEditorController { MarkdownEditorController() }
 
@@ -45,6 +47,9 @@ struct MarkdownEditor {
         c.onFocus = onFocus
         c.onCaret = onCaret
         c.jump = jump
+        #if os(macOS)
+        c.focusClicksOnly = focusClicksOnly
+        #endif
         c.setLook(MarkdownLook(size: size, palette: palette))
         c.setText(text)
         c.setShown(shown)
@@ -133,11 +138,22 @@ final class MarkdownEditorController: NSObject {
         } else {
             let (offset, removed, added) = NoteSession.change(old, new)
             let ns = new as NSString
-            storage.replaceCharacters(in: NSRange(location: offset, length: removed), with: ns.substring(with: NSRange(location: offset, length: added)))
+            // Not shown until the next render, as an appended piece (Windows keeps the old rendering until its tick):
+            // the new text never takes the look of what it replaced, nor shows its raw Markdown meanwhile.
+            storage.replaceCharacters(in: NSRange(location: offset, length: removed),
+                                      with: NSAttributedString(string: ns.substring(with: NSRange(location: offset, length: added)), attributes: styler.look.pendingAttributes))
             let a = NoteSession.move(selection.location, offset, removed, added)
             let b = NoteSession.move(NSMaxRange(selection), offset, removed, added)
             selectedRange = NSRange(location: min(a, ns.length), length: max(0, min(b, ns.length) - min(a, ns.length)))
-            undoManager?.removeAllActions()
+            // The user's own edits can still be undone when the change came after all of them (the AI's formatting
+            // replacing the tail, as Windows' open line keeps its undo); one before them would shift what they undo.
+            if offset < editReach { undoManager?.removeAllActions(); editReach = 0 }
+            // The open line's own undo (the Mac) goes when the change reached into that line: Windows sets the line
+            // box's text afresh then, which empties its undo.
+            if let o = open, o < MarkdownStyler.lines(old as NSString).count {
+                let full = MarkdownStyler.lines(old as NSString)[o].full
+                if offset <= NSMaxRange(full) && offset + removed >= full.location { forgetLineUndo() }
+            }
         }
         applying = false
         if let o = open { open = min(o, MarkdownStyler.lines(storage.string as NSString).count - 1) }
@@ -155,9 +171,13 @@ final class MarkdownEditorController: NSObject {
         followEnd = false
     }
 
+    /// How far into the text the user's edits (what ⌘Z would undo) reach: a change from elsewhere after it keeps them.
+    private var editReach = 0
+
     /// The user typed: the session takes the text; the lines around are rendered again.
     func userEdited() {
         guard !applying else { return }
+        editReach = max(editReach, NSMaxRange(selectedRange) + 1)
         onEdit(storage.string)
         restyle()
     }
@@ -184,6 +204,7 @@ final class MarkdownEditorController: NSObject {
 
     private func setOpen(_ line: Int?) {
         guard line != open else { return }
+        forgetLineUndo() // a new line box on Windows, with an undo of its own
         open = line
         restyle()
         refreshCaret()
@@ -205,6 +226,32 @@ final class MarkdownEditorController: NSObject {
     }
 
     func willClick() { clicking = true }
+
+    /// A mouse-down while a line is open (MarkdownPresenter's PreviewMouseLeftButtonDown): on another line, that line
+    /// opens at once with the cursor at the place clicked, and the click goes no further (no drag can start there). True
+    /// when it was handled so.
+    func mouseDownElsewhere(at offset: Int) -> Bool {
+        guard !closed, let o = open else { return false }
+        let ls = lines
+        guard o < ls.count else { return false }
+        let c = ls[o].content
+        if offset >= c.location && offset <= NSMaxRange(c) { return false }
+        selectedRange = NSRange(location: min(max(0, offset), storage.length), length: 0)
+        selectionChanged()
+        refreshCaret()
+        return true
+    }
+
+    /// The open line is a one-line box on Windows: a drag that began in it, or ⌘A, selects within it.
+    func selectAllInOpenLine() -> Bool {
+        guard !closed, let o = open else { return false }
+        let ls = lines
+        guard o < ls.count else { return false }
+        selectedRange = ls[o].content
+        return true
+    }
+
+    var lineOpen: Bool { !closed && open != nil }
 
     /// After a click: a plain click opens the line there. A drag over the text read selects it to copy: it stays
     /// rendered (MarkdownPresenter's mouse-up returns while the viewer has a selection), and typing still goes on at the end.
@@ -236,8 +283,8 @@ final class MarkdownEditorController: NSObject {
     /// handled here (elsewhere in a wrapped line the cursor moves row by row as usual).
     func moveLine(_ step: Int) -> Bool {
         guard !closed, let o = open else { return false }
-        let sel = selectedRange
-        guard sel.length == 0 else { return false }
+        // With a selection too: Windows goes by the box's CaretIndex, the selection's start.
+        let sel = NSRange(location: selectedRange.location, length: 0)
         let ls = lines
         guard o < ls.count else { return false }
         let content = ls[o].content
@@ -293,6 +340,8 @@ final class MarkdownEditorController: NSObject {
     func setShown(_ shown: Bool) {
         guard shown != isShown else { return }
         isShown = shown
+        // Windows' ShowView acts only while a line is open: a selection made over the text read stays for the tab's return.
+        let wasOpen = !closed && open != nil
         #if os(macOS)
         guard let tv = textView, let scroll = tv.enclosingScrollView else { return }
         if !shown, tv.window?.firstResponder === tv { tv.window?.makeFirstResponder(nil) }
@@ -302,7 +351,7 @@ final class MarkdownEditorController: NSObject {
         if !shown, tv.isFirstResponder { _ = tv.resignFirstResponder() }
         tv.isHidden = !shown
         #endif
-        if !shown { escape() }
+        if !shown && wasOpen { escape() }
     }
 
     /// Typing while nothing is open: it goes on at the end of the text.
@@ -328,7 +377,7 @@ final class MarkdownEditorController: NSObject {
     /// line break is the text's own ("\r\n" in a text that has one). With ⌥ or ⌃ (or ⌘) nothing happens: Windows splits
     /// only on Enter without modifiers (Shift aside), and the line box doesn't take a Return of its own. While nothing
     /// is open, Return goes to the read view as typing does: the last line opens with the cursor at its end, and no line
-    /// is added.
+    /// is added (Windows' read-only viewer also appends a bare "\r" to the text there, a WPF quirk left out: READ-125).
     func returnKey(modified: Bool) {
         if closed { beforeTyping(); return }
         if modified { return }
@@ -352,15 +401,82 @@ final class MarkdownEditorController: NSObject {
     /// open "Transcript, the line being edited" (the open line's own name on Windows).
     var label = ""
 
+    private var announcedEditing = false
+
     private func refreshCaret() {
         let editing = !closed && open != nil
+        let name = label + (editing ? ", the line being edited" : ", formatted for reading; click a line to edit it")
         #if os(macOS)
         textView?.insertionPointColor = editing ? styler.look.ink : .clear
-        textView?.setAccessibilityLabel(label + (editing ? ", the line being edited" : ", formatted for reading; click a line to edit it"))
+        textView?.setAccessibilityLabel(name)
         #else
         textView?.tintColor = styler.look.ink
-        textView?.accessibilityLabel = label + (editing ? ", the line being edited" : ", formatted for reading; click a line to edit it")
+        textView?.accessibilityLabel = name
         #endif
+        // Windows' open line is an element of its own that takes the focus, so Narrator says its name as a line opens
+        // and the viewer's as it closes; here the one text view is renamed, and VoiceOver is told the new name.
+        guard editing != announcedEditing else { return }
+        announcedEditing = editing
+        #if os(macOS)
+        guard let tv = textView, tv.window?.firstResponder === tv || editing else { return }
+        NSAccessibility.post(element: tv, notification: .announcementRequested,
+                             userInfo: [.announcement: name, .priority: NSAccessibilityPriorityLevel.high.rawValue])
+        #else
+        guard textView?.isFirstResponder == true || editing else { return }
+        UIAccessibility.post(notification: .announcement, argument: name)
+        #endif
+    }
+
+    // MARK: The open line's undo
+
+    /// ⌘Z / ⇧⌘Z undo and redo what was typed in the open line since it opened, as Windows' line box (a TextBox of its
+    /// own, made each time a line opens) does: a step is the line as it was. Changes from elsewhere don't touch it.
+    private var lineUndo: [(text: String, caret: Int)] = []
+    private var lineRedo: [(text: String, caret: Int)] = []
+    /// Where the last edit ended and whether it typed: typing on from there is the same step (a TextBox merges it).
+    private var lastEdit: (end: Int, typing: Bool)?
+
+    private func forgetLineUndo() {
+        lineUndo = []
+        lineRedo = []
+        lastEdit = nil
+    }
+
+    var canUndoLine: Bool { lineOpen && !lineUndo.isEmpty }
+    var canRedoLine: Bool { lineOpen && !lineRedo.isEmpty }
+
+    /// The user is about to change `range` in the open line: the line as it is now becomes an undo step.
+    func willEdit(_ range: NSRange, _ replacement: String) {
+        guard !applying, !closed, let o = open else { return }
+        let ls = lines
+        guard o < ls.count else { return }
+        let typing = range.length == 0 && !replacement.isEmpty
+        let end = range.location + (replacement as NSString).length
+        defer { lastEdit = (end, typing) }
+        lineRedo = []
+        if let last = lastEdit, last.typing, typing, last.end == range.location { return }
+        let c = ls[o].content
+        lineUndo.append(((storage.string as NSString).substring(with: c), selectedRange.location - c.location))
+    }
+
+    /// Undo (or redo) a step of the open line. False when there is none (the key does nothing then).
+    @discardableResult
+    func undoLine(redo: Bool) -> Bool {
+        guard !closed, let o = open, let step = redo ? lineRedo.popLast() : lineUndo.popLast() else { return false }
+        let ls = lines
+        guard o < ls.count else { return false }
+        let c = ls[o].content
+        let now = ((storage.string as NSString).substring(with: c), selectedRange.location - c.location)
+        if redo { lineUndo.append(now) } else { lineRedo.append(now) }
+        applying = true
+        storage.replaceCharacters(in: c, with: NSAttributedString(string: step.text, attributes: typingAttributes))
+        selectedRange = NSRange(location: c.location + min(max(0, step.caret), (step.text as NSString).length), length: 0)
+        applying = false
+        lastEdit = nil
+        onEdit(storage.string)
+        restyle()
+        onCaret?(selectedRange.location)
+        return true
     }
 
     // MARK: The word being said
@@ -444,7 +560,7 @@ final class MarkdownEditorController: NSObject {
         tv.delegate = self
         tv.isRichText = false
         tv.importsGraphics = false
-        tv.allowsUndo = true
+        tv.allowsUndo = false // the open line keeps its own (`undoLine`)
         tv.isAutomaticQuoteSubstitutionEnabled = false
         tv.isAutomaticDashSubstitutionEnabled = false
         tv.isAutomaticTextReplacementEnabled = false
@@ -491,10 +607,15 @@ final class MarkdownEditorController: NSObject {
 
     private func focus() { textView?.window?.makeFirstResponder(textView) }
 
-    /// A click elsewhere in the window (▶, a pill, ⚑ MARK, the slider, EXPORT ▾, the title) takes the keyboard from
-    /// the text, as WPF's buttons take the focus on mouse-down: the open line is rendered again (MarkdownPresenter's
-    /// LostKeyboardFocus) and typing no longer goes into the text. The view's own scroll bar keeps it.
+    /// A click on a control that takes the keyboard (▶, a pill, ⚑ MARK, the slider, EXPORT ▾, the title) takes it from
+    /// the text, as a focusable WPF control does on mouse-down: the open line is rendered again (MarkdownPresenter's
+    /// LostKeyboardFocus) and typing no longer goes into the text. A click on what can't take the focus (blank page,
+    /// a label, the timer, the hint, the pipeline, the title bar) leaves the line open, as on Windows; so does the
+    /// view's own scroll bar.
     private var clickWatch: Any?
+    /// Only clicks on controls marked `takesFocusOnClick()` take the keyboard (Extended Notes); otherwise any click
+    /// outside the text does (the dashboard's notes box, whose controls aren't marked).
+    var focusClicksOnly = false
 
     func watchClicks() {
         guard clickWatch == nil else { return }
@@ -503,6 +624,7 @@ final class MarkdownEditorController: NSObject {
                 guard let self, let tv = self.textView, let window = tv.window, event.window === window,
                       window.firstResponder === tv, let scroll = tv.enclosingScrollView else { return }
                 if scroll.bounds.contains(scroll.convert(event.locationInWindow, from: nil)) { return }
+                guard !self.focusClicksOnly || FocusTaking.at(event.locationInWindow, in: window) else { return }
                 window.makeFirstResponder(nil)
             }
             return event
@@ -616,6 +738,51 @@ final class MarkdownEditorController: NSObject {
 }
 
 #if os(macOS)
+/// The controls that take the keyboard when clicked, as a focusable WPF control does (Button, ToggleButton, Slider,
+/// ComboBox…): each is marked with `takesFocusOnClick()`, an empty AppKit view behind it. A click lands on one of them
+/// (enabled, shown) or not: labels, blank page and the title bar are not (FocusTaking).
+final class FocusTakerView: NSView {
+    @MainActor static let all = NSHashTable<FocusTakerView>.weakObjects()
+    var enabled = true
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        MainActor.assumeIsolated { _ = window.map { _ in Self.all.add(self) } }
+    }
+}
+
+private struct FocusTakerMarker: NSViewRepresentable {
+    var enabled: Bool
+    func makeNSView(context: Context) -> FocusTakerView { FocusTakerView() }
+    func updateNSView(_ v: FocusTakerView, context: Context) { v.enabled = enabled }
+}
+
+private struct TakesFocusOnClick: ViewModifier {
+    @Environment(\.isEnabled) private var enabled
+    // (Not in the debug page snapshots: their image renderer can't draw an AppKit view.)
+    func body(content: Content) -> some View {
+        if PageScroll<EmptyView>.flat && !FocusTaking.checking { content } else { content.background(FocusTakerMarker(enabled: enabled)) }
+    }
+}
+
+extension View {
+    /// Marks a control that takes the keyboard when clicked: a click on it renders an open Markdown line again.
+    func takesFocusOnClick() -> some View { modifier(TakesFocusOnClick()) }
+}
+
+@MainActor
+enum FocusTaking {
+    /// The DEBUG self-check draws the markers even in snapshot mode.
+    static var checking = false
+
+    /// Whether `point` (in the window) is on a marked control that is enabled and showing.
+    static func at(_ point: NSPoint, in window: NSWindow) -> Bool {
+        FocusTakerView.all.allObjects.contains { v in
+            v.window === window && v.enabled && !v.isHiddenOrHasHiddenAncestor && v.bounds.contains(v.convert(point, from: nil))
+        }
+    }
+}
+
 /// Reports the user's own scrolling (wheel, trackpad, scroll bar), not the playback's follow (ReaderFullText's).
 final class MarkdownScrollView: NSScrollView {
     var onUserScroll: () -> Void = {}
@@ -647,9 +814,27 @@ final class MarkdownTextView: NSTextView {
     weak var controller: MarkdownEditorController?
 
     override func mouseDown(with event: NSEvent) {
+        let at = characterIndexForInsertion(at: convert(event.locationInWindow, from: nil))
+        if controller?.mouseDownElsewhere(at: at) == true { return }
+        let inOpenLine = controller?.lineOpen == true
         controller?.willClick()
         super.mouseDown(with: event) // tracks the click or the drag until the button comes up
+        // A drag that began in the open line stays in it (Windows' line box can't select past its own text).
+        if inOpenLine { controller?.keepInOpenLine() }
         controller?.didClick()
+    }
+
+    override func selectAll(_ sender: Any?) {
+        if controller?.selectAllInOpenLine() != true { super.selectAll(sender) }
+    }
+
+    @objc func undo(_ sender: Any?) { controller?.undoLine(redo: false) }
+    @objc func redo(_ sender: Any?) { controller?.undoLine(redo: true) }
+
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(undo(_:)) { return controller?.canUndoLine == true }
+        if item.action == #selector(redo(_:)) { return controller?.canRedoLine == true }
+        return super.validateUserInterfaceItem(item)
     }
 
     override func insertText(_ string: Any, replacementRange: NSRange) {
@@ -732,6 +917,10 @@ final class MarkdownTextView: NSTextView {
 }
 
 extension MarkdownEditorController: NSTextViewDelegate {
+    func textView(_ textView: NSTextView, shouldChangeTextIn range: NSRange, replacementString: String?) -> Bool {
+        willEdit(range, replacementString ?? "")
+        return true
+    }
     func textDidChange(_ notification: Notification) { userEdited() }
     func textViewDidChangeSelection(_ notification: Notification) { selectionChanged() }
 }
@@ -841,6 +1030,7 @@ enum MarkdownEditorSnapshots {
             }
         }
         EditedTextSnapshots.write(to: dir, model: model)
+        FocusTakingCheck.write(to: dir)
         if let s = model.notes.store.sessions.first(where: { $0.id == "20261102-1015" }) {
             // Mid-playback: the words heard spread over the recording, the word at 40 % lit (the follow scrolls to it).
             let words = WordTimes.spread(s.heard, start: 0, end: s.seconds)
@@ -885,6 +1075,48 @@ enum MarkdownEditorSnapshots {
         if let png = rep.representation(using: .png, properties: [:]) {
             try? png.write(to: URL(fileURLWithPath: dir).appending(path: name + ".png"))
         }
+    }
+}
+
+/// The click rule of `FocusTaking`, checked on a window that is never shown: which places close an open line. Written
+/// to notes-focus-check.txt beside the snapshots ("yes" where Windows' focus would move).
+@MainActor
+enum FocusTakingCheck {
+    static func write(to dir: String) {
+        FocusTaking.checking = true
+        defer { FocusTaking.checking = false }
+        let cell = CGSize(width: 150, height: 50)
+        let view = VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                Button("Quiet") {}.buttonStyle(.quiet).takesFocusOnClick().frame(width: cell.width, height: cell.height)
+                Text("A label").frame(width: cell.width, height: cell.height)
+                Pill("Pill", on: false) {}.takesFocusOnClick().frame(width: cell.width, height: cell.height)
+                Color.clear.frame(width: cell.width, height: cell.height)
+            }
+            HStack(spacing: 0) {
+                FluentSlider(value: .constant(0.5), range: 0...1).takesFocusOnClick().frame(width: cell.width, height: cell.height)
+                Button("Off") {}.buttonStyle(.quiet).takesFocusOnClick().disabled(true).frame(width: cell.width, height: cell.height)
+                Menu("Export") { Button("Copy") {} }.menuStyle(.button).takesFocusOnClick().frame(width: cell.width, height: cell.height)
+                Text("0:01:02").contentShape(Rectangle()).onTapGesture {}.frame(width: cell.width, height: cell.height)
+            }
+        }
+        .environment(\.ob, Palette(dark: false, accentChoice: .cobalt))
+        let host = NSHostingView(rootView: view)
+        let window = NSWindow(contentRect: CGRect(x: -10_000, y: -10_000, width: 600, height: 100), styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = host
+        host.frame = CGRect(x: 0, y: 0, width: 600, height: 100)
+        host.layoutSubtreeIfNeeded()
+        let names = [["quiet button", "label", "pill", "blank"], ["slider", "disabled button", "menu", "tappable timer"]]
+        var out = ""
+        for (row, y) in [(0, 75.0), (1, 25.0)] {
+            for col in 0..<4 {
+                let p = NSPoint(x: 75 + Double(col) * 150, y: y)
+                out += "\(names[row][col]): \(FocusTaking.at(p, in: window) ? "yes" : "no")\n"
+            }
+        }
+        out += "title bar: \(FocusTaking.at(NSPoint(x: 300, y: window.frame.height - 5), in: window) ? "yes" : "no")\n"
+        try? out.write(to: URL(fileURLWithPath: dir).appending(path: "notes-focus-check.txt"), atomically: true, encoding: .utf8)
+        window.contentView = nil
     }
 }
 #endif
