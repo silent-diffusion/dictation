@@ -517,16 +517,15 @@ final class NotesRecorder: ObservableObject {
     /// first when nothing answers (Direct; EnsureRunningAsync), and a failure is logged ("Listing models failed: …") and
     /// reads as no model installed.
     static func listModels(_ st: AppSettings) async -> [NotesModels.Installed] {
+        let url: URL
         do {
-            let url = try OllamaBackend.validated(st.ollamaEndpoint)
+            url = try OllamaBackend.validated(st.ollamaEndpoint)
             try await OllamaRuntime.ensureRunning(settings: st)
-            let (_, response) = try await URLSession.shared.data(from: url.appending(path: "api/tags"))
-            if let error = HTTPStatusError(response) { throw error }
-            return await OllamaBackend.installedDetails(endpoint: url)
         } catch {
-            Log.warn("Listing models failed: " + error.localizedDescription)
+            if !(error is CancellationError) { Log.warn("Listing models failed: " + ((error as? UserFacingError)?.message ?? error.localizedDescription)) }
             return []
         }
+        return await OllamaBackend.installedDetails(endpoint: url) // logs a listing that fails itself
     }
 
     /// keep_alive 0 for one model (Windows' PostAsJsonAsync + EnsureSuccessStatusCode): nil once Ollama took it, else
