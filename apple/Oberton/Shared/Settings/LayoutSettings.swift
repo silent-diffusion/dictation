@@ -68,8 +68,8 @@ struct LayoutSection: View {
                 Spacer()
                 Text(Fmt.percent(value.wrappedValue)).font(Ob.mono(12))
             }
-            // Snapped to 0.02 in the binding: a stepped Slider would draw tick marks, which Windows' doesn't.
-            Slider(value: Binding(get: { value.wrappedValue }, set: { value.wrappedValue = ($0 / 0.02).rounded() * 0.02 }), in: 0.3...1)
+            // TickFrequency 0.02 with snapping (from the minimum, 0.3), no ticks drawn; the Fluent slider in ink.
+            FluentSlider(value: value, range: 0.3...1, step: 0.02)
                 .padding(.top, 6).padding(.bottom, 10)
                 .accessibilityLabel(name)
         }

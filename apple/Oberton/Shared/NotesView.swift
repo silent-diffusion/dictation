@@ -71,6 +71,7 @@ struct NotesLanding: View {
             Button("Yes") { if let d = deleting { notes.store.delete(d); model.objectWillChange.send() }; deleting = nil }
             Button("No", role: .cancel) { deleting = nil }
         } message: { Text("Delete \"\(deleting?.title ?? "")\" with its recording? This can't be undone.") }
+        .dialogLook(.warning, shown: deleting != nil)
     }
 
     /// Windows docks everything above the list at the top and scrolls only the list, so the start button, the model
@@ -378,6 +379,7 @@ struct NoteSessionView: View {
             }
             Button("No", role: .cancel) { asking = nil }
         } message: { Text(redoQuestion) }
+        .dialogLook(.question, shown: asking != nil)
         #if os(macOS)
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { _ in fullScreen = true }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { _ in fullScreen = false }
@@ -839,6 +841,7 @@ enum NotesDialog {
         // The caution triangle is macOS's warning glyph (it comes with the critical style).
         alert.alertStyle = warning ? .critical : .informational
         alert.addButton(withTitle: "OK")
+        NSSound.beep() // the Exclamation / Asterisk sound Windows plays with the box
         if let window = NSApp.mainWindow ?? NSApp.windows.first(where: { $0.isVisible && $0.canBecomeMain }) {
             alert.beginSheetModal(for: window)
         } else {

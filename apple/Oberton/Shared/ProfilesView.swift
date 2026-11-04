@@ -206,7 +206,8 @@ struct ProfilePage: View {
             if previewChoice != nil { choose(nil) }
             model.saveProfilesNow() // Windows' AutoSave flushes when the page goes
         }
-        .alert("Delete the profile \"\(profile.name)\"?", isPresented: $confirmDelete) {
+        // MessageBox: the caption is the app's name, the question the text, with the Question icon.
+        .alert("Oberton", isPresented: $confirmDelete) {
             Button("Yes") {
                 // As ProfileService.Delete: the default moves to the first profile, and if this one was active, the
                 // default becomes active. The page that opens is the one Windows' list picks while the profile goes,
@@ -218,8 +219,10 @@ struct ProfilePage: View {
                 if wasActive { model.settings.activeProfileID = model.settings.defaultProfileID }
             }
             Button("No", role: .cancel) {}
-        }
-        .alert("You need at least one profile.", isPresented: $onlyOne) { Button("OK") {} }
+        } message: { Text("Delete the profile \"\(profile.name)\"?") }
+        .dialogLook(.question, shown: confirmDelete)
+        .alert("Oberton", isPresented: $onlyOne) { Button("OK") {} } message: { Text("You need at least one profile.") }
+        .dialogLook(.information, shown: onlyOne)
         .sheet(item: $preview) { entry in
             // Windows opens its preview window for the trial; here it is the same card, over the page.
             PreviewPill(entry: entry, profile: "Try it · \(profile.name)", hotkey: "", opacity: 1,

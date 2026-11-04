@@ -25,6 +25,7 @@ struct ReadAloudVoiceRows: View {
             .alert("Oberton", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
                 Button("OK") {}
             } message: { Text(failure ?? "") }
+            .dialogLook(.warning, shown: failure != nil)
         }
 
         private var voice: String { model.settings.ttsVoice ?? VoiceCatalog.defaultVoice }

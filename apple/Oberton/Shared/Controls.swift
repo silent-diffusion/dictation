@@ -49,13 +49,47 @@ extension View {
     }
 }
 
-/// A dropdown drawn as a hairline box with a chevron (an accent border while it has the keyboard focus).
+/// Windows' MessageBoxImage for an alert: its icon in the dialog, and the system sound Windows plays with it
+/// (Question has none by default; Warning, Error and Information sound).
+enum DialogKind {
+    case question, warning, error, information
+
+    var symbol: String {
+        switch self {
+        case .question: "questionmark.circle.fill"
+        case .warning: "exclamationmark.triangle.fill"
+        case .error: "xmark.octagon.fill"
+        case .information: "info.circle.fill"
+        }
+    }
+
+    /// The alert sound, played as the dialog opens.
+    func sound() {
+        #if os(macOS)
+        if self != .question { NSSound.beep() }
+        #endif
+    }
+}
+
+extension View {
+    /// Gives the alerts in this view Windows' MessageBox icon, and its sound when `shown` turns true (SYS-015).
+    func dialogLook(_ kind: DialogKind, shown: Bool) -> some View {
+        self.dialogIcon(Image(systemName: kind.symbol))
+            .onChange(of: shown) { _, now in if now { kind.sound() } }
+    }
+}
+
+/// A dropdown as WPF's Fluent theme draws the Windows app's ComboBox (App.xaml doesn't restyle it): 14 pt, a faint fill
+/// with 4-pt corners, a hairline edge a little darker along the bottom, a lighter fill under the pointer, Padding
+/// 12,5,0,7 inside the 1 px edge, the chevron 10 from the right, at least 32 tall; the focus ring while it has the
+/// keyboard focus.
 struct ObMenu<Value: Hashable>: View {
     var options: [(Value, String)]
     @Binding var selection: Value
     var width: CGFloat?
     @Environment(\.ob) private var ob
     @FocusState private var focused
+    @State private var hover = false
 
     var body: some View {
         Menu {
@@ -65,18 +99,21 @@ struct ObMenu<Value: Hashable>: View {
                 }
             }
         } label: {
-            HStack {
-                Text(options.first { $0.0 == selection }?.1 ?? "—").font(Ob.sans(Ob.body)).lineLimit(1)
+            HStack(spacing: 0) {
+                Text(options.first { $0.0 == selection }?.1 ?? "—").font(Ob.sans(14)).lineLimit(1)
                 Spacer(minLength: 8)
-                Image(systemName: "chevron.down").font(.system(size: 10, weight: .medium)).foregroundStyle(ob.muted)
+                Image(systemName: "chevron.down").font(.system(size: 11, weight: .regular)).foregroundStyle(ob.ink.opacity(0.62))
+                    .padding(.trailing, 10)
             }
             .foregroundStyle(ob.ink)
-            .padding(.horizontal, 8).padding(.vertical, 6)
+            .padding(EdgeInsets(top: 5 + Ob.border, leading: 12 + Ob.border, bottom: 7 + Ob.border, trailing: Ob.border))
+            .frame(minHeight: 32)
             // A given width is the combo's own (WPF ComboBox Width), not just a cap.
             .frame(minWidth: width, maxWidth: width ?? .infinity)
-            .overlay(Rectangle().strokeBorder(focused ? ob.accent : ob.divider, lineWidth: 1))
+            .background { FluentComboFace(hover: hover, focused: focused) }
             .contentShape(Rectangle())
         }
+        .onHover { hover = $0 }
         .focused($focused)
         .handCursor()
         .accessibilityValue(options.first { $0.0 == selection }?.1 ?? "") // a label set on the menu still reads its choice
@@ -84,6 +121,29 @@ struct ObMenu<Value: Hashable>: View {
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
         .fixedSize(horizontal: width == nil ? false : true, vertical: true)
+    }
+}
+
+/// The Fluent ComboBox's face: ControlFillColorDefault (Secondary under the pointer), ControlElevationBorder (the bottom
+/// a shade darker), corner radius 4, and the 2 pt focus ring outside it while it has the keyboard focus.
+private struct FluentComboFace: View {
+    var hover: Bool
+    var focused: Bool
+    @Environment(\.ob) private var ob
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 4)
+        ZStack(alignment: .bottom) {
+            if ob.dark {
+                shape.fill(Color.white.opacity(hover ? 0.08 : 0.06))
+            } else {
+                shape.fill(Color.white.opacity(hover ? 0.5 : 0.7))
+            }
+            shape.strokeBorder(ob.dark ? Color.white.opacity(0.07) : Color.black.opacity(0.06), lineWidth: 1)
+            Rectangle().fill(ob.dark ? Color.white.opacity(0.09) : Color.black.opacity(0.16)).frame(height: 1)
+        }
+        .clipShape(shape)
+        .overlay { if focused { RoundedRectangle(cornerRadius: 6).strokeBorder(ob.ink, lineWidth: 2).padding(-3) } }
     }
 }
 
@@ -390,6 +450,65 @@ struct TextCopyButton: View {
     }
 }
 
+/// A slider as WPF's Fluent theme draws it with the app's ink accent (LOOK-N007): a 4-pt track, filled in ink up to the
+/// thumb; the thumb a 20-pt disc (white, or #454545 on dark paper) with a hairline edge and an ink dot in the middle,
+/// 12 across (14 under the pointer, 10 while dragged). Click or drag anywhere on it; ←/→ step it.
+struct FluentSlider: View {
+    @Binding var value: Double
+    var range: ClosedRange<Double>
+    /// Snaps what is set (Windows' TickFrequency with IsSnapToTickEnabled), without drawing ticks.
+    var step: Double? = nil
+    @Environment(\.ob) private var ob
+    @Environment(\.isEnabled) private var enabled
+    @State private var hover = false
+    @State private var dragging = false
+
+    private static let thumb: CGFloat = 20
+
+    var body: some View {
+        GeometryReader { geo in
+            let w = max(1, geo.size.width - Self.thumb)
+            let f = range.upperBound > range.lowerBound ? (min(max(value, range.lowerBound), range.upperBound) - range.lowerBound) / (range.upperBound - range.lowerBound) : 0
+            let x = Self.thumb / 2 + w * f
+            ZStack(alignment: .leading) {
+                Capsule().fill(ob.dark ? Color.white.opacity(0.55) : Color.black.opacity(0.45)).frame(height: 4)
+                    .padding(.horizontal, Self.thumb / 2)
+                Capsule().fill(ob.ink).frame(width: max(0, x - Self.thumb / 2), height: 4).padding(.leading, Self.thumb / 2)
+                Circle().fill(ob.dark ? Color(hex: 0x454545) : .white)
+                    .overlay(Circle().strokeBorder(ob.dark ? Color.white.opacity(0.09) : Color.black.opacity(0.12), lineWidth: 1))
+                    .overlay(Circle().fill(ob.ink).frame(width: dragging ? 10 : hover ? 14 : 12, height: dragging ? 10 : hover ? 14 : 12))
+                    .frame(width: Self.thumb, height: Self.thumb)
+                    .offset(x: x - Self.thumb / 2)
+            }
+            .frame(maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 0)
+                .onChanged { g in
+                    dragging = true
+                    set(range.lowerBound + Double(min(max(0, g.location.x - Self.thumb / 2), w) / w) * (range.upperBound - range.lowerBound))
+                }
+                .onEnded { _ in dragging = false })
+        }
+        .frame(height: 32)
+        .opacity(enabled ? 1 : 0.4)
+        .onHover { hover = $0 }
+        .accessibilityRepresentation { Slider(value: $value, in: range) }
+        #if os(macOS)
+        .focusable()
+        .onMoveCommand { d in
+            let small = step ?? (range.upperBound - range.lowerBound) / 100
+            if d == .left || d == .down { set(value - small) } else if d == .right || d == .up { set(value + small) }
+        }
+        #endif
+    }
+
+    private func set(_ v: Double) {
+        var v = min(max(v, range.lowerBound), range.upperBound)
+        if let step { v = min(max(range.lowerBound + ((v - range.lowerBound) / step).rounded() * step, range.lowerBound), range.upperBound) }
+        value = v
+    }
+}
+
 /// A slider with its value as a mono readout, drawn in ink.
 struct ObSlider: View {
     @Binding var value: Double
@@ -402,9 +521,7 @@ struct ObSlider: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Group {
-                if let step { Slider(value: $value, in: range, step: step) } else { Slider(value: $value, in: range) }
-            }
+            FluentSlider(value: $value, range: range, step: step)
             .frame(width: width)
             .accessibilityLabel(name ?? "")
             .accessibilityValue(format(value)) // the value itself ("1.75×"), not a percentage of the range

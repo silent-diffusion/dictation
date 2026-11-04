@@ -81,6 +81,7 @@ struct ModelsSection: View {
         .alert("Oberton", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
             Button("OK") {}
         } message: { Text(failure ?? "") }
+        .dialogLook(.warning, shown: failure != nil)
     }
 
     private func heading(_ text: String, top: CGFloat) -> some View {

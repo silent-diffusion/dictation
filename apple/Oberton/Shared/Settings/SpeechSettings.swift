@@ -62,6 +62,7 @@ struct SpeechModelList: View {
         .alert("Oberton", isPresented: Binding(get: { model.whisperDownloadError != nil }, set: { if !$0 { model.whisperDownloadError = nil } })) {
             Button("OK") {}
         } message: { Text(model.whisperDownloadError ?? "") }
+        .dialogLook(.warning, shown: model.whisperDownloadError != nil)
     }
 
     private func row(_ m: WhisperModel) -> some View {
