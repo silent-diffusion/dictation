@@ -1089,12 +1089,13 @@ struct OverlayText: NSViewRepresentable {
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
         // Windows' box shows its light scrollbar for as long as the text overflows (VerticalScrollBarVisibility Auto).
+        // WPF's classic bar in the overlay (ThemeMode None): always light, 17 wide, whatever the app's theme. (Its arrow
+        // buttons have no counterpart: macOS scrollers have drawn none since 10.7.) The style is set after the scroller,
+        // which comes with the system's overlay style.
+        scroll.verticalScroller = ClassicScroller()
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
         scroll.scrollerStyle = .legacy
-        // WPF's classic bar in the overlay (ThemeMode None): always light, 17 wide, whatever the app's theme. (Its arrow
-        // buttons have no counterpart: macOS scrollers have drawn none since 10.7.)
-        scroll.verticalScroller = ClassicScroller()
         scroll.appearance = NSAppearance(named: .aqua)
         scroll.scrollerKnobStyle = .dark
         let view = OverlayTextView(usingTextLayoutManager: false)
