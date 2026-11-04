@@ -121,15 +121,22 @@ public final class NoteSession: Codable, Identifiable, @unchecked Sendable {
     private var pendingFormatEnd = -1
     private var pendingSummaryEnd = -1
 
-    enum CodingKeys: String, CodingKey {
+    enum CodingKeys: String, CodingKey, CaseIterable {
         case title, started, seconds, source, finished, formatVersion, heard, transcript, formatted, summary, formattedThrough,
              heardFormattedThrough, summarizedThrough, digests, summaryByAi, chunks, transcriptAnchors, formattedAnchors, markers, words
     }
 
     /// A missing or null field takes its default and the rest is kept, as System.Text.Json fills one on Windows (a
-    /// hand-edited or older file still loads).
+    /// hand-edited or older file still loads); a missing `formatVersion` is 0, as Windows reads it, so the session is
+    /// repaired once when loaded. An object with none of a session's keys (Windows' own session.json, whose keys are
+    /// "Title", "Started", …) is not taken for an empty session: it fails, so the store keeps it as session.json.bad
+    /// and never saves over it (SYS-012 leaves reading Windows' files to the user).
     public required init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        guard CodingKeys.allCases.contains(where: c.contains) else {
+            throw DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "none of a session's keys"))
+        }
+        formatVersion = 0
         func take<T: Decodable>(_ key: CodingKeys, _ value: inout T) throws { if let v = try c.decodeIfPresent(T.self, forKey: key) { value = v } }
         try take(.title, &title); try take(.started, &started); try take(.seconds, &seconds); try take(.source, &source)
         try take(.finished, &finished); try take(.formatVersion, &formatVersion); try take(.heard, &heard)

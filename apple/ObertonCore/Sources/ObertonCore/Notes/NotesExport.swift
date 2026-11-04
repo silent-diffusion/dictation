@@ -77,9 +77,10 @@ public enum NotesExport {
             if part == .everything { body += paragraph("Heading1", name) }
             for p in paragraphs(xmlSafe(text)) { body += paragraph(nil, p) }
         }
-        let document = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
+        // XmlWriter's own declaration names the encoding in lower case (the fixed parts keep Windows' "UTF-8").
+        let document = "<?xml version=\"1.0\" encoding=\"utf-8\" standalone=\"yes\"?>" +
             "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body>\(body)</w:body></w:document>"
-        return Zip.stored([("[Content_Types].xml", contentTypes), ("_rels/.rels", packageRels), ("word/_rels/document.xml.rels", documentRels),
+        return Zip.deflated([("[Content_Types].xml", contentTypes), ("_rels/.rels", packageRels), ("word/_rels/document.xml.rels", documentRels),
                            ("word/styles.xml", styles), ("word/document.xml", document)].map { ($0.0, Data($0.1.utf8)) })
     }
 
@@ -113,7 +114,8 @@ public enum NotesExport {
     }
 }
 
-/// A zip archive with its files stored uncompressed: all a .docx needs, without a library.
+/// A zip archive written by hand: all a .docx needs, without a library. Windows' ZipArchive deflates each entry
+/// (CompressionLevel.Optimal) and dates it now; `stored` keeps them as they are.
 enum Zip {
     static let crcTable: [UInt32] = (0..<256).map { n -> UInt32 in
         var c = UInt32(n)
@@ -127,17 +129,35 @@ enum Zip {
         return c ^ 0xFFFF_FFFF
     }
 
-    static func stored(_ files: [(String, Data)]) -> Data {
+    static func stored(_ files: [(String, Data)]) -> Data { archive(files, deflate: false, date: nil) }
+
+    /// Each entry deflated (raw DEFLATE, method 8) and dated `date` in local time, as ZipArchive writes them.
+    static func deflated(_ files: [(String, Data)], date: Date = Date()) -> Data { archive(files, deflate: true, date: date) }
+
+    /// MS-DOS time and date (two-second steps, from 1980), local time.
+    static func dosTime(_ date: Date, calendar: Calendar = .current) -> (time: Int, date: Int) {
+        let c = calendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: date)
+        let year = min(max((c.year ?? 1980) - 1980, 0), 127)
+        return ((c.hour ?? 0) << 11 | (c.minute ?? 0) << 5 | (c.second ?? 0) / 2, year << 9 | (c.month ?? 1) << 5 | (c.day ?? 1))
+    }
+
+    private static func archive(_ files: [(String, Data)], deflate: Bool, date: Date?) -> Data {
         var out = Data(), central = Data()
         func u16(_ v: Int, _ d: inout Data) { d.append(UInt8(v & 0xFF)); d.append(UInt8(v >> 8 & 0xFF)) }
         func u32(_ v: UInt32, _ d: inout Data) { for i in 0..<4 { d.append(UInt8(v >> (8 * UInt32(i)) & 0xFF)) } }
+        // A date of 1980-01-01 00:00 when none is given (a stored archive that is the same every time).
+        let (time, day) = date.map { dosTime($0) } ?? (0, 0x21)
         for (name, data) in files {
             let n = Data(name.utf8), crc = crc32(data), offset = UInt32(out.count)
-            u32(0x0403_4B50, &out); u16(20, &out); u16(0x0800, &out); u16(0, &out); u16(0, &out); u16(0x21, &out)
-            u32(crc, &out); u32(UInt32(data.count), &out); u32(UInt32(data.count), &out); u16(n.count, &out); u16(0, &out)
-            out.append(n); out.append(data)
-            u32(0x0201_4B50, &central); u16(20, &central); u16(20, &central); u16(0x0800, &central); u16(0, &central); u16(0, &central); u16(0x21, &central)
-            u32(crc, &central); u32(UInt32(data.count), &central); u32(UInt32(data.count), &central); u16(n.count, &central)
+            // ZipArchive marks a name as UTF-8 only when it isn't plain ASCII.
+            let flags = n.allSatisfy { $0 < 0x80 } ? 0 : 0x0800
+            let packed = deflate ? ((try? (data as NSData).compressed(using: .zlib)) as Data?) : nil
+            let body = packed ?? data, method = packed == nil ? 0 : 8
+            u32(0x0403_4B50, &out); u16(20, &out); u16(flags, &out); u16(method, &out); u16(time, &out); u16(day, &out)
+            u32(crc, &out); u32(UInt32(body.count), &out); u32(UInt32(data.count), &out); u16(n.count, &out); u16(0, &out)
+            out.append(n); out.append(body)
+            u32(0x0201_4B50, &central); u16(20, &central); u16(20, &central); u16(flags, &central); u16(method, &central); u16(time, &central); u16(day, &central)
+            u32(crc, &central); u32(UInt32(body.count), &central); u32(UInt32(data.count), &central); u16(n.count, &central)
             u16(0, &central); u16(0, &central); u16(0, &central); u16(0, &central); u32(0, &central); u32(offset, &central)
             central.append(n)
         }

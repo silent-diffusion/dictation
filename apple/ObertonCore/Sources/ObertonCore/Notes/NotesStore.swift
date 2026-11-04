@@ -10,6 +10,8 @@ public final class NotesStore: @unchecked Sendable {
     public let usage: NotesUsage
     public private(set) var draft = ""
     private let disk: Bool
+    /// The box was typed in since Oberton started (Windows' draft timer exists): only then is the draft written at exit.
+    private var draftTouched = false
     private let writes = DispatchQueue(label: "Oberton.NotesStore")
     private var draftWork: DispatchWorkItem?
     /// The list changed (a session was created or deleted).
@@ -25,7 +27,8 @@ public final class NotesStore: @unchecked Sendable {
 
     public static var defaultDir: URL { AppPaths.dataDir.appending(path: "notes", directoryHint: .isDirectory) }
 
-    static let decoder: JSONDecoder = { let d = JSONDecoder(); d.dateDecodingStrategy = .iso8601; return d }()
+    /// Windows' JsonStore reads with trailing commas allowed and comments skipped: JSON5 takes both.
+    static let decoder: JSONDecoder = { let d = JSONDecoder(); d.dateDecodingStrategy = .iso8601; d.allowsJSON5 = true; return d }()
     static let encoder: JSONEncoder = {
         let e = JSONEncoder()
         e.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -46,11 +49,13 @@ public final class NotesStore: @unchecked Sendable {
         for folder in folders where folder.hasDirectoryPath {
             let file = folder.appending(path: "session.json")
             guard FileManager.default.fileExists(atPath: file.path) else { continue }
-            let s: NoteSession
-            do { s = try Self.decoder.decode(NoteSession.self, from: try Data(contentsOf: file)) } catch {
+            let read: NoteSession?
+            do { read = try Self.decoder.decode(NoteSession?.self, from: try Data(contentsOf: file)) } catch {
                 Self.keepBad(file, error)
                 continue
             }
+            // A file holding only "null" is skipped without a word, as JsonStore.Load returns null for it.
+            guard let s = read else { continue }
             s.folder = folder
             if !s.finished {
                 // Oberton quit (or crashed) while it recorded: everything up to the last save is kept.
@@ -58,10 +63,17 @@ public final class NotesStore: @unchecked Sendable {
                 save(s)
                 CoreLog.info("Extended notes: closed a session left open: " + s.id)
             }
+            if s.formatVersion < NotesFormat.version {
+                // Formatted before the checks on the AI's reply: its junk and loops come out, once.
+                if NotesFormat.repair(s) { CoreLog.info("Extended notes: repaired the formatted text of " + s.id) }
+                s.formatVersion = NotesFormat.version
+                save(s)
+            }
             loaded.append(s)
         }
         sessions = loaded.sorted { $0.started > $1.started }
-        NotesAudio.sweep(keeping: Set(sessions.map(\.id)))
+        // The app's own store only: a store in another folder (the tests') never touches the playback copies.
+        if dir.standardizedFileURL.path == Self.defaultDir.standardizedFileURL.path { NotesAudio.sweep(keeping: Set(sessions.map(\.id))) }
     }
 
     /// A file that can't be read is kept beside it as "<name>.bad" before it is skipped or started afresh (Windows'
@@ -108,7 +120,9 @@ public final class NotesStore: @unchecked Sendable {
         }
     }
 
-    /// Write a session now (Oberton is quitting).
+    /// Write a session now (Oberton is quitting). Kept atomic on purpose (NOTES-135): Windows writes this one file in
+    /// place (File.WriteAllText), so a shutdown mid-write can leave it cut short, and its every other save goes through a
+    /// .tmp and a move as this one does.
     public func saveNow(_ s: NoteSession) {
         guard disk, let folder = s.folder, let data = Self.encode(s) else { return }
         writes.sync {
@@ -128,7 +142,8 @@ public final class NotesStore: @unchecked Sendable {
     public func delete(_ s: NoteSession) {
         sessions.removeAll { $0 === s }
         NotesAudio.forget(s.id)
-        if disk, let folder = s.folder {
+        // A folder already gone is nothing to report (Windows deletes it only if it is there).
+        if disk, let folder = s.folder, FileManager.default.fileExists(atPath: folder.path) {
             do { try FileManager.default.removeItem(at: folder) } catch {
                 CoreLog.warn("Extended notes: couldn't delete a session: " + error.localizedDescription)
             }
@@ -149,6 +164,7 @@ public final class NotesStore: @unchecked Sendable {
         if text == draft { return }
         draft = text
         guard disk else { return }
+        draftTouched = true
         draftWork?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.writeDraft(text) }
         draftWork = work
@@ -165,9 +181,10 @@ public final class NotesStore: @unchecked Sendable {
         return taken
     }
 
-    /// Oberton is quitting: write the draft now.
+    /// Oberton is quitting: write the draft now, if it was typed in this time (Windows' FlushDraft does nothing when
+    /// SetDraft never ran, so draft.txt keeps its date and its bytes).
     public func flushDraft() {
-        guard disk else { return }
+        guard disk, draftTouched else { return }
         draftWork?.cancel()
         let text = draft
         writes.sync { writeDraft(text) }
@@ -265,7 +282,14 @@ public final class NotesUsage: @unchecked Sendable {
     public init(url: URL?) {
         self.url = url
         guard let url, let raw = try? Data(contentsOf: url) else { data = FileData(); return }
-        if let read = try? NotesStore.decoder.decode(FileData.self, from: raw) {
+        let read: FileData
+        do { read = try NotesStore.decoder.decode(FileData.self, from: raw) } catch {
+            // Logged with the reason, as JsonStore.Load's "…; keeping a .bad copy: <exception>".
+            NotesStore.keepBad(url, error)
+            data = FileData()
+            return
+        }
+        do {
             // Days read from an older file, merged where two came to the same calendar day.
             var days: [NotesUsageDay] = []
             for d in read.days.sorted(by: { $0.day < $1.day }) {
@@ -276,9 +300,6 @@ public final class NotesUsage: @unchecked Sendable {
                 } else { days.append(d) }
             }
             data = FileData(version: read.version, days: days)
-        } else {
-            NotesStore.keepBad(url)
-            data = FileData()
         }
     }
 

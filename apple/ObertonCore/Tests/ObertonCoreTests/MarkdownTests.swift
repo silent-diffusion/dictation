@@ -141,12 +141,24 @@ import Testing
         #expect(NotesMarkdown.enter(line: "Just text", caret: 4) == .plain)
     }
 
+    // The editor renders in place, so its spans keep each escaped character apart, at its own offset.
     @Test func escapedMarkupKnowsWhereItCameFrom() {
         let md = #"a \*b\* c"#
         let ns = md as NSString
-        let spans = NotesMarkdown.parse(md)[0].spans
+        let spans = NotesMarkdown.parse(md, escapesApart: true)[0].spans
         #expect(spans.map(\.text).joined() == "a *b* c")
         for s in spans { #expect(ns.substring(with: NSRange(location: s.offset, length: s.text.utf16.count)) == s.text) }
+    }
+
+    // NOTES-157: Windows' Inline adds an escaped character to the plain run around it: one span, at the run's start.
+    @Test func anEscapeJoinsThePlainRunAsOnWindows() {
+        let spans = NotesMarkdown.parse(#"a \*b\* c"#)[0].spans
+        #expect(spans.map(\.text) == ["a *b* c"])
+        #expect(spans.map(\.offset) == [0])
+        // A run that starts with an escape starts at the escaped character (plainStart = i + 1).
+        let lead = NotesMarkdown.parse(##"\#hash **b**"##)[0].spans
+        #expect(lead.map(\.text) == ["#hash ", "b"])
+        #expect(lead.map(\.offset) == [1, 9])
     }
 
     @Test func aSummarySentenceLeadsToItsSection() {

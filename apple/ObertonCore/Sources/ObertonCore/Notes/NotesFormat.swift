@@ -6,8 +6,7 @@ import Foundation
 /// against what was sent: a reply that adds words, changes a number or drops most of the text is rejected, and the text
 /// as heard is used for that part instead.
 public enum NotesFormat {
-    /// Raised when the rules change in a way old sessions should be repaired for (Windows' sessions from before 2 are
-    /// repaired when loaded; the Mac has none that old).
+    /// Raised when the rules change in a way old sessions should be repaired for (`repair`, when a session is loaded).
     public static let version = 2
 
     static let base =
@@ -192,5 +191,56 @@ public enum NotesFormat {
         let have = Set(numbers(sent))
         if have.isEmpty { return false }
         return numbers(reply).contains { !have.contains($0) }
+    }
+
+    // MARK: Repairing a session formatted before these checks
+
+    /// The junk lines of a text (each with its line break) and its loops, as edits (UTF-16 offsets).
+    static func junkEdits(_ text: String, keepCJK: Bool) -> [Edit] {
+        var edits: [Edit] = []
+        let ns = text as NSString
+        var start = 0
+        while start <= ns.length {
+            let nl = ns.range(of: "\n", range: NSRange(location: start, length: ns.length - start)).location
+            let end = nl == NSNotFound ? ns.length : nl
+            if isJunkLine(ns.substring(with: NSRange(location: start, length: end - start)), keepCJK: keepCJK) {
+                edits.append(Edit(start: start, length: (nl == NSNotFound ? end : nl + 1) - start, with: ""))
+            }
+            if nl == NSNotFound { break }
+            start = nl + 1
+        }
+        for e in repeatEdits(text) where !edits.contains(where: { e.start < $0.start + $0.length && $0.start < e.start + e.length }) {
+            edits.append(e)
+        }
+        return edits
+    }
+
+    /// Spaces before a line break, and blank lines more than one in a row, as edits.
+    static func spacingEdits(_ text: String) -> [Edit] {
+        let re = try! NSRegularExpression(pattern: #"[ \t]+(?=\n)|(?<=\n\n)\n+|\s+$"#)
+        return re.matches(in: text, range: NSRange(location: 0, length: (text as NSString).length))
+            .map { Edit(start: $0.range.location, length: $0.range.length, with: "") }
+    }
+
+    /// A session formatted before the checks above (NotesFormat.Repair): takes the junk out of its Formatted text and of
+    /// each formatting step, and collapses the loops, one edit at a time so the time anchors and the summary's place move
+    /// with each (the user's own edits are kept). True when anything changed.
+    @discardableResult
+    public static func repair(_ s: NoteSession) -> Bool {
+        let keepCJK = hasCJK(s.transcript)
+        var changed = false
+        for i in s.chunks.indices {
+            var ai = apply(s.chunks[i].ai, junkEdits(s.chunks[i].ai, keepCJK: keepCJK))
+            ai = apply(ai, spacingEdits(ai)).trimmed
+            if ai != s.chunks[i].ai { s.chunks[i].ai = ai; changed = true }
+        }
+        for pass in [{ junkEdits($0, keepCJK: keepCJK) }, spacingEdits] as [(String) -> [Edit]] {
+            for e in pass(s.formatted).sorted(by: { $0.start > $1.start }) {
+                let f = s.formatted as NSString
+                s.set(.formatted, f.replacingCharacters(in: NSRange(location: e.start, length: e.length), with: e.with), source: nil)
+                changed = true
+            }
+        }
+        return changed
     }
 }

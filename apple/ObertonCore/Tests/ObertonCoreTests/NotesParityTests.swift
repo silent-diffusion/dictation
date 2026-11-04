@@ -322,7 +322,7 @@ private func localDate(_ y: Int, _ m: Int, _ d: Int, _ h: Int, _ min: Int) -> Da
 
 // MARK: - Exports (ExtendedNotesTests.cs NotesExportTests, NotesDocxExportTests.cs)
 
-/// The files of a zip whose entries are stored uncompressed (as `Zip.stored` writes them), by name.
+/// The files of a zip whose entries are stored (method 0) or deflated (method 8, as `Zip.deflated` writes them), by name.
 private func storedZipEntries(_ zip: Data) -> [String: Data] {
     let d = [UInt8](zip)
     func u16(_ at: Int) -> Int { Int(d[at]) | Int(d[at + 1]) << 8 }
@@ -330,13 +330,30 @@ private func storedZipEntries(_ zip: Data) -> [String: Data] {
     var entries: [String: Data] = [:]
     var at = 0
     while at + 30 <= d.count && u32(at) == 0x0403_4B50 {
-        let size = u32(at + 18), nameLength = u16(at + 26), extra = u16(at + 28)
+        let method = u16(at + 8), size = u32(at + 18), nameLength = u16(at + 26), extra = u16(at + 28)
         let name = String(decoding: d[(at + 30)..<(at + 30 + nameLength)], as: UTF8.self)
         let start = at + 30 + nameLength + extra
-        entries[name] = Data(d[start..<(start + size)])
+        let body = Data(d[start..<(start + size)])
+        entries[name] = method == 8 ? ((try? (body as NSData).decompressed(using: .zlib)) as Data?) ?? Data() : body
         at = start + size
     }
     return entries
+}
+
+/// Each entry's compression method and DOS date and time, by name.
+private func zipEntryHeaders(_ zip: Data) -> [String: (method: Int, time: Int, date: Int, flags: Int)] {
+    let d = [UInt8](zip)
+    func u16(_ at: Int) -> Int { Int(d[at]) | Int(d[at + 1]) << 8 }
+    func u32(_ at: Int) -> Int { u16(at) | u16(at + 2) << 16 }
+    var out: [String: (method: Int, time: Int, date: Int, flags: Int)] = [:]
+    var at = 0
+    while at + 30 <= d.count && u32(at) == 0x0403_4B50 {
+        let size = u32(at + 18), nameLength = u16(at + 26), extra = u16(at + 28)
+        let name = String(decoding: d[(at + 30)..<(at + 30 + nameLength)], as: UTF8.self)
+        out[name] = (u16(at + 8), u16(at + 10), u16(at + 12), u16(at + 6))
+        at = at + 30 + nameLength + extra + size
+    }
+    return out
 }
 
 /// A WordprocessingML body's paragraphs: each one's style and its text, with a line break for every w:br (the Windows
@@ -782,8 +799,206 @@ private final class DocxParagraphs: NSObject, XMLParserDelegate {
         #expect(resolve("", []) == active) // Ollama unreachable, or no model installed
     }
 
+    // Windows: The_setting_resolves_to_a_model's last case: the list throws (InvalidOperationException) → the active model.
+    struct ListFailed: Error {}
+    @Test func aListThatFailsLeavesTheActiveModel() async {
+        let active = ModelID(provider: .ollama, name: "qwen3:4b")
+        let r = await NotesModels.resolve("", activeModel: active, list: { throw ListFailed() }, gpuBytes: 6 * Self.gb)
+        #expect(r.model == active)
+        #expect(r.why == "the active model; the models couldn't be listed")
+        // The active model and a cloud model never ask for the list.
+        var asked = false
+        _ = await NotesModels.resolve("active", activeModel: active, list: { asked = true; return [] }, gpuBytes: nil)
+        _ = await NotesModels.resolve("openai:gpt-4o-mini", activeModel: active, list: { asked = true; return [] }, gpuBytes: nil)
+        #expect(!asked)
+        let named = await NotesModels.resolve("qwen2.5:3b", activeModel: active, list: { Self.installed }, gpuBytes: 6 * Self.gb)
+        #expect(named.model == ModelID(provider: .ollama, name: "qwen2.5:3b"))
+    }
+
+    // NOTES-138: with nothing installed, Windows' why ("no local model is installed"); figures in the user's decimal mark.
+    @Test func noModelInstalledReadsAsWindowsSaysIt() {
+        let active = ModelID(provider: .ollama, name: "qwen3:4b")
+        #expect(NotesModels.resolve("", activeModel: active, installed: [], gpuBytes: nil).why == "the active model; no local model is installed")
+        let de = Locale(identifier: "de_DE")
+        #expect(NotesModels.gb(Int64(5.3 * Double(Self.gb)), locale: de) == "5,3 GB")
+        #expect(NotesModels.gb(Int64(5.0 * Double(Self.gb)), locale: de) == "5 GB")
+        #expect(NotesModels.gb(Int64(12.5 * Double(Self.gb)), locale: de) == "13 GB") // {0:0}: a half away from zero
+        #expect(NotesAudio.oneDecimal(12.25, locale: de) == "12,3")
+        #expect(NotesAudio.oneDecimal(12.25, locale: Locale(identifier: "en_US")) == "12.3")
+    }
+
     // Windows: Gpu_memory_reads_as_gigabytes.
     @Test func gpuMemoryReadsAsGigabytes() {
         #expect(NotesModels.gb(6 * Self.gb) == "6 GB")
+    }
+}
+
+// MARK: - Round 3: the store, the recording's details, the Word file
+
+private func notesTempDir() -> URL {
+    FileManager.default.temporaryDirectory.appending(path: "oberton-notes-r3-\(UUID().uuidString)", directoryHint: .isDirectory)
+}
+
+private func writeSession(_ dir: URL, _ folder: String, _ json: String) throws -> URL {
+    let f = dir.appending(path: folder, directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: f, withIntermediateDirectories: true)
+    let file = f.appending(path: "session.json")
+    try Data(json.utf8).write(to: file)
+    return file
+}
+
+// These catch the log through CoreLog.sink, which BrokenFileTests' serialized suite keeps to one test at a time.
+extension BrokenFileTests {
+    // Regression #12: a session.json with none of the Mac's keys (Windows' own, "Title", "Finished": false…) is kept as
+    // session.json.bad and skipped, never taken for an empty session, closed and saved over.
+    @Test func aWindowsSessionFileIsKeptAsBadAndNeverSavedOver() throws {
+        let dir = notesTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let windows = #"{"Title":"Lecture","Started":"2026-11-03T10:15:00","Finished":false,"Transcript":"hello there","FormatVersion":2}"#
+        let file = try writeSession(dir, "20261103-101500", windows)
+        var lines: [String] = []
+        CoreLog.sink = { level, message in lines.append(level + " " + message) }
+        defer { CoreLog.sink = nil }
+        let store = NotesStore(dir: dir)
+        #expect(store.sessions.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: file.appendingPathExtension("bad").path))
+        #expect(String(decoding: try Data(contentsOf: file), as: UTF8.self) == windows) // untouched
+        #expect(lines.contains { $0.hasPrefix("ERROR Could not read ") && $0.contains("session.json; keeping a .bad copy: ") })
+        #expect(!lines.contains { $0.contains("closed a session left open") })
+    }
+
+    // NOTES-099: JsonStore reads trailing commas and comments; "null" is skipped without a word; a missing formatVersion
+    // is 0, so the session is repaired once and saved with the version.
+    @Test func aSessionFileIsReadAsTolerantlyAsJsonStore() throws {
+        let dir = notesTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        _ = try writeSession(dir, "20261101-090000", """
+            {
+              // written by hand
+              "title": "Commented", "finished": true, "formatVersion": 2,
+              "transcript": "one two",
+            }
+            """)
+        let nullFile = try writeSession(dir, "20261101-100000", "null")
+        let oldFile = try writeSession(dir, "20261101-110000", #"{"title":"Old","finished":true,"formatted":"Kept text.   \n\n\n\nMore."}"#)
+        var lines: [String] = []
+        CoreLog.sink = { level, message in lines.append(level + " " + message) }
+        defer { CoreLog.sink = nil }
+        let store = NotesStore(dir: dir)
+        #expect(Set(store.sessions.map(\.title)) == ["Commented", "Old"])
+        #expect(!FileManager.default.fileExists(atPath: nullFile.appendingPathExtension("bad").path))
+        #expect(!lines.contains { $0.contains("20261101-100000") })
+        let old = try #require(store.sessions.first { $0.title == "Old" })
+        #expect(old.formatVersion == NotesFormat.version)
+        #expect(old.formatted == "Kept text.\n\nMore.") // spaces before a break and the extra blank lines out
+        #expect(lines.contains { $0 == "INFO Extended notes: repaired the formatted text of 20261101-110000" })
+        // Saved in the background with the version: read again, nothing left to repair.
+        Thread.sleep(forTimeInterval: 0.3)
+        let again = try NotesStore.decoder.decode(NoteSession.self, from: Data(contentsOf: oldFile))
+        #expect(again.formatVersion == NotesFormat.version)
+    }
+
+    // NOTES-101: a session whose folder is already gone is deleted without a warning (Windows checks Directory.Exists).
+    @Test func deletingASessionAlreadyGoneLogsNothing() throws {
+        let dir = notesTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = NotesStore(dir: dir)
+        let s = try store.create(source: .mic)
+        try FileManager.default.removeItem(at: s.folder!)
+        var lines: [String] = []
+        CoreLog.sink = { level, message in lines.append(level + " " + message) }
+        defer { CoreLog.sink = nil }
+        store.delete(s)
+        #expect(!lines.contains { $0.contains("couldn't delete a session") })
+        #expect(store.sessions.isEmpty)
+    }
+
+    // NOTES-154: an unreadable usage.json says why, as JsonStore.Load's "…; keeping a .bad copy: <exception>".
+    @Test func anUnreadableUsageFileSaysWhy() throws {
+        let dir = notesTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appending(path: "usage.json")
+        try Data("{ not json".utf8).write(to: url)
+        var lines: [String] = []
+        CoreLog.sink = { level, message in lines.append(level + " " + message) }
+        defer { CoreLog.sink = nil }
+        let usage = NotesUsage(url: url)
+        #expect(usage.days.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: url.appendingPathExtension("bad").path))
+        #expect(lines.contains { $0.hasPrefix("ERROR Could not read ") && $0.contains("usage.json; keeping a .bad copy: ") })
+    }
+}
+
+@Suite struct NotesRoundThreeTests {
+    // NOTES-102: the draft is written at exit only when the box was typed in this time (FlushDraft does nothing when
+    // SetDraft never ran): Windows' draft.txt, BOM and all, keeps its bytes.
+    @Test func theDraftIsLeftAloneAtExitWhenNotTypedIn() throws {
+        let dir = notesTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let draft = dir.appending(path: "draft.txt")
+        let bytes = Data([0xEF, 0xBB, 0xBF]) + Data("Agenda".utf8)
+        try bytes.write(to: draft)
+        let store = NotesStore(dir: dir)
+        store.flushDraft()
+        #expect(try Data(contentsOf: draft) == bytes)
+        store.setDraft("Agenda, budget")
+        store.flushDraft()
+        #expect(String(decoding: try Data(contentsOf: draft), as: UTF8.self) == "Agenda, budget")
+    }
+
+    // NOTES-103: the prepared recording's details as Windows keeps them ({"Path","Seconds","GainDb","Silences"}).
+    @Test func thePreparedDetailsUseWindowsKeys() throws {
+        let p = PreparedAudio(url: URL(fileURLWithPath: "/tmp/x.wav"), seconds: 12.5, gainDb: 6, silences: [AudioPause(start: 1, end: 2)])
+        let json = try JSONSerialization.jsonObject(with: NotesAudio.metaEncoder.encode(p)) as! [String: Any]
+        #expect(Set(json.keys) == ["Path", "Seconds", "GainDb", "Silences"])
+        #expect(json["Path"] as? String == "/tmp/x.wav")
+        #expect((json["Silences"] as? [[String: Any]])?.first.map { Set($0.keys) } == ["Start", "End"])
+        let back = try JSONDecoder().decode(PreparedAudio.self, from: NotesAudio.metaEncoder.encode(p))
+        #expect(back.seconds == 12.5 && back.silences == p.silences && back.url.path == "/tmp/x.wav")
+    }
+
+    // NOTES-093: the Word file's entries are deflated and dated now, as ZipArchive (CompressionLevel.Optimal) writes
+    // them, with XmlWriter's declaration in document.xml.
+    @Test func theWordFileIsDeflatedAndDated() throws {
+        let s = NoteSession()
+        s.title = "Product sync"
+        s.transcript = String(repeating: "The beta ships to ten testers on Friday. ", count: 40)
+        let docx = NotesExport.buildDocx(s, part: .everything)
+        let headers = zipEntryHeaders(docx)
+        #expect(headers.count == 5)
+        #expect(headers.values.allSatisfy { $0.method == 8 && $0.flags == 0 })
+        let now = Zip.dosTime(Date())
+        #expect(headers.values.allSatisfy { $0.date == now.date })
+        let xml = try #require(storedZipEntries(docx)["word/document.xml"])
+        #expect(String(decoding: xml, as: UTF8.self).hasPrefix(#"<?xml version="1.0" encoding="utf-8" standalone="yes"?>"#))
+        #expect(String(decoding: try #require(storedZipEntries(docx)["word/styles.xml"]), as: UTF8.self).contains(#"encoding="UTF-8""#))
+        #expect(docx.count < 4000) // the repeated transcript is compressed
+    }
+
+    // Windows' DOS date and time: 2026-11-03 14:05:07 → time 14<<11 | 5<<5 | 3, date 46<<9 | 11<<5 | 3.
+    @Test func dosTimeIsWindowsZipDate() {
+        var c = Calendar(identifier: .gregorian)
+        c.timeZone = TimeZone(identifier: "UTC")!
+        let d = c.date(from: DateComponents(year: 2026, month: 11, day: 3, hour: 14, minute: 5, second: 7))!
+        let t = Zip.dosTime(d, calendar: c)
+        #expect(t.time == 14 << 11 | 5 << 5 | 3)
+        #expect(t.date == 46 << 9 | 11 << 5 | 3)
+    }
+
+    // The repair of an old session (NotesFormat.Repair): junk lines and loops out of the formatted text and each step.
+    @Test func anOldSessionIsRepaired() {
+        let s = NoteSession()
+        s.transcript = "We met today. We met today. We met today. Then we left."
+        s.formatted = "We met today. 🎉🎉\n🎉🎉\nWe met today.   \n\n\n\nThen we left."
+        s.chunks = [NoteChunk(heard: "x", sent: "x", ai: "Hello there.  \n\n\n\nBye.", seconds: 0, aiFailed: false)]
+        #expect(NotesFormat.repair(s))
+        #expect(!s.formatted.contains("\n🎉🎉\n")) // the junk line; a line with words keeps them
+        #expect(!s.formatted.contains("\n\n\n"))
+        #expect(s.chunks[0].ai == "Hello there.\n\nBye.")
+        let clean = NoteSession()
+        clean.formatted = "Fine as it is."
+        #expect(!NotesFormat.repair(clean))
     }
 }

@@ -4,6 +4,11 @@ import Foundation
 public struct AudioPause: Codable, Sendable, Equatable {
     public var start: Double
     public var end: Double
+
+    public init(start: Double, end: Double) { self.start = start; self.end = end }
+
+    /// Kept as Windows keeps it beside the prepared copy: {"Start": …, "End": …}.
+    enum CodingKeys: String, CodingKey { case start = "Start", end = "End" }
 }
 
 /// A recording made ready to play (`NotesAudio.prepareCached`): where the louder copy is, and its pauses.
@@ -13,6 +18,30 @@ public struct PreparedAudio: Codable, Sendable {
     /// How much the level was raised.
     public var gainDb: Double
     public var silences: [AudioPause]
+
+    /// The details kept beside the copy as Windows writes them: {"Path", "Seconds", "GainDb", "Silences"}, the path a
+    /// plain file path.
+    enum CodingKeys: String, CodingKey { case url = "Path", seconds = "Seconds", gainDb = "GainDb", silences = "Silences" }
+
+    public init(url: URL, seconds: Double, gainDb: Double, silences: [AudioPause]) {
+        self.url = url; self.seconds = seconds; self.gainDb = gainDb; self.silences = silences
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        url = URL(fileURLWithPath: try c.decodeIfPresent(String.self, forKey: .url) ?? "")
+        seconds = try c.decodeIfPresent(Double.self, forKey: .seconds) ?? 0
+        gainDb = try c.decodeIfPresent(Double.self, forKey: .gainDb) ?? 0
+        silences = try c.decodeIfPresent([AudioPause].self, forKey: .silences) ?? []
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(url.path, forKey: .url)
+        try c.encode(seconds, forKey: .seconds)
+        try c.encode(gainDb, forKey: .gainDb)
+        try c.encode(silences, forKey: .silences)
+    }
 
     /// The pause `seconds` falls in, if any.
     public func silence(at seconds: Double) -> AudioPause? {
@@ -195,11 +224,23 @@ public enum NotesAudio {
         }
         writer.close()
         let gainDb = 20 * log10(Double(g)), silences = findSilences(levels, windowSeconds: windowSeconds)
-        CoreLog.info("Extended notes: recording prepared, +\(String(format: "%.1f", gainDb)) dB, \(silences.count) pauses")
+        CoreLog.info("Extended notes: recording prepared, +\(oneDecimal(gainDb)) dB, \(silences.count) pauses")
         return PreparedAudio(url: out, seconds: Double(samples.count) / Double(rate), gainDb: gainDb, silences: silences)
     }
 
     /// The prepared copy of a session's recording: made the first time, then found again (unless the recording is newer).
+    /// Windows' `{x:0.0}`: one decimal, in the user's own decimal mark ("12,3" in German), a half away from zero.
+    static func oneDecimal(_ x: Double, locale: Locale = NotesExport.userLocale) -> String {
+        let f = NumberFormatter()
+        f.locale = locale
+        f.numberStyle = .decimal
+        f.usesGroupingSeparator = false
+        f.minimumFractionDigits = 1
+        f.maximumFractionDigits = 1
+        f.roundingMode = .halfUp
+        return f.string(from: NSNumber(value: x)) ?? String(format: "%.1f", x)
+    }
+
     public static func prepareCached(_ url: URL, sessionID: String) throws -> PreparedAudio {
         try FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
         let copy = cacheDir.appending(path: sessionID + ".wav"), meta = cacheDir.appending(path: sessionID + ".json")
@@ -214,23 +255,25 @@ public enum NotesAudio {
         _ = try? FileManager.default.removeItem(at: copy)
         try FileManager.default.moveItem(at: tmp, to: copy)
         prepared.url = copy
-        do { try JSONEncoder().encode(prepared).write(to: meta) } catch {
+        do { try metaEncoder.encode(prepared).write(to: meta, options: .atomic) } catch {
             CoreLog.warn("Extended notes: couldn't keep the prepared recording's details: " + error.localizedDescription)
         }
         return prepared
     }
 
-    /// Delete prepared copies whose session no longer exists; not one made in the last 10 minutes (it may be being
-    /// prepared right now, for a session another store has).
+    /// JsonStore.Save's look: indented.
+    static let metaEncoder: JSONEncoder = { let e = JSONEncoder(); e.outputFormatting = [.prettyPrinted]; return e }()
+
+    /// Delete prepared copies whose session no longer exists (deleted while Oberton wasn't running, or the copy was being
+    /// made as the session was deleted), every one of them, as Windows' Sweep. Only the app's own store sweeps.
     public static func sweep(keeping ids: Set<String>) {
         guard FileManager.default.fileExists(atPath: cacheDir.path) else { return }
         // Session ids compared without regard to case (Windows' OrdinalIgnoreCase).
         let keep = Set(ids.map { $0.lowercased() })
         do {
-            let files = try FileManager.default.contentsOfDirectory(at: cacheDir, includingPropertiesForKeys: [.contentModificationDateKey])
+            let files = try FileManager.default.contentsOfDirectory(at: cacheDir, includingPropertiesForKeys: nil)
             for f in files where !keep.contains(String(f.lastPathComponent.prefix { $0 != "." }).lowercased()) {
-                let modified = (try? f.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-                if Date().timeIntervalSince(modified) > 600 { try FileManager.default.removeItem(at: f) }
+                try FileManager.default.removeItem(at: f)
             }
         } catch {
             CoreLog.warn("Extended notes: sweeping the playback copies failed: " + error.localizedDescription)
@@ -297,13 +340,35 @@ public enum NotesModels {
                 : gpuBytes.map { "best on this Mac: the largest that fits in \(gb($0)) of GPU memory" } ?? "best on this Mac without a GPU"
             return (ModelID(provider: .ollama, name: b.name), why)
         }
-        return (activeModel, "the active model; no Ollama model is installed")
+        return (activeModel, "the active model; no local model is installed")
     }
 
-    /// Bytes as "6 GB" (one decimal below 10).
-    public static func gb(_ bytes: Int64) -> String {
+    /// `resolve` with the list asked for only when needed, as Windows' ResolveAsync takes it: the active model or a cloud
+    /// model chosen needs none, and a list that fails ("couldn't list the AI models") leaves the active model.
+    public static func resolve(_ setting: String, activeModel: ModelID, list: () async throws -> [Installed], gpuBytes: Int64?,
+                               ramBytes: Int64? = nil) async -> (model: ModelID, why: String) {
+        let trimmed = setting.trimmed
+        if trimmed.lowercased() == active { return (activeModel, "the active model") }
+        if let id = ModelID(trimmed), id.provider != .ollama { return (id, id.isLocal ? "chosen" : "chosen, cloud") }
+        let installed: [Installed]
+        do { installed = try await list() } catch {
+            CoreLog.warn("Extended notes: couldn't list the AI models: " + error.localizedDescription)
+            return (activeModel, "the active model; the models couldn't be listed")
+        }
+        return resolve(setting, activeModel: activeModel, installed: installed, gpuBytes: gpuBytes, ramBytes: ramBytes)
+    }
+
+    /// Bytes as "6 GB" (one decimal below 10: `{0:0.#}` / `{0:0}`, the user's decimal mark, a half away from zero).
+    public static func gb(_ bytes: Int64, locale: Locale = NotesExport.userLocale) -> String {
         let g = Double(bytes) / 1_073_741_824
-        return g < 10 ? String(format: "%.1f GB", g).replacingOccurrences(of: ".0 ", with: " ") : String(format: "%.0f GB", g)
+        let f = NumberFormatter()
+        f.locale = locale
+        f.numberStyle = .decimal
+        f.usesGroupingSeparator = false
+        f.minimumFractionDigits = 0
+        f.maximumFractionDigits = g < 10 ? 1 : 0
+        f.roundingMode = .halfUp
+        return (f.string(from: NSNumber(value: g)) ?? String(format: "%.0f", g)) + " GB"
     }
 }
 

@@ -47,7 +47,7 @@ public enum NotesMarkdown {
     private static let fence = re(#"^\s*```"#)
     private static let label = re(#"^\p{Lu}[\p{L}'’]*(?:\s[\p{L}'’]+){0,3}:(?=\s|$)"#)
 
-    public static func parse(_ text: String) -> [Block] {
+    public static func parse(_ text: String, escapesApart: Bool = false) -> [Block] {
         var blocks: [Block] = []
         var para: [Span] = [], paraOffset = 0
         var code: [Span]? = nil, codeOffset = 0
@@ -101,19 +101,19 @@ public enum NotesMarkdown {
             if let h = matches(heading, line) {
                 endParagraph(); endQuote()
                 let r = h.range(at: 2)
-                blocks.append(Block(.heading, inline(group(line, r), lineStart + r.location), lineStart, level: h.range(at: 1).length))
+                blocks.append(Block(.heading, inline(group(line, r), lineStart + r.location, apart: escapesApart), lineStart, level: h.range(at: 1).length))
                 continue
             }
             if let b = matches(bullet, line) {
                 endParagraph(); endQuote()
                 let r = b.range(at: 2)
-                blocks.append(Block(.bullet, labelled(group(line, r), lineStart + r.location), lineStart, level: b.range(at: 1).length / 2))
+                blocks.append(Block(.bullet, labelled(group(line, r), lineStart + r.location, apart: escapesApart), lineStart, level: b.range(at: 1).length / 2))
                 continue
             }
             if let n = matches(numbered, line) {
                 endParagraph(); endQuote()
                 let r = n.range(at: 3)
-                blocks.append(Block(.numbered, labelled(group(line, r), lineStart + r.location), lineStart,
+                blocks.append(Block(.numbered, labelled(group(line, r), lineStart + r.location, apart: escapesApart), lineStart,
                                     level: n.range(at: 1).length / 2, number: group(line, n.range(at: 2))))
                 continue
             }
@@ -121,16 +121,16 @@ public enum NotesMarkdown {
                 endParagraph()
                 if quoted.isEmpty { quoteOffset = lineStart } else { quoted.append(.lineBreak(lineStart)) }
                 let r = q.range(at: 1)
-                quoted += inline(group(line, r), lineStart + r.location)
+                quoted += inline(group(line, r), lineStart + r.location, apart: escapesApart)
                 continue
             }
             endQuote()
             if para.isEmpty {
                 paraOffset = lineStart
-                para += labelled(trimmed, lineStart + lead)
+                para += labelled(trimmed, lineStart + lead, apart: escapesApart)
             } else {
                 para.append(.lineBreak(lineStart))
-                para += inline(trimmed, lineStart + lead)
+                para += inline(trimmed, lineStart + lead, apart: escapesApart)
             }
         }
         if let code { blocks.append(Block(.code, code, codeOffset)) }
@@ -140,18 +140,20 @@ public enum NotesMarkdown {
     }
 
     /// A line whose start is a short label: the label in bold, then the rest.
-    static func labelled(_ s: String, _ offset: Int) -> [Span] {
+    static func labelled(_ s: String, _ offset: Int, apart: Bool = false) -> [Span] {
         if let m = matches(label, s), !s.lowercased().hasPrefix("http") {
             let n = m.range.length
             let u = Array(s.utf16)
-            return [Span(text(u, 0, n), offset, bold: true)] + inline(text(u, n, u.count), offset + n)
+            return [Span(text(u, 0, n), offset, bold: true)] + inline(text(u, n, u.count), offset + n, apart: apart)
         }
-        return inline(s, offset)
+        return inline(s, offset, apart: apart)
     }
 
     /// The inline markup of a line: `code`, **bold** or __bold__, *italic* or _italic_, [text](link) as its text, and
-    /// backslash escapes. Markup that doesn't close is shown as written.
-    public static func inline(_ str: String, _ offset: Int, bold: Bool = false, italic: Bool = false) -> [Span] {
+    /// backslash escapes. Markup that doesn't close is shown as written. An escaped character joins the plain run around
+    /// it, as on Windows; `apart` gives it a span of its own instead, for the Mac's editor, which renders the text in
+    /// place and so needs every span's offset to point at its own characters (the backslash is then known as markup).
+    public static func inline(_ str: String, _ offset: Int, bold: Bool = false, italic: Bool = false, apart: Bool = false) -> [Span] {
         let s = Array(str.utf16)
         var spans: [Span] = []
         var plain: [UInt16] = []
@@ -167,8 +169,12 @@ public enum NotesMarkdown {
         while i < s.count {
             let c = s[i]
             if c == UInt16(UInt8(ascii: "\\")), i + 1 < s.count, escapable.contains(s[i + 1]) {
-                // A span of its own (Windows adds it to the plain run): every span's offset then points at its own text,
-                // so the editor knows the backslash is markup.
+                if !apart {
+                    if plain.isEmpty { plainStart = i + 1 }
+                    plain.append(s[i + 1])
+                    i += 2
+                    continue
+                }
                 flush(i)
                 spans.append(Span(text(s, i + 1, i + 2), offset + i + 1, bold: bold, italic: italic))
                 i += 2
@@ -184,7 +190,7 @@ public enum NotesMarkdown {
             }
             if c == star || c == under, i + 1 < s.count, s[i + 1] == c, case let end2 = closing(s, i + 2, [c, c]), end2 > 0 {
                 flush(i)
-                spans += inline(text(s, i + 2, end2), offset + i + 2, bold: true, italic: italic)
+                spans += inline(text(s, i + 2, end2), offset + i + 2, bold: true, italic: italic, apart: apart)
                 i = end2 + 2
                 plainStart = i
                 continue
@@ -192,7 +198,7 @@ public enum NotesMarkdown {
             if c == star || c == under, c == star || i == 0 || !letterOrDigit(s[i - 1]),
                case let end1 = closing(s, i + 1, [c]), end1 > 0, c == star || end1 + 1 >= s.count || !letterOrDigit(s[end1 + 1]) {
                 flush(i)
-                spans += inline(text(s, i + 1, end1), offset + i + 1, bold: bold, italic: true)
+                spans += inline(text(s, i + 1, end1), offset + i + 1, bold: bold, italic: true, apart: apart)
                 i = end1 + 1
                 plainStart = i
                 continue
@@ -200,7 +206,7 @@ public enum NotesMarkdown {
             if c == UInt16(UInt8(ascii: "[")), case let mid = index(s, Array("](".utf16), i + 1), mid > 0,
                case let paren = index(s, [UInt16(UInt8(ascii: ")"))], mid + 2), paren > 0 {
                 flush(i)
-                spans += inline(text(s, i + 1, mid), offset + i + 1, bold: bold, italic: italic)
+                spans += inline(text(s, i + 1, mid), offset + i + 1, bold: bold, italic: italic, apart: apart)
                 i = paren + 1
                 plainStart = i
                 continue

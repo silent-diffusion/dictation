@@ -413,8 +413,11 @@ import Testing
     @Test func theWordDocumentIsAZipWithItsParts() {
         let d = NotesExport.buildDocx(Self.session(), part: .everything)
         #expect(d.prefix(4) == Data([0x50, 0x4B, 0x03, 0x04]))
+        // The names are in the clear; the parts are deflated, as ZipArchive writes them (NotesParityTests reads them).
         let text = String(decoding: d, as: UTF8.self)
-        #expect(text.contains("word/document.xml") && text.contains("Heading1") && text.contains("We ship on Monday."))
+        #expect(text.contains("word/document.xml") && text.contains("word/styles.xml"))
+        let stored = String(decoding: Zip.stored([("word/document.xml", Data("Heading1 We ship on Monday.".utf8))]), as: UTF8.self)
+        #expect(stored.contains("Heading1 We ship on Monday."))
         #expect(Zip.crc32(Data("123456789".utf8)) == 0xCBF4_3926)
     }
 }
