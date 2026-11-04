@@ -232,7 +232,7 @@ public actor WhisperEngine {
             if error is CancellationError { throw error }
             // Windows: "The speech model could not be loaded. Is it installed? Run scripts\setup.ps1. ({detail})"
             CoreLog.error("asr: \(id) could not be loaded: \(error)")
-            throw UserFacingError("The speech model could not be loaded. Is it downloaded? See Settings › Speech recognition. (\(error.localizedDescription))")
+            throw UserFacingError("The speech model could not be loaded. Is it downloaded? See Settings › Models. (\(error.localizedDescription))")
         }
         WhisperModels.markPrepared(m)
         // asr_server.py's "Loaded {model} on {device} ({compute type})", in dictation.log as Windows' "asr: " lines.

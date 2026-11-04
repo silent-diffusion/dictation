@@ -60,7 +60,10 @@ final class MacPlatform: PlatformServices {
         }
     }
 
-    var targetAppName: String? { target?.app.localizedName }
+    /// History's app (Windows' ProcessName): the program's own name, the same in every language.
+    var targetAppName: String? { target.map { Self.processName($0.app) } }
+    /// The name in a sentence (Windows' DisplayName, the program's description): the app's name as macOS shows it.
+    var targetDisplayName: String? { target?.app.localizedName }
 
     /// The dictation window's title, when Accessibility could read it (the direct build): for History and the web
     /// sites. "" for a window without one (as Windows' GetWindowText); nil without Accessibility (the App Store build).
@@ -160,7 +163,7 @@ final class MacPlatform: PlatformServices {
         return view.isEditable
     }
 
-    /// The app's name in the log, as Windows logs the process name ("notepad").
+    /// The app's process name, as Windows logs and keeps it ("notepad"): its executable's name.
     private static func processName(_ app: NSRunningApplication) -> String {
         app.executableURL?.lastPathComponent ?? app.localizedName ?? "?"
     }

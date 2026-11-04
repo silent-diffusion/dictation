@@ -21,8 +21,11 @@ protocol PlatformServices: AnyObject {
     /// History's "insert into the last app" (Windows `InsertIntoLastTargetAsync`): the last dictation's app, no caret
     /// spot, nothing copied on failure, and the window in front when asked comes back afterwards.
     func insertIntoLastTarget(_ text: String) async throws -> String
-    /// The name of the app the text is going into, if known.
+    /// The app the text is going into, as History keeps it (Windows' InsertionTarget.ProcessName: the program's own
+    /// name, "Microsoft Outlook", "Notes", never translated), if known.
     var targetAppName: String? { get }
+    /// That app's name for a sentence ("Inserted into Mail"; Windows' DisplayName).
+    var targetDisplayName: String? { get }
     /// That app's window title when the dictation started (Windows' InsertionTarget.Title), for History and the web
     /// sites; nil where it can't be read (iPhone, the Mac's App Store build).
     var targetWindowTitle: String? { get async }
@@ -43,6 +46,7 @@ protocol PlatformServices: AnyObject {
 
 extension PlatformServices {
     func captureTarget(readContext: Bool) { captureTarget() }
+    var targetDisplayName: String? { targetAppName }
     var targetWindowTitle: String? { nil }
     func insertionContext() async -> InsertionContext? { nil }
     func liveTarget() -> LiveTarget? { nil }
@@ -89,6 +93,11 @@ final class AppModel: ObservableObject {
     @Published var settings: AppSettings {
         didSet {
             scheduleSettingsSave()
+            #if os(macOS)
+            // Type as you speak needs macOS's permission to type into other apps: turning it on asks for it at once, so
+            // the switch never sits on doing nothing unnoticed (Windows needs no permission).
+            if settings.typeWhileSpeaking, !oldValue.typeWhileSpeaking, !CGPreflightPostEventAccess() { CGRequestPostEventAccess() }
+            #endif
             // A new language or speech model: get it ready now, so the next dictation doesn't wait (as on Windows).
             if oldValue.language != settings.language || oldValue.speechModel != settings.speechModel {
                 warmUp()
@@ -166,6 +175,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var finalPass = false
     /// "Type as you speak" for the dictation running now, when it is on (Windows' `_live`).
     private var live: LiveInsertion?
+    /// The overlay has said once since launch that type as you speak can't type yet (no Accessibility).
+    private var typingDeniedSaid = false
 
     /// Whether a dictation with this profile types while you speak: the General switch on, a profile without a
     /// preview, and a platform that may type into other apps now (the Mac, with Oberton allowed in Accessibility).
@@ -490,6 +501,20 @@ final class AppModel: ObservableObject {
         // and when there is nowhere to type (the text then waits for a click at the end).
         live?.stop()
         live = nil
+        #if os(macOS)
+        if settings.typeWhileSpeaking, !profile.showPreview, !CGPreflightPostEventAccess() {
+            // The switch is on but macOS doesn't let Oberton type yet: said, not silently skipped (the overlay once a
+            // launch, the log every time; Settings › General says it under the switch).
+            Log.info("Type as you speak is on, but Oberton may not type into other apps yet (Accessibility); the text goes in at the end")
+            if !typingDeniedSaid {
+                typingDeniedSaid = true
+                Task { @MainActor [weak self] in
+                    self?.notice("Type as you speak needs Oberton allowed in System Settings › Privacy & Security › Accessibility. This time the text goes in when you stop.",
+                                 kind: .warning, hold: false)
+                }
+            }
+        }
+        #endif
         if typesWhileSpeaking(profile), let target = platform?.liveTarget() {
             let platform = platform, processor = processor
             live = LiveInsertion(target: target, profile: profile, context: Task { await platform?.insertionContext() },
@@ -736,7 +761,7 @@ final class AppModel: ObservableObject {
                 let (final, note) = try await typed.finish(entry.inserted, tail: transcriber.finalTail)
                 entry.inserted = final
                 if let note { entry.warning = note }
-                receipt = "Inserted into \(platform?.targetAppName ?? "the app")"
+                receipt = "Inserted into \(platform?.targetDisplayName ?? "the app")"
             } else {
                 // Fit the text where it goes (capitals, a period, spaces); a rewrite was laid out on purpose, so only
                 // its spacing is fixed.
@@ -1599,6 +1624,14 @@ final class AppModel: ObservableObject {
     }
 
     func cancelWhisperDownload() { whisperDownloadTask?.cancel() }
+
+    /// Settings › Models was left: its download stops, as Windows cancels the page's `_download` when the page unloads
+    /// (a speech model or a Read aloud voice). A new install's first speech model, downloading since setup, carries on
+    /// (Windows' setup does its own downloads).
+    func leftModelsPage() {
+        if let id = whisperDownload?.id, id != pendingSpeechModel { cancelWhisperDownload() }
+        reader.cancelInstall()
+    }
 
     /// Load the active profile's AI model again (after its runtime or model was installed).
     func rewarmAI() { warmUpAI(activeProfile) }

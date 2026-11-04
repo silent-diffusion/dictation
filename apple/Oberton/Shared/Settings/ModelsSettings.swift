@@ -75,7 +75,7 @@ struct ModelsSection: View {
         #if os(macOS)
         .task { await rebuild() }
         // Windows cancels the page's download when the page goes (Unloaded); the runtime's own setup carries on.
-        .onDisappear { downloadTask?.cancel() }
+        .onDisappear { downloadTask?.cancel(); model.leftModelsPage() }
         #else
         .task { await loadNotesModels() }
         #endif
