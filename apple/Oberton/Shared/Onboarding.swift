@@ -272,6 +272,14 @@ struct OnboardingView: View {
 
     /// "About 1.6 GB in total, saved to ~/Library/…" (Windows' plan line), or Apple's own download.
     private var planText: String {
+        #if os(macOS)
+        // The direct download's setup also fetches the AI runtime (about 190 MB) and qwen2.5:3b (1.9 GB): counted in
+        // the total, as Windows' EstimatedDownloadGb counts its runtimes and cleanup model ("About 3 GB", {gb:0.#}).
+        if aiInSetup {
+            let mb = (whisperToGet.map(Self.whisperMB) ?? 0) + (OllamaRuntime.isInstalled ? 0 : 190) + 1900
+            return "About \(NetNumber.fixed(Double(mb) / 1000, digits: 1, optional: true)) GB in total, saved to \(AppPaths.dataDir.path)."
+        }
+        #endif
         if let id = whisperToGet, let m = WhisperModels.model(id) {
             // The whole path, as Windows prints it (in the App Store build, inside Oberton's container).
             return "About \(m.size) in total, saved to \(AppPaths.dataDir.path)."
