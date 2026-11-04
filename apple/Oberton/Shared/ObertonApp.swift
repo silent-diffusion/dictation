@@ -93,7 +93,11 @@ import ServiceManagement
 /// taskbar button does.
 @MainActor
 final class MacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDelegate {
-    let model = AppModel()
+    /// Start-up timing (App.xaml.cs' _startClock): from here, how long the services (AppModel) and the windows took.
+    private let startClock = Date()
+    private var servicesMs = 0, windowsMs = 0
+    private var startupReported = false
+    let model: AppModel
     private lazy var platform = MacPlatform { [unowned self] in self.model.settings }
     private let hotkeys = HotkeyManager()
     private var overlay: OverlayController?
@@ -109,6 +113,15 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, N
     private let menu = NSMenu()
     private var startedHidden = false
     private var servicesStarted = false
+    /// The marker key is held (an Extended Notes session records).
+    private var markerHeld = false
+
+    override init() {
+        let before = Date()
+        model = AppModel()
+        servicesMs = Int(Date().timeIntervalSince(before) * 1000)
+        super.init()
+    }
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         // Opened by the login item: start hidden in the menu bar (Windows' --minimized). Asked here, while the launch
@@ -116,6 +129,8 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, N
         let event = NSAppleEventManager.shared().currentAppleEvent
         startedHidden = event?.eventID == kAEOpenApplication
             && event?.paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue == keyAELaunchedAsLogInItem
+            // Any start with --minimized, as on Windows (`open -a Oberton --args --minimized`).
+            || CommandLine.arguments.contains("--minimized")
         NSApp.setActivationPolicy(.accessory)
     }
 
@@ -123,8 +138,9 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, N
         #if DEBUG
         if ProcessInfo.processInfo.environment["OBERTON_SNAPSHOT"] != nil { Snapshots.write(to: ProcessInfo.processInfo.environment["OBERTON_SNAPSHOT"]!, model: model); return }
         #endif
-        Log.info("=== Oberton \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "") starting" + (startedHidden ? " (at login, hidden)" : "") + " ===")
-        NSSetUncaughtExceptionHandler { e in Log.error("Unhandled exception: \(e.name.rawValue): \(e.reason ?? "")") }
+        Log.info("=== Oberton starting ===")
+        // Objective-C exceptions only: a Swift trap can't be caught and kept running as Windows' handlers do.
+        NSSetUncaughtExceptionHandler { e in Log.error("Unhandled UI exception: \(e.name.rawValue): \(e.reason ?? "")") }
         #if DEBUG
         // No platform: nothing is typed into other apps.
         if let rounds = ProcessInfo.processInfo.environment["OBERTON_STRESS"] {
@@ -170,22 +186,24 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, N
     private func startServices() {
         guard !servicesStarted else { return }
         servicesStarted = true
+        let before = Date()
         model.platform = platform
         overlay = OverlayController(model: model)
         reader = ReaderController(model: model)
         makeStatusItem()
+        windowsMs += Int(Date().timeIntervalSince(before) * 1000)
         #if OBERTON_DIRECT
         // The direct download's startup update check (lane A's Updater), after the setup as on Windows.
         Updater.shared.start(model: model)
         #endif
-        // Re-register as soon as a shortcut changes in Settings, and let go of them while one is being recorded.
-        // (@Published sends before the value is stored, so the values come from the publishers.) The Extended Notes
-        // marker key is held only while a session records (paused or not); the rest of the time it stays with
-        // whatever app uses it.
+        // Re-register as soon as a shortcut changes in Settings (App.OnSettingsChanged), and only then; they stay held
+        // while a Hotkeys box records, as on Windows. (@Published sends before the value is stored, so the values come
+        // from the publishers.) The Extended Notes marker key is held only while a session records (paused or not);
+        // the rest of the time it stays with whatever app uses it (App.ApplyMarkerHotkey).
         watches.append(model.$settings.map { [$0.hotkey, $0.cycleProfileHotkey, $0.speakHotkey, $0.notesMarkerHotkey] }.removeDuplicates()
-            .combineLatest(HotkeyStatus.shared.$recording.map { $0 != nil }.removeDuplicates(),
-                           model.notes.$current.map { $0 != nil }.removeDuplicates())
-            .sink { [weak self] keys, paused, notes in self?.registerHotkeys(keys, paused: paused, notesRecording: notes) })
+            .sink { [weak self] keys in self?.registerHotkeys(keys) })
+        watches.append(model.notes.$current.map { $0 != nil }.removeDuplicates()
+            .sink { [weak self] recording in self?.applyMarkerHotkey(recording) })
         // Esc discards, held only while the overlay waits for a decision (App.xaml.cs).
         watches.append(model.$phase.map { $0 == .preview || $0 == .placing }.removeDuplicates()
             .sink { [weak self] waiting in
@@ -193,6 +211,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, N
                 if let error = hotkeys.holdEscape(waiting ? { [weak self] in self?.model.cancel() } : nil) { Log.warn(error) }
             })
         watches.append(model.$settings.map(\.startAtLogin).removeDuplicates().sink { Self.applyLoginItem($0) })
+        if startedHidden { startupReported = true } // started hidden: no opening time to report
         // The speech engine couldn't start: the window opens with the message (App.xaml.cs, also when started hidden).
         watches.append(model.$startupProblem.compactMap { $0 }.sink { [weak self] problem in
             Log.warn("Speech init: " + problem)
@@ -210,15 +229,51 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, N
     // MARK: Windows
 
     /// Open (or bring forward) the main window, optionally at a Settings section (App.ShowMain): shown, un-minimized
-    /// and in front, also when it is open already. Nothing during the first-run setup.
+    /// and in front, also when it is open already. During the first-run setup only the setup comes forward.
     func showMain(settings: SettingsSection? = nil) {
-        guard OnboardingView.isDone else { setupWindow?.makeKeyAndOrderFront(nil); return }
+        guard OnboardingView.isDone, servicesStarted || setupFinished || setupWindow == nil else {
+            setupWindow?.makeKeyAndOrderFront(nil)
+            return
+        }
         if let settings { model.requestedSettings = settings }
+        let before = Date()
         let window = mainWindow ?? makeMainWindow()
+        if !startupReported { windowsMs += Int(Date().timeIntervalSince(before) * 1000) }
         NSApp.setActivationPolicy(.regular)
         if window.isMiniaturized { window.deminiaturize(nil) }
         window.makeKeyAndOrderFront(nil)
         NSApp.activate()
+        if !startupReported {
+            startupReported = true
+            // Once the window is drawn (the next turn of the run loop), as Windows' ContentRendered.
+            DispatchQueue.main.async { [self] in
+                let elapsed = Int(Date().timeIntervalSince(startClock) * 1000)
+                let total = Self.processStart.map { Int(Date().timeIntervalSince($0) * 1000) } ?? elapsed
+                Log.info("Startup: window drawn \(total) ms after opening (runtime \(total - elapsed) ms, services \(servicesMs) ms, "
+                         + "windows \(windowsMs) ms, the rest \(elapsed - servicesMs - windowsMs) ms)")
+            }
+        }
+    }
+
+    /// When this process started (Process.StartTime).
+    private static var processStart: Date? {
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()]
+        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0 else { return nil }
+        let t = info.kp_proc.p_un.__p_starttime
+        return Date(timeIntervalSince1970: Double(t.tv_sec) + Double(t.tv_usec) / 1_000_000)
+    }
+
+    /// WindowStartupLocation="CenterScreen": the middle of the screen the mouse is on (AppKit's center() sits higher).
+    private static func centerOnScreen(_ window: NSWindow) {
+        let mouse = NSEvent.mouseLocation
+        guard let area = (NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main)?.visibleFrame else {
+            window.center()
+            return
+        }
+        let size = window.frame.size
+        window.setFrameOrigin(NSPoint(x: (area.midX - size.width / 2).rounded(), y: (area.midY - size.height / 2).rounded()))
     }
 
     /// "Oberton", 1200×780 (at least 960×600), centred, its title in the paper-coloured title bar. Not remembered
@@ -237,12 +292,12 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, N
         window.collectionBehavior.insert(.fullScreenPrimary)
         window.identifier = NSUserInterfaceItemIdentifier("main")
         window.delegate = self
-        window.center()
+        Self.centerOnScreen(window)
         mainWindow = window
         return window
     }
 
-    /// The first-run setup: "Oberton setup", 640 wide, as tall as it needs, centred.
+    /// The first-run setup: "Oberton setup", 640 wide (its frame included), as tall as it needs, centred.
     private func showSetup() {
         let host = NSHostingController(rootView: SetupWindowContent { [weak self] in self?.finishSetup() }.environmentObject(model))
         host.sizingOptions = .preferredContentSize
@@ -252,7 +307,8 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, N
         window.isReleasedWhenClosed = false
         window.identifier = NSUserInterfaceItemIdentifier("setup")
         window.delegate = self
-        window.center()
+        window.layoutIfNeeded()
+        Self.centerOnScreen(window)
         setupWindow = window
         NSApp.setActivationPolicy(.regular)
         window.makeKeyAndOrderFront(nil)
@@ -298,11 +354,13 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, N
         return false
     }
 
-    /// Keep a session that is recording, up to now, and the notes draft.
+    /// App.Quit: keep a session that is recording, up to now, and the notes draft; stop a reading (so its time is
+    /// counted); then the log line. Quitting from the setup logs only "Setup not completed; exiting", as on Windows.
     func applicationWillTerminate(_ notification: Notification) {
         model.notes.shutdown()
+        model.reader.stop()
         model.saveProfilesNow()
-        Log.info("=== Oberton exiting ===")
+        if servicesStarted { Log.info("=== Oberton exiting ===") }
     }
 
     /// Closing a window is handled above (hide, or quit).
@@ -371,32 +429,48 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, N
             if on, service.status != .enabled { try service.register() }
             else if !on, service.status == .enabled { try service.unregister() }
         } catch {
-            Log.warn("Login item (\(on ? "on" : "off")): \(error.localizedDescription)")
+            Log.warn("Autostart change failed: \(error.localizedDescription)")
         }
         if on, service.status == .requiresApproval { Log.warn("Login item waits for approval in System Settings › General › Login Items") }
     }
 
-    private func registerHotkeys(_ keys: [String], paused: Bool, notesRecording: Bool) {
-        guard !paused else { hotkeys.register([]); return }
-        // The marker key is checked against the others always, not only while a session records (App.MarkerClash).
-        let clash = HotkeyManager.markerClash(marker: keys[3], dictation: keys[0], speak: keys[2], cycle: keys[1])
+    /// App.ApplyHotkeys: the dictation, profile and Read aloud keys, then the marker key while a session records.
+    private func registerHotkeys(_ keys: [String]) {
         var errors = hotkeys.register([
-            (keys[0], "the dictation shortcut", { [weak self] in self?.model.toggleDictation() }),
-            (keys[1], "the profile-switching shortcut", { [weak self] in self?.model.cycleProfile() }),
-            (keys[2], "the Read aloud shortcut", { [weak self] in self?.model.readSelection() }),
-            (notesRecording && clash == nil ? keys[3] : "", "the Extended Notes marker shortcut", { [weak self] in self?.model.notes.addMarker() }),
+            (keys[0], { [weak self] in self?.model.toggleDictation() }),
+            (keys[1], { [weak self] in self?.model.cycleProfile() }),
+            (keys[2], { [weak self] in self?.model.readSelection() }),
         ])
-        if let clash { errors.append(clash) }
+        // The marker key is checked against the others always, not only while a session records (App.MarkerClash).
+        if let clash = HotkeyManager.markerClash(marker: keys[3], dictation: keys[0], speak: keys[2], cycle: keys[1]) {
+            errors.append(clash)
+            hotkeys.holdMarker(nil)
+        } else if markerHeld, let error = hotkeys.holdMarker(keys[3], { [weak self] in self?.model.notes.addMarker() }) {
+            errors.append(error)
+        }
         let error = errors.isEmpty ? nil : errors.joined(separator: "\n")
         HotkeyStatus.shared.error = error
-        // Logged, and shown on the overlay as an error notice, whenever the shortcuts change (App.ApplyHotkeys); not
-        // when they are only taken back after a box was recorded or a notes session started or stopped.
+        // Logged, and shown on the overlay as an error notice, whenever the shortcuts are applied (at start, and when
+        // one changes).
         guard keys != appliedKeys else { return }
         appliedKeys = keys
         if let error {
             Log.warn(error)
             model.notice(error, kind: .error)
         }
+    }
+
+    /// App.ApplyMarkerHotkey: a session started or stopped. A problem is only logged; the Hotkeys page's line is left
+    /// as it was.
+    private func applyMarkerHotkey(_ recording: Bool) {
+        guard recording != markerHeld else { return }
+        markerHeld = recording
+        hotkeys.holdMarker(nil)
+        guard recording else { return }
+        let s = model.settings
+        let error = HotkeyManager.markerClash(marker: s.notesMarkerHotkey, dictation: s.hotkey, speak: s.speakHotkey, cycle: s.cycleProfileHotkey)
+            ?? hotkeys.holdMarker(s.notesMarkerHotkey) { [weak self] in self?.model.notes.addMarker() }
+        if let error { Log.warn(error) }
     }
 }
 
@@ -509,7 +583,7 @@ enum Snapshots {
         save(RootView(start: Place()).environmentObject(model).obertonTheme(model.settings).frame(width: 1200, height: 780), to: dir, name: "dashboard-zoom125")
         model.settings.uiScale = scale
         // Hotkeys with a combination another app holds, and the dictation box recording.
-        HotkeyStatus.shared.error = "Ctrl+Alt+D is already used by another app. Choose a different shortcut under Settings › Hotkeys."
+        HotkeyStatus.shared.error = "Ctrl+Alt+D is already used by another application. Choose a different shortcut under Settings > Hotkeys."
         HotkeyStatus.shared.recording = "Start / stop dictation"
         save(RootView(start: Place(section: .settings, settings: .hotkeys)).environmentObject(model).obertonTheme(model.settings).frame(width: 1200, height: 780),
              to: dir, name: "settings-hotkeys-taken")

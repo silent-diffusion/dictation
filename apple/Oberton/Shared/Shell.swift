@@ -108,6 +108,8 @@ final class Navigator: ObservableObject {
     @Published private(set) var back: [Place] = []
     /// iPhone: the drawer is open over the page.
     @Published var drawerOpen = false
+    /// When the page now opening was asked for, for "Page X took N ms to show" (MainWindow.ShowPage).
+    var pageAskedAt: Date?
 
     init(place: Place = Place()) { self.place = place }
 
@@ -136,6 +138,7 @@ final class Navigator: ObservableObject {
             back.append(place)
             if back.count > 50 { back.removeFirst() }
         }
+        if next.section != place.section { pageAskedAt = .now }
         place = next
     }
 
@@ -148,6 +151,7 @@ final class Navigator: ObservableObject {
         while let last = back.popLast() {
             if last.visit != place.visit { target = last; break }
         }
+        if target.section != place.section { pageAskedAt = .now }
         place = Place(section: target.section, settings: target.settings)
     }
 }
@@ -189,8 +193,12 @@ struct RootView: View {
             #if os(macOS)
             .onAppear {
                 // The mouse's back button (button 3) goes back, as on Windows.
+                // Only over the main window (the overlay and the player are windows of their own).
                 mouseBack = NSEvent.addLocalMonitorForEvents(matching: .otherMouseDown) { [nav] event in
-                    if event.buttonNumber == 3 { MainActor.assumeIsolated { nav.goBack() }; return nil }
+                    if event.buttonNumber == 3, event.window?.identifier?.rawValue == "main" {
+                        MainActor.assumeIsolated { nav.goBack() }
+                        return nil
+                    }
                     return event
                 }
             }
@@ -200,7 +208,8 @@ struct RootView: View {
 
     /// "TEXT SIZE 125%  //  ⌘0 RESETS" for 1.2 s, then a fade.
     private func showZoomToast(_ scale: Double) {
-        let text = "TEXT SIZE \(Int((scale * 100).rounded()))%" + (abs(scale - 1) < 0.001 ? "" : "  //  \(TextSize.resetKey) RESETS")
+        // {scale:P0}: in the user's own format ("125%", "125 %").
+        let text = "TEXT SIZE \(scale.formatted(.percent.precision(.fractionLength(0))))" + (abs(scale - 1) < 0.001 ? "" : "  //  \(TextSize.resetKey) RESETS")
         zoomToast = text
         zoomToastCount += 1
         let count = zoomToastCount
@@ -220,14 +229,7 @@ struct RootView: View {
                 .padding(.leading, !compact && sidebarOpen ? Sidebar.width : 0)
                 .padding(.top, sidebarOpen && !compact ? 0 : topBarHeight)
 
-            if !sidebarOpen || compact {
-                // A solid bar across the top holding the menu and Back, so pages scroll under nothing.
-                ob.paper
-                    .frame(height: topBarHeight)
-                    .overlay(alignment: .bottom) { Rule() }
-                    .background(ob.paper.ignoresSafeArea(edges: .top))
-                    .transition(.opacity)
-            }
+            if compact { topBar }
 
             if compact && nav.drawerOpen {
                 Color.black.opacity(0.25).ignoresSafeArea().onTapGesture { withAnimation(.easeOut(duration: 0.2)) { nav.drawerOpen = false } }
@@ -240,11 +242,16 @@ struct RootView: View {
                 .offset(x: sidebarOpen ? 0 : -(compact ? 260 : Sidebar.width) - 1)
                 .allowsHitTesting(sidebarOpen)
                 .accessibilityHidden(!sidebarOpen)
+                .environment(\.sidebarHidden, !sidebarOpen)
+
+            // Over the sliding sidebar, fading in as it goes (Windows' TopBar comes after the Sidebar).
+            if !compact && !sidebarOpen { topBar }
 
             menuAndBack
         }
         .background(ob.paper.ignoresSafeArea())
         .environmentObject(nav)
+        .onChange(of: nav.place.section) { _, section in logPageTime(section) }
         // About a quarter second, cubic ease-out, as Windows moves it frame by frame.
         .animation(.timingCurve(0.33, 1, 0.68, 1, duration: 0.26), value: sidebarOpen)
         // ⌘, and the menu bar's "Check for updates…" open a Settings section (also when they opened this window).
@@ -279,6 +286,26 @@ struct RootView: View {
     }
 
     private var topBarHeight: CGFloat { 56 }
+
+    /// A solid bar across the top holding the menu and Back, so pages scroll under nothing.
+    private var topBar: some View {
+        ob.paper
+            .frame(height: topBarHeight)
+            .overlay(alignment: .bottom) { Rule() }
+            .background(ob.paper.ignoresSafeArea(edges: .top))
+            .transition(.opacity)
+    }
+
+    /// "Page X took N ms to show" for a page that took 150 ms or more, as Windows logs it (not Settings' sections).
+    private func logPageTime(_ section: Section) {
+        guard section != .settings, let asked = nav.pageAskedAt else { return }
+        nav.pageAskedAt = nil
+        DispatchQueue.main.async {
+            let ms = Int(Date.now.timeIntervalSince(asked) * 1000)
+            let tag = section.rawValue.prefix(1).uppercased() + section.rawValue.dropFirst()
+            if ms >= 150 { Log.info("Page \(tag) took \(ms) ms to show") }
+        }
+    }
 
     /// The menu button (☰, folding into ✕ while the sidebar is open) and Back, always at the top left, 12 in. While the
     /// sidebar is open Back sits at its right edge, after the logo; folded, it slides along to beside the menu button.
@@ -353,12 +380,28 @@ struct IconButton<Glyph: View>: View {
                 .overlay(Capsule().strokeBorder(focused ? ob.accent : .clear, lineWidth: 1))
                 .contentShape(Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressedDim())
         .focused($focused)
         .onHover { hover = $0 }
         .handCursor()
         .help(help)
         .accessibilityLabel(label)
+    }
+}
+
+/// QuietButton's pressed look, which IconButton keeps: the whole button at 70% while the mouse is down.
+private struct PressedDim: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.opacity(configuration.isPressed ? 0.7 : 1)
+    }
+}
+
+/// The sidebar is slid away: its entries leave the tab order (Windows collapses it).
+private struct SidebarHiddenKey: EnvironmentKey { static let defaultValue = false }
+extension EnvironmentValues {
+    var sidebarHidden: Bool {
+        get { self[SidebarHiddenKey.self] }
+        set { self[SidebarHiddenKey.self] = newValue }
     }
 }
 
@@ -377,7 +420,8 @@ struct Sidebar: View {
             Logo(recording: model.phase == .recording)
                 .padding(.top, 6)
                 .padding(.leading, 42)
-                .padding(.bottom, 24)
+                // 24 below the header and the first entry's own 1 (Margin 0,1).
+                .padding(.bottom, 25)
             VStack(spacing: 2) {
                 ForEach(Section.allCases, id: \.self) { s in
                     NavCapsule(title: s.title, japanese: s.japanese, icon: s, selected: nav.place.section == s) { nav.open(s) }
@@ -386,15 +430,18 @@ struct Sidebar: View {
             Spacer(minLength: 12)
             engineStatus
         }
-        .padding(EdgeInsets(top: 18, leading: 14, bottom: 14, trailing: 14))
+        // 14 in from the 1 px line, which takes its own room inside the 216 (BorderThickness 0,0,1,0).
+        .padding(EdgeInsets(top: 18, leading: 14, bottom: 14, trailing: 15))
         .frame(maxHeight: .infinity, alignment: .top)
         .background(ob.paper.ignoresSafeArea())
-        .overlay(alignment: .trailing) { Rectangle().fill(ob.ink).frame(width: 1).ignoresSafeArea() }
+        // Below the title bar, as Windows' border stops under its own.
+        .overlay(alignment: .trailing) { Rectangle().fill(ob.ink).frame(width: 1).ignoresSafeArea(edges: .bottom) }
     }
 
     private var engineStatus: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
+            // Both at the top of the row, as in Windows' DockPanel.
+            HStack(alignment: .top) {
                 Readout("Engine // Status")
                 Spacer()
                 Decor("倍音", size: 10.5)
@@ -411,7 +458,8 @@ struct Sidebar: View {
                 .padding(.top, 8)
         }
         .padding(.horizontal, 2)
-        .padding(.top, 12)
+        // 12 under the line, which takes 1 of its own (BorderThickness 0,1,0,0).
+        .padding(.top, 13)
         .overlay(alignment: .top) { Hairline() }
     }
 
@@ -502,6 +550,7 @@ struct NavCapsule: View {
     @Environment(\.ob) private var ob
     @State private var hover = false
     @FocusState private var focused
+    @Environment(\.sidebarHidden) private var sidebarHidden
 
     var body: some View {
         Button(action: action) {
@@ -513,7 +562,8 @@ struct NavCapsule: View {
                 }
                 Text(title.uppercased()).font(Ob.mono(size, selected ? .semibold : .regular)).lineLimit(1)
                 Spacer(minLength: 2)
-                if let japanese { Decor(japanese, size: 10.5, color: selected ? ob.onInk : ob.ink).opacity(0.6) }
+                // The decor takes the chosen entry's SemiBold too (it inherits the ListBoxItem's FontWeight).
+                if let japanese { Decor(japanese, size: 10.5, color: selected ? ob.onInk : ob.ink, weight: selected ? .semibold : .regular).opacity(0.6) }
             }
             .foregroundStyle(selected ? ob.onInk : ob.ink)
             .padding(.horizontal, 13).padding(.vertical, size < 12 ? 7 : 8)
@@ -523,10 +573,19 @@ struct NavCapsule: View {
         }
         .buttonStyle(.plain)
         .focused($focused)
+        .modifier(OutOfTabOrder(hidden: sidebarHidden))
         .onHover { hover = $0 }
         .handCursor()
         .accessibilityLabel(title)
         .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+/// Not a Tab stop while hidden; otherwise as it was.
+private struct OutOfTabOrder: ViewModifier {
+    var hidden: Bool
+    func body(content: Content) -> some View {
+        if hidden { content.focusable(false) } else { content }
     }
 }
 

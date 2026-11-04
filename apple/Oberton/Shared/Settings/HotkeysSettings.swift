@@ -14,7 +14,8 @@ struct HotkeysSection: View {
         VStack(alignment: .leading, spacing: 0) {
             #if os(macOS)
             Caption("Click a box and press the shortcut you want. Shortcuts work in every application. Use at least one of Ctrl, Alt, Shift or Cmd (or an F-key).")
-            row("Start / stop dictation", $model.settings.hotkey, reset: ("Reset", AppSettings.defaultHotkey))
+            // The start/stop box shows its text as it is, blank included (no "(none)"), as on Windows.
+            row("Start / stop dictation", $model.settings.hotkey, reset: ("Reset", AppSettings.defaultHotkey), none: "")
             row("Switch to next profile", $model.settings.cycleProfileHotkey, reset: ("Clear", ""))
             row("Read selected text aloud", $model.settings.speakHotkey, reset: ("Reset", AppSettings.defaultSpeakHotkey))
             row("Extended notes marker", $model.settings.notesMarkerHotkey, reset: ("Clear", ""))
@@ -25,7 +26,7 @@ struct HotkeysSection: View {
                 .font(Ob.sans(Ob.body)).foregroundStyle(status.error == nil ? ob.ink : ob.accent)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 16)
-            SystemShortcutClash().padding(.top, 12)
+            SystemShortcutClash(top: 12)
             Caption("Tip: a hotkey here is taken from every other app while Oberton runs (Ctrl+D then no longer bookmarks a page in a browser, and Ctrl+Space no longer switches input methods). If one doesn't fire, or you miss what it did, pick another combination such as F9.", bottom: 0)
                 .padding(.top, 16)
             #else
@@ -35,11 +36,11 @@ struct HotkeysSection: View {
     }
 
     #if os(macOS)
-    private func row(_ title: String, _ key: Binding<String>, reset: (label: String, value: String)) -> some View {
+    private func row(_ title: String, _ key: Binding<String>, reset: (label: String, value: String), none: String = "(none)") -> some View {
         VStack(alignment: .leading, spacing: 0) {
             FieldLabel(title)
             HStack(spacing: 8) {
-                HotkeyBox(id: title, hotkey: key)
+                HotkeyBox(id: title, hotkey: key, none: none)
                 Button(reset.label) { key.wrappedValue = reset.value }.buttonStyle(.quietNarrow)
             }
         }
@@ -52,6 +53,8 @@ struct HotkeysSection: View {
 /// so macOS may act on it first. Says so, with a one-click alternative for Read aloud; nothing changes by itself.
 /// Shown under Settings › Hotkeys and in the first-run setup.
 struct SystemShortcutClash: View {
+    /// Space above it, only while there is something to say.
+    var top: CGFloat = 0
     @EnvironmentObject var model: AppModel
     @Environment(\.ob) private var ob
     @State private var taken: [String] = []
@@ -73,6 +76,7 @@ struct SystemShortcutClash: View {
                 }
             }
         }
+        .padding(.top, taken.isEmpty ? 0 : top)
         .onAppear(perform: check)
         .onChange(of: keys) { check() }
         .onReceive(recheck) { _ in check() }
@@ -95,12 +99,14 @@ struct SystemShortcutClash: View {
     }
 }
 
-/// The box a shortcut is recorded in (a read-only TextBox, 240 wide, 8,6 inside): the shortcut as text, or "(none)".
-/// Clicked, it outlines in the accent and takes the next key press with Ctrl, Alt, Shift or Cmd, or an F-key; Esc or a
-/// click elsewhere stops.
+/// The box a shortcut is recorded in (a read-only Fluent TextBox, 240 wide, 8,6 inside, rounded 4, with an ink line along
+/// the bottom while it has the focus): the shortcut as text, or "(none)". Clicked, it takes every key press with Ctrl,
+/// Alt, Shift or Cmd, or an F-key, each one replacing the last, until a click elsewhere; other keys (Esc, Tab, a plain
+/// letter) are swallowed. A shortcut Oberton holds does what it does instead of reaching the box, as on Windows.
 private struct HotkeyBox: View {
     var id: String
     @Binding var hotkey: String
+    var none: String
     @ObservedObject private var status = HotkeyStatus.shared
     @Environment(\.ob) private var ob
     @State private var monitor: Any?
@@ -108,11 +114,16 @@ private struct HotkeyBox: View {
     private var recording: Bool { status.recording == id }
 
     var body: some View {
-        Text(hotkey.isEmpty ? "(none)" : hotkey)
+        Text(hotkey.isEmpty ? (none.isEmpty ? " " : none) : hotkey)
             .font(Ob.sans(Ob.body)).lineLimit(1)
             .padding(.horizontal, 8).padding(.vertical, 6)
             .frame(width: 240, alignment: .leading)
-            .overlay(Rectangle().strokeBorder(recording ? ob.accent : ob.divider, lineWidth: 1))
+            .background(RoundedRectangle(cornerRadius: 4).fill(ob.subtle))
+            .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(ob.divider, lineWidth: 1))
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(recording ? ob.ink : ob.muted).frame(height: recording ? 2 : 1).padding(.horizontal, 2)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 4))
             .contentShape(Rectangle())
             .onTapGesture { start() }
             .onDisappear { stop() }
@@ -135,11 +146,10 @@ private struct HotkeyBox: View {
             if flags.contains(.option) { mods.insert(.option) }
             if flags.contains(.shift) { mods.insert(.shift) }
             if flags.contains(.command) { mods.insert(.command) }
-            if mods.isEmpty, event.keyCode == 0x35 { stop(); return nil } // Esc on its own: keep the shortcut
-            // As on Windows, a press that can't be a shortcut (a plain letter) is swallowed and the box keeps waiting.
+            // As on Windows, a press that can't be a shortcut (a plain letter, Esc, Tab) is swallowed and the box keeps
+            // recording; a shortcut is saved at once and the box keeps recording too (it keeps the focus).
             if let name = Hotkey.keyName(forKeyCode: event.keyCode), let key = Hotkey(modifiers: mods, key: name), key.isAllowed {
                 hotkey = key.text
-                stop()
             }
             return nil
         }

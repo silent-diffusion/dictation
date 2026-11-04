@@ -3,8 +3,8 @@ import Carbon.HIToolbox
 import Foundation
 import ObertonCore
 
-/// What the Hotkeys settings page shows: whether every shortcut is held (App.HotkeyError on Windows), and which one is
-/// being recorded. While one is recorded the shortcuts are let go, so pressing the current one reaches the box.
+/// What the Hotkeys settings page shows: whether every shortcut is held (App.HotkeyError on Windows), and which box is
+/// recording. The shortcuts stay held meanwhile, as on Windows: pressing one that is in use does what it does there.
 @MainActor
 final class HotkeyStatus: ObservableObject {
     static let shared = HotkeyStatus()
@@ -17,6 +17,12 @@ final class HotkeyStatus: ObservableObject {
 final class HotkeyManager {
     private var refs: [EventHotKeyRef] = []
     private var actions: [UInt32: () -> Void] = [:]
+    /// The combinations `register` holds, so the marker key can't take one of them a second time.
+    private var held: [Hotkey] = []
+    /// The Extended Notes marker key, held only while a session records (App.ApplyMarkerHotkey), apart from the others.
+    private var markerRef: EventHotKeyRef?
+    private var markerAction: (() -> Void)?
+    private static let markerID: UInt32 = 1001
     private var handler: EventHandlerRef?
     /// Escape, held only while the overlay waits for a decision (preview, no place to paste); apart from the others, so
     /// re-registering them leaves it alone.
@@ -32,43 +38,80 @@ final class HotkeyManager {
             GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil,
                               MemoryLayout<EventHotKeyID>.size, nil, &id)
             let me = Unmanaged<HotkeyManager>.fromOpaque(userData!).takeUnretainedValue()
-            DispatchQueue.main.async { id.id == HotkeyManager.escapeID ? me.escapeAction?() : me.actions[id.id]?() }
+            DispatchQueue.main.async {
+                switch id.id {
+                case HotkeyManager.escapeID: me.escapeAction?()
+                case HotkeyManager.markerID: me.markerAction?()
+                default: me.actions[id.id]?()
+                }
+            }
             return noErr
         }, 1, &spec, me, &handler)
     }
 
-    /// Replace every hotkey: (shortcut, what it is for, action); an empty shortcut is intentionally unset. Returns a
-    /// user-readable error for each one that couldn't be registered, as on Windows.
+    /// Replace the dictation, profile and Read aloud hotkeys: (shortcut, action); an empty shortcut is intentionally
+    /// unset. Returns a user-readable error for each one that couldn't be registered, as on Windows.
     @discardableResult
-    func register(_ bindings: [(text: String, role: String, action: () -> Void)]) -> [String] {
+    func register(_ bindings: [(text: String, action: () -> Void)]) -> [String] {
         refs.forEach { UnregisterEventHotKey($0) }
         refs = []
         actions = [:]
+        held = []
         var errors: [String] = []
-        // Blank (or only spaces) is intentionally unset (string.IsNullOrWhiteSpace).
-        for (i, b) in bindings.enumerated() where !b.text.trimmingCharacters(in: .whitespaces).isEmpty {
-            guard let hotkey = Hotkey(b.text) else { errors.append("'\(b.text)' isn't a valid shortcut."); continue }
-            if let earlier = bindings[..<i].first(where: { Hotkey.same($0.text, b.text) }) {
-                errors.append("\(b.text) is already \(earlier.role). Choose a different shortcut under Settings > Hotkeys.")
-                continue
-            }
-            var ref: EventHotKeyRef?
+        for (i, b) in bindings.enumerated() where !Self.isUnset(b.text) {
             let id = EventHotKeyID(signature: OSType(0x4F42_5254), id: UInt32(i + 1)) // 'OBRT'
-            // Exclusive, so a combination another app holds is refused rather than shared, as RegisterHotKey on Windows.
-            let status = RegisterEventHotKey(hotkey.keyCode, hotkey.carbonModifiers, id, GetApplicationEventTarget(),
-                                             OptionBits(kEventHotKeyExclusive), &ref)
-            if status == noErr, let ref {
+            switch take(b.text, id: id) {
+            case .success(let (ref, hotkey)):
                 refs.append(ref)
+                held.append(hotkey)
                 actions[UInt32(i + 1)] = b.action
-            } else if status == eventHotKeyExistsErr {
-                errors.append("\(b.text) is already used by another application. Choose a different shortcut under Settings > Hotkeys.")
-            } else if hotkey.isOptionOnly {
-                errors.append("macOS doesn't allow \(b.text): a shortcut with only Alt (Option), or Alt and Shift, isn't allowed. Add Ctrl or Cmd.")
-            } else {
-                errors.append("macOS refused the shortcut \(b.text) (error \(status)).")
+            case .failure(let error):
+                errors.append(error.message)
             }
         }
         return errors
+    }
+
+    /// Take the Extended Notes marker key (`text`), or let it go (nil). Returns the error, if any.
+    @discardableResult
+    func holdMarker(_ text: String?, _ action: (() -> Void)? = nil) -> String? {
+        if let markerRef { UnregisterEventHotKey(markerRef) }
+        markerRef = nil
+        markerAction = nil
+        guard let text, !Self.isUnset(text) else { return nil }
+        switch take(text, id: EventHotKeyID(signature: OSType(0x4F42_5254), id: Self.markerID)) {
+        case .success(let (ref, _)):
+            markerRef = ref
+            markerAction = action
+            return nil
+        case .failure(let error):
+            return error.message
+        }
+    }
+
+    /// Blank (or only white space) is intentionally unset (string.IsNullOrWhiteSpace).
+    private static func isUnset(_ text: String) -> Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+    private struct Refused: Error { var message: String }
+
+    /// RegisterHotKey: exclusive, so a combination another app holds is refused rather than shared. A combination
+    /// Oberton holds already is refused the same way (Windows' second RegisterHotKey fails with 1409).
+    private func take(_ text: String, id: EventHotKeyID) -> Result<(EventHotKeyRef, Hotkey), Refused> {
+        guard let hotkey = Hotkey(text) else { return .failure(Refused(message: "'\(text)' isn't a valid shortcut.")) }
+        if held.contains(hotkey) { return .failure(Refused(message: Self.taken(text))) }
+        var ref: EventHotKeyRef?
+        let status = RegisterEventHotKey(hotkey.keyCode, hotkey.carbonModifiers, id, GetApplicationEventTarget(),
+                                         OptionBits(kEventHotKeyExclusive), &ref)
+        if status == noErr, let ref { return .success((ref, hotkey)) }
+        if status == eventHotKeyExistsErr { return .failure(Refused(message: Self.taken(text))) }
+        if hotkey.isOptionOnly {
+            return .failure(Refused(message: "macOS doesn't allow \(text): a shortcut with only Alt (Option), or Alt and Shift, isn't allowed. Add Ctrl or Cmd."))
+        }
+        return .failure(Refused(message: "macOS refused the shortcut \(text) (error \(status))."))
+    }
+
+    private static func taken(_ text: String) -> String {
+        "\(text) is already used by another application. Choose a different shortcut under Settings > Hotkeys."
     }
 
     /// Take Escape system-wide while `action` is set (App.xaml.cs registers it only in Confirming and Placing, so the
@@ -82,10 +125,13 @@ final class HotkeyManager {
             return nil
         }
         guard escapeRef == nil else { return nil }
+        // Exclusive, as every hotkey on Windows: Escape held by another app is refused, with Windows' texts.
         var ref: EventHotKeyRef?
         let id = EventHotKeyID(signature: OSType(0x4F42_5254), id: Self.escapeID)
-        let status = RegisterEventHotKey(UInt32(kVK_Escape), 0, id, GetApplicationEventTarget(), 0, &ref)
-        guard status == noErr, let ref else { return "macOS refused Escape as a shortcut (error \(status))." }
+        let status = RegisterEventHotKey(UInt32(kVK_Escape), 0, id, GetApplicationEventTarget(), OptionBits(kEventHotKeyExclusive), &ref)
+        guard status == noErr, let ref else {
+            return status == eventHotKeyExistsErr ? Self.taken("Escape") : "macOS refused the shortcut Escape (error \(status))."
+        }
         escapeRef = ref
         return nil
     }
@@ -93,10 +139,11 @@ final class HotkeyManager {
     /// The marker key must differ from the other shortcuts (App.MarkerClash); registering it second would only say
     /// "used by another application".
     static func markerClash(marker: String, dictation: String, speak: String, cycle: String) -> String? {
-        guard !marker.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        guard !isUnset(marker) else { return nil }
+        // Windows' Same: the text without spaces, any case ("Alt+Ctrl+M" isn't "Ctrl+Alt+M" here; registering it then
+        // fails as taken).
         func same(_ a: String, _ b: String) -> Bool {
             a.replacingOccurrences(of: " ", with: "").caseInsensitiveCompare(b.replacingOccurrences(of: " ", with: "")) == .orderedSame
-                || Hotkey.same(a, b)
         }
         let other = same(marker, dictation) ? "the dictation shortcut" : same(marker, speak) ? "the Read aloud shortcut"
             : same(marker, cycle) ? "the profile-switching shortcut" : nil
