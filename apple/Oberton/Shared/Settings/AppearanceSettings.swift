@@ -14,38 +14,43 @@ struct AppearanceSection: View {
         VStack(alignment: .leading, spacing: 0) {
             Caption("Follows \(Device.system) by default. Pick Light or Dark to override it.")
             FieldLabel("Theme")
-            // UniformGrid with margins 0,0,8,0 / 4,0 / 8,0,0,0: 12 between the cards.
-            HStack(spacing: 12) {
-                ForEach(AppTheme.allCases, id: \.self) { t in
-                    ChoiceCard(chosen: model.settings.theme == t, action: { model.settings.theme = t }) {
-                        VStack(alignment: .leading, spacing: 0) {
-                            ThemePreview(theme: t).frame(height: 84)
-                            Text(t.rawValue.uppercased()).font(Ob.mono(12, .bold)).padding(EdgeInsets(top: 10, leading: 4, bottom: 2, trailing: 0))
-                            // The SYSTEM card says what the system is now, while it is the one chosen.
-                            Readout(t == .system && model.settings.theme == .system ? (scheme == .dark ? "Dark right now" : "Light right now") : " ")
-                                .padding(EdgeInsets(top: 0, leading: 4, bottom: 2, trailing: 0))
-                        }
-                    }
-                    .accessibilityLabel(t.rawValue.capitalized)
-                }
-            }
-            FieldLabel("Accent").padding(.top, 8)
-            HStack(spacing: 8) {
-                ForEach(AccentChoice.allCases, id: \.self) { a in
-                    ChoiceCard(chosen: model.settings.accent == a, action: { model.settings.accent = a }) {
-                        VStack(alignment: .leading, spacing: 0) {
-                            HStack(spacing: 4) {
-                                swatch(Color(hex: a.hex.light), paper: Color(hex: 0xE8E7E3))
-                                swatch(Color(hex: a.hex.dark), paper: Color(hex: 0x0E0E0D))
+            // A UniformGrid of three, card margins 0,0,8,0 / 4,0 / 8,0,0,0: 12 between the cards.
+            uniformGrid(AppTheme.allCases, outer: 8, inner: 4) { t in
+                ChoiceCard(chosen: model.settings.theme == t, action: { model.settings.theme = t }) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ThemePreview(theme: t).frame(height: 84)
+                        Text(t.rawValue.uppercased()).font(Ob.mono(12, .bold)).noWrap().padding(EdgeInsets(top: 10, leading: 4, bottom: 2, trailing: 0))
+                        // The SYSTEM card says what the system is now, while it is the one chosen (a MonoLabel); LIGHT
+                        // and DARK hold a blank line in the window's 12, which sets the row's height for all three.
+                        ZStack(alignment: .leading) {
+                            Text(" ").font(Ob.sans(Ob.body)).hidden()
+                            if t == .system {
+                                Readout(model.settings.theme == .system ? (scheme == .dark ? "Dark right now" : "Light right now") : " ").noWrap()
                             }
-                            .padding(EdgeInsets(top: 4, leading: 4, bottom: 0, trailing: 0))
-                            Text(a.title.uppercased()).font(Ob.mono(11, .bold)).lineLimit(1).minimumScaleFactor(0.7)
-                                .padding(EdgeInsets(top: 10, leading: 4, bottom: 2, trailing: 0))
                         }
+                        .padding(EdgeInsets(top: 0, leading: 4, bottom: 2, trailing: 0))
                     }
-                    .accessibilityLabel(a.title)
                 }
+                .accessibilityLabel(t.rawValue.capitalized)
             }
+            .accessibilityElement(children: .contain).accessibilityLabel("Theme")
+            FieldLabel("Accent").padding(.top, 8)
+            // Five columns, card margins 0,0,4,0 / 4,0 / … / 4,0,0,0: the outer two are 4 wider than the middle three.
+            uniformGrid(AccentChoice.allCases, outer: 4, inner: 4) { a in
+                ChoiceCard(chosen: model.settings.accent == a, action: { model.settings.accent = a }) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        HStack(spacing: 4) {
+                            swatch(Color(hex: a.hex.light), paper: Color(hex: 0xE8E7E3))
+                            swatch(Color(hex: a.hex.dark), paper: Color(hex: 0x0E0E0D))
+                        }
+                        .padding(EdgeInsets(top: 4, leading: 4, bottom: 0, trailing: 0))
+                        Text(a.title.uppercased()).font(Ob.mono(11, .bold)).noWrap()
+                            .padding(EdgeInsets(top: 10, leading: 4, bottom: 2, trailing: 0))
+                    }
+                }
+                .accessibilityLabel(a.title)
+            }
+            .accessibilityElement(children: .contain).accessibilityLabel("Accent color")
             Caption("Oberton is ink on paper. The accent marks what is live or matters most right now: today's word count, the unload countdown, the word being read, words the AI added, and errors. Each accent has a version for light and for dark paper. Red is not offered: it means the microphone is recording.", bottom: 0)
                 .padding(.top, 6)
             FieldLabel("Text size").padding(.top, 8)
@@ -71,12 +76,12 @@ struct AppearanceSection: View {
         let scale = TextSize.clamped(model.settings.uiScale)
         return HStack(spacing: 0) {
             Button("A−") { model.settings.uiScale = TextSize.step(from: scale, -1) }
-                .buttonStyle(.quiet).frame(minWidth: 52)
+                .buttonStyle(CapsuleButtonStyle(kind: .quiet, minWidth: 52))
                 .disabled(scale <= TextSize.min + 0.001)
                 .help("Smaller (⌘+minus)").accessibilityLabel("Make the text smaller")
-            Text("\(Int((scale * 100).rounded()))%").font(Ob.mono(14, .bold)).frame(minWidth: 64).padding(.horizontal, 8)
+            Text(Fmt.percent(scale)).font(Ob.mono(14, .bold)).frame(minWidth: 64).padding(.horizontal, 8)
             Button("A+") { model.settings.uiScale = TextSize.step(from: scale, +1) }
-                .buttonStyle(.quiet).frame(minWidth: 52)
+                .buttonStyle(CapsuleButtonStyle(kind: .quiet, minWidth: 52))
                 .disabled(scale >= TextSize.max - 0.001)
                 .help("Larger (⌘+plus)").accessibilityLabel("Make the text larger")
             Button("Reset") { model.settings.uiScale = 1 }
@@ -85,11 +90,26 @@ struct AppearanceSection: View {
         }
     }
 
-    /// 22×22 of paper with a 12×12 square of the accent in it (5 in from each side), in a faint grey frame.
+    /// 22×22 of paper in a faint grey 1 px frame, Padding 5 inside the frame: a 10×10 square of the accent.
     private func swatch(_ c: Color, paper: Color) -> some View {
         Rectangle().fill(paper).frame(width: 22, height: 22)
-            .overlay(Rectangle().fill(c).frame(width: 12, height: 12))
+            .overlay(Rectangle().fill(c).frame(width: 10, height: 10))
             .overlay(Rectangle().strokeBorder(Color(hex: 0x808080, alpha: 0x55 / 255.0), lineWidth: 1))
+    }
+
+    /// A UniformGrid row: equal columns, each card inset by its margin (`outer` at the row's ends' far sides is 0, the
+    /// first card's right and the last card's left use `outer`, the others `inner` on both sides).
+    private func uniformGrid<Item: Hashable, Card: View>(_ items: [Item], outer: CGFloat, inner: CGFloat,
+                                                        @ViewBuilder card: @escaping (Item) -> Card) -> some View {
+        HStack(alignment: .top, spacing: 0) {
+            ForEach(Array(items.enumerated()), id: \.element) { i, item in
+                let first = i == 0, last = i == items.count - 1
+                card(item)
+                    .padding(.leading, first ? 0 : last ? outer : inner)
+                    .padding(.trailing, last ? 0 : first ? outer : inner)
+                    .frame(maxWidth: .infinity)
+            }
+        }
     }
 }
 
@@ -117,6 +137,10 @@ private struct ThemePreview: View {
                 sheet(dark: theme == .dark)
             }
         }
+        // PreviewFrame lays the drawing inside its 1 px line (and clips it there).
+        .clipShape(Rectangle())
+        .padding(Ob.border)
+        .background(theme == .system ? Color.clear : theme == .dark ? Color(hex: 0x0E0E0D) : Color(hex: 0xE8E7E3), in: RoundedRectangle(cornerRadius: 2))
         .clipShape(RoundedRectangle(cornerRadius: 2))
         .overlay(RoundedRectangle(cornerRadius: 2).strokeBorder(Color(hex: 0x808080, alpha: 0x55 / 255.0), lineWidth: 1))
     }

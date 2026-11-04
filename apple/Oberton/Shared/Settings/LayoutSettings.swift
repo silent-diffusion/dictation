@@ -19,7 +19,7 @@ struct LayoutSection: View {
                 opacity($model.settings.overlayOpacity, name: "Overlay opacity")
                 divider
                 position(ReaderPositionPicker.describe(model.settings.overlayPosition))
-                PositionPicker(position: $model.settings.overlayPosition).padding(.top, 8).padding(.bottom, 12)
+                PositionPicker(position: $model.settings.overlayPosition, name: "Overlay position").padding(.top, 8).padding(.bottom, 12)
                 Caption("The overlay stays dark in both themes so it reads on top of any window. The preview approval always shows, even with the overlay off.", bottom: 0)
             } preview: {
                 overlayPreview
@@ -31,7 +31,7 @@ struct LayoutSection: View {
                 opacity($model.settings.readerOpacity, name: "Read aloud player opacity")
                 divider
                 position(ReaderPositionPicker.placeName(model.settings) + (model.settings.readerPosition == .withOverlay ? " (with the overlay)" : ""))
-                ReaderPositionPicker().padding(.top, 8).padding(.bottom, 12)
+                ReaderPositionPicker(name: "Read aloud player position").padding(.top, 8).padding(.bottom, 12)
                 Caption("The player that reads text aloud. Like the dictation overlay it stays dark in both themes, and you can drag it while it reads.", bottom: 0)
             } preview: {
                 ReaderPreview(opacity: model.settings.readerOpacity)
@@ -42,7 +42,8 @@ struct LayoutSection: View {
         }
     }
 
-    /// A hairline card in two equal columns: the controls (18,6,18,16 in) and the preview on the subtle wash.
+    /// A hairline card in two equal columns, both inside the card's 1 px line: the controls (Margin 18,6,18,16) and the
+    /// preview on the subtle wash.
     private func card<Controls: View, Preview: View>(@ViewBuilder _ controls: () -> Controls, @ViewBuilder preview: () -> Preview) -> some View {
         HStack(alignment: .top, spacing: 0) {
             VStack(alignment: .leading, spacing: 0) { controls() }
@@ -53,7 +54,8 @@ struct LayoutSection: View {
                 .clipped()
         }
         .fixedSize(horizontal: false, vertical: true)
-        .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
+        .padding(Ob.border)
+        .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: Ob.border))
     }
 
     private var divider: some View { Hairline().padding(.top, 2).padding(.bottom, 12) }
@@ -64,7 +66,7 @@ struct LayoutSection: View {
             HStack {
                 Text("Opacity").font(Ob.sans(Ob.body))
                 Spacer()
-                Text("\(Int((value.wrappedValue * 100).rounded()))%").font(Ob.mono(12))
+                Text(Fmt.percent(value.wrappedValue)).font(Ob.mono(12))
             }
             // Snapped to 0.02 in the binding: a stepped Slider would draw tick marks, which Windows' doesn't.
             Slider(value: Binding(get: { value.wrappedValue }, set: { value.wrappedValue = ($0 / 0.02).rounded() * 0.02 }), in: 0.3...1)
@@ -94,13 +96,15 @@ struct LayoutSection: View {
             }
             .padding(EdgeInsets(top: 22, leading: 20, bottom: 0, trailing: 20))
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            // Padding 16,0 inside the pill's 1 px line; a name too long for the preview runs on and is cut, no "…".
             HStack(spacing: 0) {
                 Circle().fill(Color(hex: 0xFF4636)).frame(width: 8, height: 8)
                 Text("0:07").font(Ob.mono(12)).foregroundStyle(Color(hex: 0xE8E7E3)).padding(.leading, 10)
                 Text(model.activeProfile.name).font(Ob.mono(11)).foregroundStyle(Color(hex: 0xE8E7E3, alpha: 0xB8 / 255.0))
-                    .lineLimit(1).padding(.leading, 12)
+                    .padding(.leading, 12)
             }
-            .padding(.horizontal, 16).frame(height: 40)
+            .noWrap()
+            .padding(.horizontal, 16 + Ob.border).frame(height: 40)
             .background(Capsule().fill(Color(hex: 0x0D0D0C, alpha: model.settings.overlayOpacity)))
             .overlay(Capsule().strokeBorder(Color(hex: 0xFFFFFF, alpha: 0x1F / 255.0), lineWidth: 1))
             .padding(.bottom, 22)

@@ -9,39 +9,41 @@ struct AboutSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(versionLine).font(Ob.mono(13, .bold)).padding(.bottom, 4)
+            // The Caption style (the window's 12, LineHeight 19) with Margin 0,0,0,8, then the divider 10 below that.
             (Text("Free and open source (MIT license). ")
                 + Text("[Project page on GitHub](https://github.com/silent-diffusion/dictation)").foregroundStyle(ob.ink).underline())
-                .font(Ob.sans(13)).foregroundStyle(ob.muted).tint(ob.ink)
-            Hairline().padding(.vertical, 16)
+                .font(Ob.sans(Ob.body)).foregroundStyle(ob.muted).tint(ob.ink).wpfLineHeight(19, size: Ob.body)
+                .fixedSize(horizontal: false, vertical: true)
+            Hairline().padding(.top, 18).padding(.bottom, 16)
             part("D.2.1", "What it is", "概要") {
                 prose(whatItIs)
                 prose(Text("The name is German for ") + ink("overtone") + Text(": the AI adds a layer of polish on top of your own voice."))
             }
             part("D.2.2", "How it works", "口述") {
-                steps(howItWorks)
+                steps(howItWorks).padding(.top, 10)
                 prose(Text("If the AI fails or its edit strays too far from what you said (the profile's safety net), your own words are inserted instead, so a dictation is never lost. The dashboard's signal path lights each step while it works. Read aloud uses Kokoro, Piper or the voices built into \(Device.system). ")
                       + ink("Nothing leaves your \(Device.noun)")
-                      + Text(" unless you turn off Keep everything offline and choose a cloud model; the only other network use is downloading the models and voices you pick" + (Distribution.isDirect ? ", and checking for updates." : ".")))
+                      + Text(" unless you turn off Keep everything offline and choose a cloud model; the only other network use is downloading the models and voices you pick" + (Distribution.isDirect ? ", and checking for updates." : ".")),
+                      top: 12)
             }
             part("D.2.3", "How Extended Notes works", "記録") {
                 prose(Text("A session runs four steps side by side, each on its own rhythm, so the text keeps up with a lecture of any length while the AI only ever reads as much as fits in its memory at once."))
-                notesSteps
-                // The ink frame carries on from the steps' (no top edge), 12,12,12,8 inside.
+                notesSteps.padding(.top, 10)
+                // The ink frame carries on from the steps' (BorderThickness 1,0,1,1), Padding 12,12,12,8 inside the lines.
                 VStack(alignment: .leading, spacing: 8) {
                     Readout("A 30-minute lecture, step by step")
                     NotesTimeline().aspectRatio(760 / 196, contentMode: .fit).frame(maxWidth: 760)
                 }
-                .padding(EdgeInsets(top: 12, leading: 12, bottom: 8, trailing: 12))
+                .padding(EdgeInsets(top: 12, leading: 12 + Ob.border, bottom: 8 + Ob.border, trailing: 12 + Ob.border))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .overlay(alignment: .leading) { Rectangle().fill(ob.ink).frame(width: 1) }
                 .overlay(alignment: .trailing) { Rectangle().fill(ob.ink).frame(width: 1) }
                 .overlay(alignment: .bottom) { Rectangle().fill(ob.ink).frame(height: 1) }
-                .padding(.top, -10)
-                prose(ink("Why these sizes:") + Text(" the AI model reads at most \(NotesSummary.contextTokens.formatted(.number.locale(Locale(identifier: "en_US")))) tokens per request, about 9,400 characters or ten minutes of speech, with room left for its instructions and reply. Summing up in sections, then summaries of summaries, keeps every request inside that window however long the session runs. Nothing is sent to the AI while you dictate, so dictation always comes first."))
-                prose(ink("The model:") + Text(" by default the largest installed Ollama model that fits the memory this \(Device.noun)'s graphics may use; without one, the active model (Apple Intelligence by default) (Settings › Models › Extended Notes AI). After a session you can play the recording, export it, or click a step at the top of the session to redo it. Extended Notes never counts toward your dictation figures; Analytics shows it in a section of its own."))
+                prose(ink("Why these sizes:") + Text(" the AI model reads at most \(NotesSummary.contextTokens.formatted(.number.locale(Locale(identifier: "en_US")))) tokens per request, about 9,400 characters or ten minutes of speech, with room left for its instructions and reply. Summing up in sections, then summaries of summaries, keeps every request inside that window however long the session runs. Nothing is sent to the AI while you dictate, so dictation always comes first."), top: 12)
+                prose(ink("The model:") + Text(" by default the largest installed one that fits your graphics card's memory, or a mixture-of-experts model such as Qwen3 30B-A3B that fits in the \(Device.noun)'s memory (what fits goes on the graphics card, the rest stays in RAM); without one, the active model (Settings › Models › Extended Notes AI). After a session you can play the recording (made louder, skipping silences), jump from any line to the moment it was said, export it, or click a step at the top of the session to redo it. Extended Notes never counts toward your dictation figures; Analytics shows it in a section of its own."))
             }
             part("D.2.4", "What it keeps", "履歴") {
-                prose(Text("Everything stays in Oberton's data folder on this \(Device.noun), outside the app, so updates never touch it:"))
+                prose(Text("Everything stays in Oberton's data folder on this \(Device.noun), outside the program folder, so updates never touch it:"))
                 VStack(alignment: .leading, spacing: 0) {
                     // Window titles and sites: the direct build only (they need Accessibility).
                     keep("History", Distribution.isDirect
@@ -53,6 +55,7 @@ struct AboutSection: View {
                     keep("Word tally", "Counts of the words, phrases, corrections and fillers you dictate, overall and per app. Never whole sentences. Can be turned off.")
                     keep("Extended notes", "Each session's recording, transcript, formatted text and summary, until you delete it, and its own counts, kept apart from dictation.")
                 }
+                .padding(.top, 8)
             }
             part("D.2.5", "Design language", "計器", last: true) {
                 prose(Text("Oberton is drawn like a ") + ink("printed instrument panel")
@@ -63,7 +66,7 @@ struct AboutSection: View {
                 // With the Japanese words turned off there is nothing for the glossary to explain.
                 if showJapanese {
                     prose(Text("The small Japanese words beside labels are decoration. Each one matches what it sits next to, and none of them is needed to use the app:"))
-                    glossary
+                    glossary.padding(.top, 12)
                 }
             }
         }
@@ -82,7 +85,7 @@ struct AboutSection: View {
     /// The first paragraph, naming the hotkeys actually set.
     private var whatItIs: Text {
         #if os(macOS)
-        Text("Oberton is a dictation and read-aloud app for the Mac that runs entirely on your Mac. ").foregroundStyle(ob.ink)
+        Text("Oberton is a dictation and read-aloud app for Mac that runs entirely on your Mac. ").foregroundStyle(ob.ink)
             // An unset hotkey keeps the default's name, as the page's XAML text does.
             + Text("Press ") + Text(model.settings.hotkey.isEmpty ? AppSettings.defaultHotkey : model.settings.hotkey).font(Ob.mono(14)).foregroundStyle(ob.ink)
             + Text(", speak, and press it again: cleaned-up text appears at your cursor, in any app. Select text and press ")
@@ -100,28 +103,30 @@ struct AboutSection: View {
     private var howItWorks: [(String, String)] {
         #if os(macOS)
         [("01 Listen", "Your microphone is recorded while the hotkey is on. The recording is kept in History only if you choose to (Settings › History)."),
-         ("02 Transcribe", model.settings.whisperModel != nil ? "Whisper turns speech into text as you speak, on this Mac's graphics and Neural Engine."
-                                                              : "Apple Speech turns speech into text as you speak, on this Mac."),
-         ("03 Tidy up", "Your profile's AI model edits the text, following its instructions: Apple Intelligence on this Mac, or a local model through Ollama."),
+         // The active profile's engine: Windows' text for Whisper, and the same sentence for Apple's recognizer.
+         ("02 Transcribe", model.activeSpeech.whisperModel != nil ? "Whisper turns speech into text as you speak, on your graphics card if you have one."
+                                                                  : "Apple Speech turns speech into text as you speak, on this Mac."),
+         ("03 Tidy up", "A local language model (Apple Intelligence, or through Ollama) edits the text, following the active profile's instructions."),
          ("04 Insert", "Finished sentences can appear while you speak; at the end the final text replaces them at your cursor, and your clipboard is put back.")]
         #else
         [("01 Listen", "Your microphone is recorded while you dictate. The recording is kept in History only if you choose to (Settings › History)."),
          ("02 Transcribe", "Apple Speech turns speech into text as you speak, on this iPhone."),
-         ("03 Tidy up", "Your profile's AI model edits the text, following its instructions: Apple Intelligence on this iPhone by default."),
+         ("03 Tidy up", "A local language model (Apple Intelligence) edits the text, following the active profile's instructions."),
          ("04 Insert", "The text is copied, ready to paste.")]
         #endif
     }
 
     private func ink(_ s: String) -> Text { Text(s).foregroundStyle(ob.ink) }
 
-    /// Body text: 14, lines 22 apart, muted.
-    private func prose(_ t: Text) -> some View {
-        t.font(Ob.sans(14)).lineSpacing(Ob.lineSpacing(14, lineHeight: 22)).foregroundStyle(ob.muted).fixedSize(horizontal: false, vertical: true)
+    /// Body: 14, every line 22 tall, muted, 8 above (Margin 0,8,0,0) unless the page sets its own.
+    private func prose(_ t: Text, top: CGFloat = 8) -> some View {
+        t.font(Ob.sans(14)).foregroundStyle(ob.muted).wpfLineHeight(22, size: 14).fixedSize(horizontal: false, vertical: true)
+            .padding(.top, top)
     }
 
-    /// StepText: 12.5, lines 18 apart, muted.
+    /// StepText: 12.5, every line 18 tall, muted.
     private func stepText(_ s: String) -> some View {
-        Text(s).font(Ob.sans(12.5)).lineSpacing(Ob.lineSpacing(12.5, lineHeight: 18)).foregroundStyle(ob.muted).fixedSize(horizontal: false, vertical: true)
+        Text(s).font(Ob.sans(12.5)).foregroundStyle(ob.muted).wpfLineHeight(18, size: 12.5).fixedSize(horizontal: false, vertical: true)
     }
 
     private func part<Extra: View>(_ address: String, _ title: String, _ jp: String, last: Bool = false,
@@ -129,10 +134,11 @@ struct AboutSection: View {
         VStack(spacing: 0) {
             HStack(alignment: .top, spacing: 0) {
                 Readout(address).frame(width: 64, alignment: .leading).padding(.top, 3)
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack {
-                        Text(title.uppercased()).font(Ob.mono(12, .bold))
-                        Spacer()
+                // Each block below sets its own gap above (Body 8, the frames 10, some paragraphs 12).
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(alignment: .top, spacing: 0) {
+                        Text(title.uppercased()).font(Ob.mono(12, .bold)).noWrap()
+                        Spacer(minLength: 0)
                         Decor(jp)
                     }
                     extra()
@@ -144,52 +150,61 @@ struct AboutSection: View {
     }
 
     private func steps(_ s: [(String, String)]) -> some View {
+        stepFrame(s.map { step in
+            AnyView(VStack(alignment: .leading, spacing: 4) {
+                Text(step.0.uppercased()).font(Ob.mono(11, .bold)).noWrap()
+                stepText(step.1)
+            })
+        })
+    }
+
+    /// The ink frame of four equal steps (a UniformGrid inside BorderThickness 1): each step Padding 12,10, the later
+    /// ones with their own divider-coloured line on the left (Step's BorderThickness 1,0,0,0), inside the cell.
+    private func stepFrame(_ cells: [AnyView]) -> some View {
         HStack(alignment: .top, spacing: 0) {
-            ForEach(Array(s.enumerated()), id: \.offset) { i, step in
-                if i > 0 { Hairline(vertical: true) }
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(step.0.uppercased()).font(Ob.mono(11, .bold))
-                    stepText(step.1)
-                }
-                .padding(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
-                .frame(maxWidth: .infinity, alignment: .topLeading)
+            ForEach(Array(cells.enumerated()), id: \.offset) { i, cell in
+                cell
+                    .padding(EdgeInsets(top: 10, leading: 12 + (i > 0 ? Ob.border : 0), bottom: 10, trailing: 12))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .overlay(alignment: .leading) { if i > 0 { Hairline(vertical: true) } }
             }
         }
-        .overlay(Rectangle().strokeBorder(ob.ink, lineWidth: 1))
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(Ob.border)
+        .overlay(Rectangle().strokeBorder(ob.ink, lineWidth: Ob.border))
     }
 
     /// The four steps of an Extended Notes session, each with its rhythm in the accent.
     private var notesSteps: some View {
         #if os(macOS)
-        let listen = "The microphone, the Mac's audio, or both, recorded to the session's folder. Type your own lines in, or press the marker key (⚑) to flag a moment."
+        let listen = "The microphone, the computer's audio, or both, recorded to the session's folder. Type your own lines in, or press the marker key (⚑) to flag a moment."
         #else
         let listen = "The microphone, recorded to the session's folder. Type your own lines in, or tap ⚑ Mark to flag a moment."
         #endif
         let steps: [(String, String, String)] = [
             ("01 Listen", "All the time", listen),
-            ("02 Speech", "As each phrase ends", "Apple Speech adds each finished phrase to the transcript, on this \(Device.noun). If the recognizer restarts, up to 3 minutes of audio wait for it."),
+            // Windows' text when the session will use Whisper (forced every 12 s, silence phrases dropped).
+            NotesRecorder.whisperModel(model.activeSpeech) != nil
+                ? ("02 Speech", "Every ~5 seconds", "Whisper adds each finished sentence to the transcript (at the latest after 12 seconds). Phrases it invents in silence are dropped. If the engine restarts, up to 3 minutes of audio wait for it.")
+                : ("02 Speech", "As each phrase ends", "Apple Speech adds each finished phrase to the transcript, on this \(Device.noun). If the recognizer restarts, up to 3 minutes of audio wait for it."),
             ("03 Format", "Every 110 words · 90 s at most", "The AI adds punctuation, paragraphs and headings to the new words. An edit that adds more than a tenth new words, keeps under 40% of them, or brings in a number is refused, and the words stay as heard."),
             ("04 Summary", "Every ~6 minutes · 10 at most", "Each section of formatted text (about 6,000 characters) is summed up in a sixth of its length; every four summaries fold into one. At Stop: the main idea, three bullets, at most three paragraphs."),
         ]
-        return HStack(alignment: .top, spacing: 0) {
-            ForEach(Array(steps.enumerated()), id: \.offset) { i, step in
-                if i > 0 { Hairline(vertical: true) }
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(step.0.uppercased()).font(Ob.mono(11, .bold))
-                    Text(step.1.uppercased()).font(Ob.mono(11)).foregroundStyle(ob.accent).padding(.top, 3)
-                    stepText(step.2).padding(.top, 4)
-                }
-                .padding(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-            }
-        }
-        .overlay(Rectangle().strokeBorder(ob.ink, lineWidth: 1))
+        return stepFrame(steps.map { step in
+            AnyView(VStack(alignment: .leading, spacing: 0) {
+                Text(step.0.uppercased()).font(Ob.mono(11, .bold)).noWrap()
+                // The rhythm is one line, cut off at the cell (StepTitle sets no wrapping).
+                Text(step.1.uppercased()).font(Ob.mono(11)).foregroundStyle(ob.accent).noWrap().padding(.top, 3)
+                stepText(step.2).padding(.top, 4)
+            })
+        })
     }
 
+    /// A row of WHAT IT KEEPS: the label centred in the row (GlossWhere), the text at its top, 6 above and below each.
     private func keep(_ k: String, _ v: String) -> some View {
-        HStack(alignment: .top, spacing: 0) {
-            Readout(k).frame(width: 150, alignment: .leading)
-            stepText(v)
+        HStack(alignment: .center, spacing: 0) {
+            Readout(k).fixedSize(horizontal: false, vertical: true).frame(width: 150, alignment: .leading)
+            stepText(v).frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.vertical, 6)
     }
@@ -210,28 +225,31 @@ struct AboutSection: View {
             ("記録", "kiroku", "Record, notes", "Extended notes"),
             ("分析", "bunseki", "Analysis", "Analytics"),
         ]
+        // Grid columns Auto (at least 70 and 110 wide, each cell's 12 right margin included), * and *; every cell
+        // centred in its row, 6 above and below; each row's rule is drawn in the row's last pixel (GlossRule).
         return VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                Readout("Word").frame(width: 70, alignment: .leading)
-                Readout("Reading").frame(width: 110, alignment: .leading)
-                Readout("English").frame(maxWidth: .infinity, alignment: .leading)
-                Readout("Where you see it").frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .padding(.vertical, 6)
-            Rule()
+            glossRow(Readout("Word"), Readout("Reading"), Readout("English"), Readout("Where you see it")) { Rule() }
             ForEach(words, id: \.0) { w in
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    Decor(w.0, size: 16, color: ob.ink, weight: .bold).frame(width: 70, alignment: .leading)
-                    Text(w.1).font(Ob.sans(13).italic()).foregroundStyle(ob.muted).frame(width: 110, alignment: .leading)
-                    Text(w.2).font(Ob.mono(12)).frame(maxWidth: .infinity, alignment: .leading).fixedSize(horizontal: false, vertical: true)
-                    Readout(w.3).frame(maxWidth: .infinity, alignment: .leading).fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(.vertical, 6)
-                Hairline()
+                glossRow(Decor(w.0, size: 16, color: ob.ink, weight: .bold),
+                         Text(w.1).font(Ob.sans(Ob.body).italic()).foregroundStyle(ob.muted),
+                         Text(w.2).font(Ob.mono(12)),
+                         Readout(w.3)) { Hairline() }
             }
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("The Japanese words in Oberton and what they mean")
+    }
+
+    private func glossRow<A: View, B: View, C: View, D: View, Line: View>(_ a: A, _ b: B, _ c: C, _ d: D,
+                                                                         @ViewBuilder line: () -> Line) -> some View {
+        HStack(alignment: .center, spacing: 0) {
+            a.frame(width: 70, alignment: .leading)
+            b.frame(width: 110, alignment: .leading)
+            c.fixedSize(horizontal: false, vertical: true).padding(.trailing, 12).frame(maxWidth: .infinity, alignment: .leading)
+            d.fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 6)
+        .overlay(alignment: .bottom) { line() }
     }
 }
 
@@ -246,7 +264,7 @@ struct NotesTimeline: View {
         DesignSize(width: 760, height: 196) {
             Canvas { ctx, _ in draw(ctx) }
         }
-        .accessibilityLabel("A 30-minute lecture, step by step: a sentence every 5 seconds, formatting about every minute, a summary every 6 and a half minutes, the first four summaries folded into one, and the final summary at Stop.")
+        .accessibilityLabel("A 30-minute session on a time line: speech every 5 seconds, formatting about every minute, a summary section about every 6 to 7 minutes, the first four summaries folded into one, and the final summary at Stop.")
     }
 
     private func draw(_ c: GraphicsContext) {
