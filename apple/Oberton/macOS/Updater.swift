@@ -38,6 +38,15 @@ final class Updater: NSObject, ObservableObject {
     private var checkWhenFree = false
     private var expectedBytes: UInt64 = 0, receivedBytes: UInt64 = 0
     private var freeWatch: AnyCancellable?
+    /// The update last found, so the page can show it again and DOWNLOAD AND INSTALL can be tried again after a failure.
+    private var found: SUAppcastItem?
+    /// DOWNLOAD AND INSTALL after a failed install: Sparkle's session is over, so the update is found again and then
+    /// installed at once.
+    private var installWhenFound = false
+    #if DEBUG
+    /// The snapshots set the page's state themselves.
+    var snapshotFrozen = false
+    #endif
 
     /// Starts Sparkle, and the startup check when it is on. Called once at launch.
     func start(model: AppModel) {
@@ -61,6 +70,22 @@ final class Updater: NSObject, ObservableObject {
     }
 
     // MARK: Settings › Updates
+
+    /// Settings › Updates opens: as Windows builds a new page each time, the last check's result is gone, unless an
+    /// update was found and is waiting (then it shows again). Nothing changes while a check or an install runs.
+    func pageOpened() {
+        #if DEBUG
+        guard !snapshotFrozen else { return }
+        #endif
+        guard !busy else { return }
+        if reply != nil || installTitle != nil, let found {
+            show(found)
+        } else {
+            status = ""
+            notes = ""
+            installTitle = nil
+        }
+    }
 
     /// CHECK FOR UPDATES.
     func check() {
@@ -90,16 +115,25 @@ final class Updater: NSObject, ObservableObject {
         updater.checkForUpdates()
     }
 
-    /// DOWNLOAD AND INSTALL.
+    /// DOWNLOAD AND INSTALL. The button stays (disabled while busy), so it can be clicked again if this fails.
     func install() {
-        guard let reply else { return }
-        self.reply = nil
+        if let reply {
+            self.reply = nil
+            beginInstall()
+            reply(.install)
+        } else if found != nil, updater != nil {
+            installWhenFound = true
+            beginInstall()
+            checkWhenFree = true
+            DispatchQueue.main.async { self.checkIfWaiting() }
+        }
+    }
+
+    private func beginInstall() {
         asked = .install
         busy = true
-        installTitle = nil
         progress = 0
         status = "Downloading the update…"
-        reply(.install)
     }
 
     private func finish(_ text: String) {
@@ -112,7 +146,8 @@ final class Updater: NSObject, ObservableObject {
     /// with the download's size. A development copy (a Debug build) is told to update from the repository instead.
     private func show(_ item: SUAppcastItem) {
         busy = false
-        status = "Version \(item.displayVersionString) is available (you have \(Distribution.version))."
+        found = item
+        status = "Version \(Self.threePart(item.displayVersionString)) is available (you have \(Distribution.version))."
         if let description = item.itemDescription { notes = Self.plainNotes(description, format: item.itemDescriptionFormat) }
         if Distribution.isDevelopmentCopy {
             status += " This is a development copy: update it with \"git pull\" instead."
@@ -121,6 +156,15 @@ final class Updater: NSObject, ObservableObject {
         installTitle = item.contentLength > 0
             ? "Download and install (\(String(format: "%.0f", Double(item.contentLength) / 1_048_576)) MB)"
             : "Download and install"
+    }
+
+    /// The version in three parts, as Windows prints a release's (Version.ToString(3)): "5.19" is "5.19.0". Anything that
+    /// isn't numbers and dots is shown as it is.
+    static func threePart(_ version: String) -> String {
+        let parts = version.split(separator: ".", omittingEmptySubsequences: false)
+        guard (1...4).contains(parts.count), parts.allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isNumber) }) else { return version }
+        let numbers = parts.compactMap { Int($0) }
+        return (numbers + [0, 0, 0]).prefix(3).map(String.init).joined(separator: ".")
     }
 
     static func plainNotes(_ text: String, format: String?) -> String {
@@ -178,17 +222,24 @@ extension Updater: SPUUserDriver {
     }
 
     func showUserInitiatedUpdateCheck(cancellation: @escaping () -> Void) {
-        status = "Checking…"
+        if !installWhenFound { status = "Checking…" }
     }
 
     func showUpdateFound(with appcastItem: SUAppcastItem, state: SPUUserUpdateState, reply: @escaping (SPUUserUpdateChoice) -> Void) {
+        if installWhenFound {
+            // Found again after a failed install: straight on with the download.
+            installWhenFound = false
+            checkWhenFree = false
+            found = appcastItem
+            reply(.install)
+            return
+        }
         self.reply = reply
         let startup = asked == .nothing && !checkWhenFree
         checkWhenFree = false
         show(appcastItem)
-        Log.info("Update available: \(appcastItem.displayVersionString)")
         if startup {
-            model?.notice("Oberton \(appcastItem.displayVersionString) is available. Open Settings > Updates to install it.")
+            model?.notice("Oberton \(Self.threePart(appcastItem.displayVersionString)) is available. Open Settings > Updates to install it.")
         }
     }
 
@@ -197,16 +248,16 @@ extension Updater: SPUUserDriver {
         notes = Self.plainNotes(text, format: downloadData.mimeType == "text/plain" ? "plain-text" : "html")
     }
 
-    func showUpdateReleaseNotesFailedToDownloadWithError(_ error: Error) {
-        Log.warn("Update release notes: \(error.localizedDescription)")
-    }
+    func showUpdateReleaseNotesFailedToDownloadWithError(_ error: Error) {}
 
     func showUpdateNotFoundWithError(_ error: Error, acknowledgement: @escaping () -> Void) {
-        if asked == .check { finish("You're up to date (\(Distribution.version)).") }
+        installWhenFound = false
+        if asked != .nothing { finish("You're up to date (\(Distribution.version)).") }
         acknowledgement()
     }
 
     func showUpdaterError(_ error: Error, acknowledgement: @escaping () -> Void) {
+        installWhenFound = false
         if asked == .nothing {
             Log.warn("Startup update check failed: \(error.localizedDescription)")
         } else if asked == .check, Self.nothingPublished(error) {
@@ -242,7 +293,7 @@ extension Updater: SPUUserDriver {
 
     func showReady(toInstallAndRelaunch reply: @escaping (SPUUserUpdateChoice) -> Void) {
         status = "Installing… Oberton will restart by itself."
-        Log.info("Installing the update; Oberton restarts")
+        Log.info("Launching update installer \(found?.fileURL?.lastPathComponent ?? "Oberton \(found?.displayVersionString ?? "")")")
         reply(.install)
     }
 
@@ -258,11 +309,15 @@ extension Updater: SPUUserDriver {
 
     func showUpdateInFocus() {}
 
-    /// The update session ended (nothing found, dismissed, failed or installed): DOWNLOAD AND INSTALL no longer works.
+    /// The update session ended (nothing found, dismissed, failed or installed). After a failed install DOWNLOAD AND
+    /// INSTALL stays, to try again (Windows re-enables it); otherwise it goes.
     func dismissUpdateInstallation() {
         reply = nil
-        installTitle = nil
-        if asked == .install, progress != nil { progress = nil }
+        if asked == .install, !installWhenFound {
+            progress = nil
+        } else if !installWhenFound {
+            installTitle = nil
+        }
         if !checkWhenFree {
             busy = false
             asked = .nothing
@@ -276,6 +331,7 @@ extension Updater {
     enum SnapshotState { case available, downloading, upToDate }
 
     func snapshot(_ state: SnapshotState) {
+        snapshotFrozen = true
         busy = state == .downloading
         progress = state == .downloading ? 0.42 : nil
         notes = state == .upToDate ? "" : "Settings › Updates installs new versions in place.\nFixed: the overlay keeps its place after waking from sleep."

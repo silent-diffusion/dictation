@@ -41,9 +41,9 @@ private struct DirectUpdates: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Caption("New versions are published on GitHub. Updating downloads the installer and updates Oberton in place.")
-                .padding(.bottom, 8)
-            FieldLabel("Check for updates").padding(.bottom, 4)
+            Caption("New versions are published on GitHub. Updating downloads the installer and updates Oberton in place.", bottom: 8)
+            // The FieldLabel style with Windows' own margin here (0,0,0,10).
+            Text("CHECK FOR UPDATES").font(Ob.mono(12, .bold)).padding(.bottom, 10)
             HStack(spacing: 10) {
                 Button("Check for updates") { updater.check() }.buttonStyle(.primary).disabled(updater.busy)
                 if let title = updater.installTitle {
@@ -58,15 +58,12 @@ private struct DirectUpdates: View {
                 .frame(width: 360, height: 4)
                 .padding(.top, 12)
             }
-            if !updater.status.isEmpty {
-                Text(updater.status).font(Ob.sans(13.5)).textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true).padding(.top, 10)
-            }
-            if !updater.notes.isEmpty {
-                Text(updater.notes).font(Ob.sans(13.5)).opacity(0.75).textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxHeight: 220, alignment: .topLeading).clipped().padding(.top, 8)
-            }
+            // Plain text in the window's size, each always taking its line (empty TextBlocks keep their height).
+            Text(updater.status.isEmpty ? " " : updater.status).font(Ob.sans(Ob.body)).textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true).padding(.top, 10)
+            Text(updater.notes.isEmpty ? " " : updater.notes).font(Ob.sans(Ob.body)).opacity(0.75).textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxHeight: 220, alignment: .topLeading).clipped().padding(.top, 8)
             SwitchCard {
                 ObSwitch("Check for updates when Oberton starts",
                          detail: "Checking contacts github.com only to read the list of releases. Nothing about you or your dictation is sent. Updating keeps your settings, profiles and downloaded models.",
@@ -74,6 +71,7 @@ private struct DirectUpdates: View {
             }
             .padding(.top, 16)
         }
+        .onAppear { updater.pageOpened() }
     }
 }
 #endif

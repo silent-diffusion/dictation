@@ -3,8 +3,9 @@ import SwiftUI
 
 // MARK: - D // App
 
-/// D.1 Advanced (Windows AdvancedPage.xaml): what is installed, where things are stored, privacy. There is no
-/// runtimes folder: the Mac's speech engines come with the app and the system, and Ollama keeps its own.
+/// D.1 Advanced (Windows AdvancedPage.xaml): what is installed, where things are stored, privacy. Runtimes: the direct
+/// download's own Ollama (runtime/ollama, its models in models/ollama); the App Store build has no runtimes folder (the
+/// speech engines come with the app and the system, and an Ollama the user installed keeps its own models).
 struct AdvancedSection: View {
     @EnvironmentObject var model: AppModel
     @State private var localModels = ""
@@ -20,7 +21,7 @@ struct AdvancedSection: View {
             Profiles:   \(path(data.appending(path: "profiles.json")))
             Logs:       \(path(Log.dir))
             Models:     \(path(Self.modelsDir))
-            """
+            """ + (OllamaRuntime.canManage ? "\nRuntimes:   \(path(AppPaths.dataDir.appending(path: "runtime", directoryHint: .isDirectory)))" : "")
     }
 
     var body: some View {
@@ -64,6 +65,6 @@ struct AdvancedSection: View {
         let whisper = WhisperModels.downloaded()
         localModels = "Speech (models/whisper):  " + (whisper.isEmpty ? "none" : whisper.joined(separator: ", ")) + "\n"
             + "Speech (Apple Speech):  " + (names.isEmpty ? "none" : names.joined(separator: ", ")) + "\n"
-            + "Language models (Ollama):  " + (model.ollamaModels.isEmpty ? "none (or runtime not running)" : model.ollamaModels.joined(separator: ", "))
+            + "Language models (\(OllamaRuntime.canManage ? "models/ollama" : "Ollama")):  " + (model.ollamaModels.isEmpty ? "none (or runtime not running)" : model.ollamaModels.joined(separator: ", "))
     }
 }

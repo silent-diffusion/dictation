@@ -10,6 +10,9 @@ struct UnloadingSection: View {
     @State private var result = ""
     /// The buttons whose unloading is under way (only the clicked one is disabled).
     @State private var busy: Set<String> = []
+    /// The list as the page opened with it: a hand-edited value stays in it after another is picked (Windows builds the
+    /// list once, in the page's constructor).
+    @State private var choices: [(Int, String)] = []
 
     private static let choices: [(Int, String)] = [
         (AppSettings.unloadImmediately, "Immediately after use"), (1, "1 minute"), (3, "3 minutes"), (5, "5 minutes"),
@@ -18,9 +21,8 @@ struct UnloadingSection: View {
     ]
 
     /// A hand-edited value that isn't in the list shows as itself, first (as on Windows).
-    private var choices: [(Int, String)] {
-        let m = model.settings.unloadAfterMinutes
-        return Self.choices.contains { $0.0 == m } ? Self.choices : [(m, "\(m) minutes")] + Self.choices
+    private static func choices(for m: Int) -> [(Int, String)] {
+        Self.choices.contains { $0.0 == m } ? Self.choices : [(m, "\(m) minutes")] + Self.choices
     }
 
     var body: some View {
@@ -28,7 +30,11 @@ struct UnloadingSection: View {
             Caption("Models take memory while they are loaded (several GB of GPU memory for speech recognition and the AI). Oberton can unload them when you haven't used them for a while.")
 
             FieldLabel("Unload a model after it has been unused for").padding(.top, -8)
-            ObMenu(options: choices, selection: $model.settings.unloadAfterMinutes).frame(width: 240)
+            ObMenu(options: choices.isEmpty ? Self.choices(for: model.settings.unloadAfterMinutes) : choices,
+                   selection: $model.settings.unloadAfterMinutes)
+                .frame(width: 240)
+                .accessibilityLabel("Unload after")
+                .onAppear { choices = Self.choices(for: model.settings.unloadAfterMinutes) }
             Caption("Applies to the speech recognition model, the local AI model and the Read aloud voice. \"Immediately after use\" frees them a few seconds after each dictation or reading ends (they stay loaded while in use).", bottom: 0)
                 .padding(.top, 8)
 

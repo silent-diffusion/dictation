@@ -6,9 +6,9 @@ default where it is available. Nothing to install, nothing leaves the device.
 
 ```
 MIC ──→ SPEECH ──→ AI ──→ INSERT
-        Apple Speech  Apple Intelligence · Ollama · Claude · OpenAI   at the cursor (Mac) / clipboard (iPhone)
-        (on-device)   (profiles)                                       ┆
-                                                                       └┄┄ READ ALOUD  system voices
+        Whisper (WhisperKit)  Apple Intelligence · Ollama · Claude · OpenAI   at the cursor (Mac) / clipboard (iPhone)
+        or Apple Speech       (profiles)                                       ┆
+        (on-device)                                                            └┄┄ READ ALOUD  Kokoro, Piper, system voices
 ```
 
 ## Build and run
@@ -27,8 +27,10 @@ The core logic has its own tests, ported from `tests/Dictation.Tests/TextProcess
 cd ObertonCore && swift test
 ```
 
-On first launch the Mac asks for the **microphone** and for **Accessibility** (to paste at the cursor). Press `Ctrl+D` in any
-app, speak, press it again. `Ctrl+Space` reads the selection aloud; `Ctrl+Alt+D` switches profile.
+On first launch the setup window asks for the **microphone** and for **Accessibility** (to paste at the cursor; in the
+direct download also to read the text around the cursor, the selection and window titles) and downloads the speech model.
+Then press `Ctrl+D` in any app, speak, press it again. `Ctrl+Space` reads the selection aloud; `Ctrl+Alt+D` switches
+profile. The app lives in the menu bar; closing the window keeps it running.
 
 ## Layout
 
@@ -44,14 +46,24 @@ Oberton/iOS/            iPhone services (clipboard)
 
 | | Windows | Mac / iPhone |
 |---|---|---|
-| Speech recognition | Whisper (faster-whisper) | Apple Speech (`SpeechAnalyzer`, on-device) |
-| AI cleanup | Ollama, Claude, OpenAI | **Apple Intelligence**, Ollama (Mac, user-installed), Claude, OpenAI |
+| Speech recognition | Whisper (faster-whisper) | Whisper (WhisperKit, the same models) or Apple Speech (`SpeechAnalyzer`), on-device |
+| AI cleanup | Ollama, Claude, OpenAI | **Apple Intelligence**, Ollama (direct download: its own copy; App Store: user-installed), Claude, OpenAI |
 | Profiles, prompts, safety net | ✓ | ✓ same text and rules |
 | Insert at the cursor | ✓ | Mac ✓ (paste, clipboard restored); iPhone: clipboard |
-| Overlay, live words, preview | ✓ | ✓ |
-| Read aloud | Kokoro, Piper, Windows voices | system voices (Enhanced/Premium) |
-| History, receipt with AI diff | ✓ | ✓ (no recordings yet) |
-| Not yet | | Whisper (WhisperKit), Kokoro voice, type-as-you-speak, fits-the-surrounding-text, Extended Notes, Analytics, hotkey editor, iPhone keyboard |
+| Overlay, live words, preview, type as you speak | ✓ | ✓ |
+| Fit dictation into the surrounding text, window titles, sites | ✓ | Mac direct download (Accessibility) |
+| Read aloud | Kokoro, Piper, Windows voices | Kokoro, Piper, system voices |
+| History (with recordings), Analytics, Extended Notes, hotkey editor | ✓ | ✓ |
+| Updates | Settings › Updates | direct download: Settings › Updates (Sparkle); App Store build: the App Store / TestFlight |
+| Not yet | | iPhone keyboard (inserting into other iPhone apps) |
+
+Settings, profiles, History and notes are kept in `~/Library/Application Support/Oberton` (the App Store build: inside its
+container), with the log in `logs/dictation.log` (*Settings › Advanced › Open logs*). Their files are not interchangeable
+with the Windows app's (different key names and date formats).
+
+**Troubleshooting:** if the first-run setup fails, check your internet connection and click *Continue setup*; it picks up
+where it stopped. If a hotkey does nothing or the overlay says it is "already used", another app owns it: pick another on
+*Settings › Hotkeys*. Anything else: the log above.
 
 ## Toward TestFlight and the App Store
 
@@ -91,14 +103,26 @@ xcodebuild -project Oberton.xcodeproj -scheme "Oberton Direct" -destination 'pla
    the keychain: `xcrun notarytool store-credentials oberton-notary --apple-id <Apple ID> --team-id <team>` (it asks for an
    app-specific password). The script also takes an App Store Connect API key or an Apple ID from the environment
    (`NOTARY_KEY`/`NOTARY_KEY_ID`/`NOTARY_ISSUER`, or `NOTARY_APPLE_ID`/`NOTARY_PASSWORD`); credentials are never written to the repo.
-2. Once: Sparkle's update signing key. Run `generate_keys` from Sparkle's `bin` folder (in DerivedData,
-   `SourcePackages/artifacts/sparkle/Sparkle/bin`); the private key stays in your keychain. Put the public key in
-   `OBERTON_SPARKLE_PUBLIC_KEY` and the feed's address in `OBERTON_APPCAST_URL` (`Direct.xcconfig`; both are placeholders
-   now, and without the key the updater doesn't start).
-3. Each release: raise `MARKETING_VERSION` (kept equal to the Windows version) and `CURRENT_PROJECT_VERSION`, then
-   `scripts/export-direct.sh`: archive, Developer ID export, checks (Developer ID, hardened runtime, no sandbox),
-   notarization, stapling, and `build-direct/Oberton-<version>.zip`. `--no-notarize` stops after the signed export.
-4. Sign the zip and write `appcast.xml` with `generate_appcast build-direct/`, then upload both where the feed points.
+2. The update signing key (done): an EdDSA key pair made with Sparkle's `generate_keys` (in DerivedData,
+   `SourcePackages/artifacts/sparkle/Sparkle/bin`). The **public** key is `OBERTON_SPARKLE_PUBLIC_KEY` in
+   `Direct.xcconfig` (it becomes `SUPublicEDKey` in `Info-Direct.plist`). The **private** key exists only in the login
+   keychain of the Mac that made it (item "Private key for signing Sparkle updates", account `ed25519`); it is never
+   written to this repository or to a file. `generate_keys -p` prints the public key again. To release from another
+   Mac, move the key with `generate_keys -x <file>` there and `-f <file>` on the other Mac, then delete the file; if the
+   key is lost, every installed copy has to be updated by hand once (a new key means a new public key in a new build).
+   `scripts/export-direct.sh` stops when the public key is empty.
+3. **The appcast address is a placeholder.** `OBERTON_APPCAST_URL` in `Direct.xcconfig` points at
+   `…/releases/download/mac-appcast/appcast.xml`, where nothing is published; until a feed exists a check finds nothing
+   and says "You're up to date". Decide where the Mac feed lives before the first direct release. It must not be the
+   repository's `releases/latest`, which is the Windows release. Release notes: write the item's `<description>` as
+   plain text with `sparkle:format="plain-text"` to show them as Windows shows a GitHub release's text (HTML is turned
+   into plain text).
+4. Each release: raise `MARKETING_VERSION` (kept equal to the Windows version, in three parts) and
+   `CURRENT_PROJECT_VERSION`, then `scripts/export-direct.sh`: archive, Developer ID export, checks (Developer ID,
+   hardened runtime, no sandbox), notarization, stapling, and `build-direct/Oberton-<version>.zip`. `--no-notarize`
+   stops after the signed export.
+5. Sign the zip and write `appcast.xml` with `generate_appcast build-direct/` (it signs with the keychain's key), then
+   upload both where the feed points.
 
 ## Privacy check before pushing
 
