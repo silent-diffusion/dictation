@@ -173,34 +173,40 @@ struct PillRow<Title: View, Middle: View>: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
+        // Windows' grid: indicator, title, decor and chip, and the button are Auto columns, shown whole; the star column
+        // in the middle (meter, subtitle or dots, 12 in from either side) takes what is left, nothing when they need it
+        // all. What doesn't fit then is cut off at the right edge, without "…" (WPF clips a grid that overflows).
+        PillGrid {
             if let indicator {
                 IndicatorView(kind: indicator).frame(width: 16, height: 16).padding(.trailing, 12)
             }
-            // One line, as Windows' TitleText: a long title is cut at the end rather than wrapped.
             title
                 .font(Ob.mono(13, .semibold))
                 .lineLimit(1)
-                .truncationMode(.tail)
-                .layoutPriority(1)
-            // The star column: it takes the room left, so what follows sits at the right end.
+                .fixedSize()
+            // Never empty (an empty view would drop out of the grid), and cut to its column even when its content is wider.
             HStack(spacing: 0) {
                 middle
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 12)
-            if let decor {
-                Decor(decor, size: 10.5, color: lightText.opacity(0.5)).fixedSize().padding(.trailing, 10)
+                .lineLimit(1)
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                .clipped()
+                .padding(.horizontal, 12)
+                .layoutValue(key: PillStar.self, value: true)
+            HStack(spacing: 0) {
+                if let decor {
+                    Decor(decor, size: 10.5, color: lightText.opacity(0.5)).fixedSize().padding(.trailing, 10)
+                }
+                if let chip, !chip.isEmpty {
+                    Text(chip).font(Ob.mono(11)).foregroundStyle(lightText.opacity(0.8))
+                        .lineLimit(1)
+                        .padding(.horizontal, 10).padding(.vertical, 3)
+                        .overlay(RoundedRectangle(cornerRadius: 12, style: .circular).strokeBorder(darkLine, lineWidth: 1))
+                        .padding(.trailing, 8)
+                }
             }
-            if let chip, !chip.isEmpty {
-                Text(chip).font(Ob.mono(11)).foregroundStyle(lightText.opacity(0.8))
-                    .lineLimit(1).truncationMode(.tail)
-                    .padding(.horizontal, 10).padding(.vertical, 3)
-                    .overlay(RoundedRectangle(cornerRadius: 12, style: .circular).strokeBorder(darkLine, lineWidth: 1))
-                    .frame(maxWidth: 220, alignment: .trailing)
-                    .padding(.trailing, 8)
-                    .layoutPriority(1)
-            }
+            .fixedSize()
             switch trailing {
             case .cancel(let action):
                 Button(action: action) {
@@ -226,6 +232,38 @@ struct PillRow<Title: View, Middle: View>: View {
             }
         }
         .frame(minHeight: 40)
+        .clipped()
+    }
+}
+
+/// Marks the pill row's star column.
+private struct PillStar: LayoutValueKey {
+    static let defaultValue = false
+}
+
+/// The pill row as Windows' Grid lays it out: every column but the star one at its own size, left to right, centred
+/// vertically; the star column gets the width left over (none if there is none), so what follows it sits at the right.
+private struct PillGrid: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let sizes = subviews.map { $0[PillStar.self] ? CGSize.zero : $0.sizeThatFits(.unspecified) }
+        let fixed = sizes.reduce(0) { $0 + $1.width }
+        let star = subviews.first { $0[PillStar.self] }
+        let width: CGFloat
+        if let w = proposal.width, w.isFinite { width = w } else { width = fixed + (star?.sizeThatFits(.unspecified).width ?? 0) }
+        let starHeight = star?.sizeThatFits(ProposedViewSize(width: max(0, width - fixed), height: nil)).height ?? 0
+        return CGSize(width: width, height: max(starHeight, sizes.map(\.height).max() ?? 0))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let sizes = subviews.map { $0[PillStar.self] ? CGSize.zero : $0.sizeThatFits(.unspecified) }
+        let starWidth = max(0, bounds.width - sizes.reduce(0) { $0 + $1.width })
+        var x = bounds.minX
+        for (subview, size) in zip(subviews, sizes) {
+            let width = subview[PillStar.self] ? starWidth : size.width
+            subview.place(at: CGPoint(x: x, y: bounds.midY), anchor: .leading,
+                          proposal: ProposedViewSize(width: width, height: subview[PillStar.self] ? nil : size.height))
+            x += width
+        }
     }
 }
 
@@ -444,8 +482,9 @@ struct PillContent: View {
                 Text(loadingSpeech ? "LOADING SPEECH MODEL" : "TRANSCRIBING")
             } middle: {
                 if let audioSeconds {
-                    Text("\(max(1, Int(audioSeconds.rounded(.toNearestOrEven)))) S OF AUDIO") // Math.Round: half to even.font(Ob.mono(11.5)).foregroundStyle(mutedText)
-                        .lineLimit(1).truncationMode(.tail)
+                    // Math.Round: half to even.
+                    Text("\(max(1, Int(audioSeconds.rounded(.toNearestOrEven)))) S OF AUDIO")
+                        .font(Ob.mono(11.5)).foregroundStyle(mutedText).truncationMode(.tail)
                 }
             }
         case .processing:
@@ -675,7 +714,7 @@ struct ProfilePill: View {
 
     var body: some View {
         PillRow {
-            (Text("PROFILE   ").fontWeight(.regular).foregroundStyle(mutedText) + Text(name)).lineLimit(1)
+            Text("PROFILE   ").fontWeight(.regular).foregroundStyle(mutedText) + Text(name)
         } middle: {
             if count > 1 {
                 HStack(spacing: 5) {
