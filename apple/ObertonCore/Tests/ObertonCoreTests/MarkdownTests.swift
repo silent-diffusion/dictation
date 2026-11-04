@@ -30,8 +30,9 @@ import Testing
         #expect(NotesMarkdown.parse(#"\*literal\*"#).map(Self.show) == ["paragraph:*literal*"])
     }
 
-    @Test func spansKnowWhereTheyCameFrom() {
-        let md = "Hello **bold** world\n- item ⚑ émoji 👋 *x*"
+    @Test(arguments: ["Hello **bold** world\n- item", // Windows' own input (Spans_know_where_they_came_from)
+                      "Hello **bold** world\n- item ⚑ émoji 👋 *x*"])
+    func spansKnowWhereTheyCameFrom(md: String) {
         let ns = md as NSString
         for span in NotesMarkdown.parse(md).flatMap(\.spans) where !span.isBreak && !span.text.isEmpty {
             #expect(span.text == ns.substring(with: NSRange(location: span.offset, length: span.text.utf16.count)))

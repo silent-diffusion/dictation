@@ -357,8 +357,10 @@ public final class NoteSession: Codable, Identifiable, @unchecked Sendable {
         formattedThrough = pendingFormatEnd >= 0 ? pendingFormatEnd : transcript.u16
         pendingFormatEnd = -1
         // A part that carries on a sentence the last one left open joins it; otherwise it starts a paragraph.
-        let continues = !formatted.isEmpty && (ai.first?.isLowercase ?? false) &&
-            ((formatted.last?.isLetter ?? false) || (formatted.last?.isNumber ?? false) || formatted.last == ",")
+        // As .NET's char tests on UTF-16 units: `char.IsLower(ai[0])`, `char.IsLetterOrDigit(Formatted[^1])` or ','.
+        let firstUnit = ai.utf16.first.flatMap(Unicode.Scalar.init), lastUnit = formatted.utf16.last.flatMap(Unicode.Scalar.init)
+        let continues = !formatted.isEmpty && firstUnit?.properties.generalCategory == .lowercaseLetter &&
+            (lastUnit.map(NotesFormat.letterOrDigit) ?? false || lastUnit == ",")
         let sep = formatted.isEmpty ? "" : continues ? " " : formatted.hasSuffix("\n\n") ? "" : formatted.hasSuffix("\n") ? "\n" : "\n\n"
         formattedAnchors.append(NoteAnchor(offset: formatted.u16 + sep.u16, seconds: seconds, heardOffset: nil))
         formatted += sep + ai

@@ -247,7 +247,8 @@ public enum NotesMarkdown {
     }
 
     public static func white(_ u: UInt16) -> Bool { Unicode.Scalar(u).map { CharacterSet.whitespacesAndNewlines.contains($0) } ?? false }
-    static func letterOrDigit(_ u: UInt16) -> Bool { Unicode.Scalar(u).map { CharacterSet.alphanumerics.contains($0) } ?? false }
+    /// .NET's char.IsLetterOrDigit on a UTF-16 unit (letters and decimal digits; not "²", "½" or a combining mark).
+    static func letterOrDigit(_ u: UInt16) -> Bool { Unicode.Scalar(u).map(NotesFormat.letterOrDigit) ?? false }
 
     static func trim(_ s: String) -> String { s.trimmingCharacters(in: .whitespacesAndNewlines) }
 

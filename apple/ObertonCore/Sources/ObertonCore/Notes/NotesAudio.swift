@@ -324,6 +324,19 @@ public final class NotesMixer: @unchecked Sendable {
         }
     }
 
+    /// `count` samples of computer audio alone (clipped to -1…1), silence where none arrived (Windows' TakeComputer):
+    /// computer audio alone is paced by a clock, so the recording runs on through silence and a lost device.
+    public func takeComputer(_ count: Int) -> [Float] {
+        guard count > 0 else { return [] }
+        return lock.withLock {
+            let n = min(count, computer.count)
+            var out = computer.prefix(n).map { max(-1, min(1, $0)) }
+            computer.removeFirst(n)
+            if n < count { out += [Float](repeating: 0, count: count - n) }
+            return out
+        }
+    }
+
     /// A mic chunk mixed with the computer audio that arrived meanwhile (clipped to -1…1).
     public func mix(withMic mic: [Float]) -> [Float] {
         lock.withLock {

@@ -62,6 +62,8 @@ final class NotesRecorder: ObservableObject {
     private var micConverter: AVAudioConverter?
     #if os(macOS)
     private var computerAudio: SystemAudioCapture?
+    /// Computer audio alone: a 100-ms clock takes it from the mixer by wall time, silence where none came.
+    private var computerClock: DispatchSourceTimer?
     #endif
     private var tick: Timer?
     private var speechTask: Task<Void, Never>?
@@ -158,12 +160,24 @@ final class NotesRecorder: ObservableObject {
         #if os(macOS)
         if source == .computer || source == .both {
             let capture = SystemAudioCapture()
-            if source == .both {
-                try capture.start { feed.mixer.addComputer($0) }
-            } else {
-                try capture.start { feed.take($0) } // the tap runs through silence too, so it paces itself
-            }
+            try capture.start { feed.mixer.addComputer($0) }
             computerAudio = capture
+            if source == .computer {
+                // Computer audio alone is paced by the clock, not by the device (NotesRecorder.StartAudio): the
+                // recording and its timer go on, as silence, if the output device stops or goes away.
+                let clock = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "Oberton.NotesComputerClock"))
+                let started = DispatchTime.now().uptimeNanoseconds
+                var emitted = 0
+                clock.schedule(deadline: .now() + .milliseconds(100), repeating: .milliseconds(100))
+                clock.setEventHandler {
+                    let due = Int(Double(DispatchTime.now().uptimeNanoseconds - started) / 1e9 * Double(WavWriter.sampleRate)) - emitted
+                    guard due > 0 else { return }
+                    emitted += due
+                    feed.take(feed.mixer.takeComputer(due))
+                }
+                clock.resume()
+                computerClock = clock
+            }
         }
         #endif
         guard source == .mic || source == .both else { return }
@@ -204,6 +218,8 @@ final class NotesRecorder: ObservableObject {
         engine.inputNode.removeTap(onBus: 0)
         micConverter = nil
         #if os(macOS)
+        computerClock?.cancel()
+        computerClock = nil
         computerAudio?.stop()
         computerAudio = nil
         #else

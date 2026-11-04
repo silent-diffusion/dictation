@@ -34,7 +34,8 @@ public enum NotesSummary {
         let from = min(max(from, 0), u.count)
         if u.count - from <= maxChars { return u.count }
         let limit = from + maxChars, least = from + maxChars / 2
-        func isSpace(_ c: UInt16) -> Bool { c == 32 || c == 10 || c == 9 || c == 13 }
+        // .NET's char.IsWhiteSpace: any Unicode space (NBSP, U+2028, \f, \v…), not only the ASCII ones.
+        func isSpace(_ c: UInt16) -> Bool { Unicode.Scalar(c)?.properties.isWhitespace ?? false }
         var i = limit - 1
         while i > least { if u[i] == 10 { return i + 1 }; i -= 1 }
         i = limit - 1
@@ -124,7 +125,7 @@ public enum NotesSummary {
 
     /// A heading the model added ("Summary", "Key points:", "## Overview"): a few words, no sentence end.
     static func isHeading(_ line: String) -> Bool {
-        line.hasPrefix("#") || line.count <= 40 && !line.hasSuffix(".") && !line.hasSuffix("!") && !line.hasSuffix("?") &&
+        line.hasPrefix("#") || line.utf16.count <= 40 && !line.hasSuffix(".") && !line.hasSuffix("!") && !line.hasSuffix("?") &&
             line.split(separator: " ").count <= 4
     }
 

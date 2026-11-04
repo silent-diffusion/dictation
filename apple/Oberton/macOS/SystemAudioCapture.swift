@@ -67,8 +67,8 @@ final class SystemAudioCapture {
         try check(Self.get(tap, kAudioTapPropertyFormat, &asbd), "read the computer audio format")
         guard let tapFormat = AVAudioFormat(streamDescription: &asbd),
               let converter = AVAudioConverter(from: tapFormat, to: outputFormat) else {
-            throw UserFacingError("Oberton can't convert the computer's audio format (\(asbd.mSampleRate) Hz, "
-                                  + "\(asbd.mChannelsPerFrame) channels).")
+            Log.warn("Computer audio: can't convert \(Int(asbd.mSampleRate)) Hz, \(asbd.mChannelsPerFrame) ch")
+            throw UserFacingError(Self.failed)
         }
         converter.downmix = true
 
@@ -118,11 +118,17 @@ final class SystemAudioCapture {
 
         // 5. Go.
         try check(AudioDeviceStart(device, proc), "start capturing the computer's audio")
+        let float = asbd.mFormatFlags & kAudioFormatFlagIsFloat != 0
+        Log.info("Computer audio: \(Int(asbd.mSampleRate)) Hz, \(asbd.mChannelsPerFrame) ch, \(asbd.mBitsPerChannel)-bit \(float ? "IeeeFloat" : "Pcm")")
     }
+
+    /// Windows' one sentence for a capture that can't start (LoopbackCapture.Start); the step and the error go to the log.
+    static let failed = "Couldn't listen to the computer's audio. Check that a sound output device is enabled."
 
     private func check(_ status: OSStatus, _ action: String) throws {
         guard status != noErr else { return }
-        throw UserFacingError("Oberton couldn't \(action) (Core Audio error \(status)).")
+        Log.warn("Computer audio: couldn't \(action) (Core Audio error \(status))")
+        throw UserFacingError(Self.failed)
     }
 
     /// Reads a global-scope property of a fixed-size type.

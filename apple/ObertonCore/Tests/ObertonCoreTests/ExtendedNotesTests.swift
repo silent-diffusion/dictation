@@ -120,6 +120,44 @@ import Testing
         #expect(s.formatted.isEmpty)
     }
 
+    // Windows: A_new_transcript_keeps_the_markers_in_place_and_drops_the_old_steps.
+    @Test func aNewTranscriptKeepsTheMarkersInPlaceAndDropsTheOldSteps() {
+        let s = NoteSession()
+        s.appendHeard("old words", seconds: 0)
+        s.addMarker(20)
+        let t = s.beginFormat()!
+        s.endFormat(heard: t.heard, sent: t.sent, ai: "Old words.", seconds: t.seconds, failed: false)
+        s.summary = "Old summary."
+        s.replaceTranscript([(0, "First part."), (15, "Second part."), (30, "Third part.")])
+        #expect(s.transcript == "First part. Second part.\n⚑ 0:20\nThird part.")
+        #expect(s.heard == "First part. Second part. Third part.")
+        #expect(s.formatted == "")
+        #expect(s.chunks.isEmpty)
+        #expect(s.summary == "")
+        #expect(s.markers.count == 1)
+        let flag = (s.transcript as NSString).range(of: "⚑").location
+        #expect(s.secondsAt(.transcript, flag) == 20)
+    }
+
+    // Windows: Formatting_again_goes_part_by_part_at_piece_ends.
+    @Test func formattingAgainGoesPartByPartAtPieceEnds() {
+        let s = NoteSession()
+        for i in 0..<6 { s.appendHeard("Sentence number \(i) has five words.", seconds: Double(i * 10)) }
+        let t = s.beginFormatPart(maxWords: 14)! // two pieces of 6 words fit, a third doesn't
+        #expect(t.sent == "Sentence number 0 has five words. Sentence number 1 has five words.")
+        #expect(t.heard == t.sent)
+        s.endFormat(heard: t.heard, sent: t.sent, ai: t.sent, seconds: t.seconds, failed: false)
+        let u = s.beginFormatPart(maxWords: 14)!
+        #expect(u.sent.hasPrefix("Sentence number 2"))
+        #expect(u.seconds == 20)
+        s.endFormat(heard: u.heard, sent: u.sent, ai: u.sent, seconds: u.seconds, failed: false)
+        let v = s.beginFormatPart(maxWords: 100)!
+        s.endFormat(heard: v.heard, sent: v.sent, ai: v.sent, seconds: v.seconds, failed: false)
+        #expect(s.beginFormatPart(maxWords: 14) == nil)
+        #expect(s.heardFormattedThrough == s.heard.utf16.count)
+        #expect(s.formattedThrough == s.transcript.utf16.count)
+    }
+
     @Test func aPartOfTheTranscriptEndsAtASentence() {
         let s = NoteSession()
         s.appendHeard("One two three.", seconds: 0)
@@ -400,11 +438,20 @@ import Testing
         #expect(prepared.silences.count == 1)
         #expect((0.9...1.2).contains(prepared.silences[0].start) && (2.8...3.1).contains(prepared.silences[0].end))
         #expect(prepared.silence(at: 2) != nil && prepared.silence(at: 0.5) == nil)
+        // Windows reads the prepared file back: its loud parts are just under full scale.
+        let back = try NotesAudio.readWav(prepared.url)
+        let peak = Float(back.samples.map { abs(Int($0)) }.max() ?? 0) / 32768
+        #expect((0.85...0.95).contains(peak))
     }
 
     @Test func gainNeverLowersAndNeverExceedsTheCap() {
         #expect(NotesAudio.gain([0.95, 0.95]) == 1)
         #expect(abs(NotesAudio.gain([0.00001, 0.001]) - Float(pow(10, 40.0 / 20))) < 0.01)
+        // Windows' own cases.
+        #expect(NotesAudio.gain([0.95, 0.9, 0.99]) == 1)
+        #expect(abs(NotesAudio.gain([0.001, 0.001]) - 100) < 0.1) // capped at +40 dB
+        #expect(NotesAudio.gain([0.0001, 0.0001]) == 1) // silence: nothing to bring up
+        #expect(NotesAudio.gain([]) == 1)
     }
 
     @Test func micAlonePassesThroughAndComputerAudioIsAddedToIt() {

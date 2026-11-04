@@ -19,6 +19,47 @@ struct SplitMix64: RandomNumberGenerator {
     }
 }
 
+/// .NET's `new Random(seed)` (the seeded, Net5-compatible generator: Knuth's subtractive method), so a test pinned
+/// with Windows' seed sees Windows' very numbers.
+struct DotNetRandom {
+    private var seeds = [Int](repeating: 0, count: 56)
+    private var inext = 0, inextp = 21
+    private static let big = Int(Int32.max), seed0 = 161_803_398
+
+    init(_ seed: Int32) {
+        let subtraction = seed == Int32.min ? Self.big : Int(abs(seed))
+        var mj = Self.seed0 - subtraction
+        seeds[55] = mj
+        var mk = 1
+        for i in 1..<55 {
+            let ii = (21 * i) % 55
+            seeds[ii] = mk
+            mk = mj - mk
+            if mk < 0 { mk += Self.big }
+            mj = seeds[ii]
+        }
+        for _ in 1..<5 {
+            for i in 1..<56 {
+                seeds[i] -= seeds[1 + (i + 30) % 55]
+                if seeds[i] < 0 { seeds[i] += Self.big }
+            }
+        }
+    }
+
+    private mutating func sample() -> Double {
+        inext += 1; if inext >= 56 { inext = 1 }
+        inextp += 1; if inextp >= 56 { inextp = 1 }
+        var r = seeds[inext] - seeds[inextp]
+        if r == Self.big { r -= 1 }
+        if r < 0 { r += Self.big }
+        seeds[inext] = r
+        return Double(r) * (1.0 / Double(Self.big))
+    }
+
+    /// `Next(maxValue)`.
+    mutating func next(_ maxValue: Int) -> Int { Int(sample() * Double(maxValue)) }
+}
+
 /// A local date and time (Windows' `new DateTime(y, m, d, h, min, 0)`).
 private func localDate(_ y: Int, _ m: Int, _ d: Int, _ h: Int, _ min: Int) -> Date {
     Calendar.current.date(from: DateComponents(year: y, month: m, day: d, hour: h, minute: min))!
@@ -27,12 +68,13 @@ private func localDate(_ y: Int, _ m: Int, _ d: Int, _ h: Int, _ min: Int) -> Da
 // MARK: - NotesMixer (ExtendedNotesTests.cs, NotesAudioTests)
 
 @Suite struct NotesMixerParityTests {
-    // Windows: Computer_audio_alone_is_padded_with_silence_and_never_clips (TakeComputer(3) == {32767, 0, 0}). The Mac's
-    // mixer has no TakeComputer: computer audio only leaves through a mic chunk, so a silent mic chunk stands in for it.
+    // Windows: Computer_audio_alone_is_padded_with_silence_and_never_clips (TakeComputer(3) == {32767, 0, 0}).
     @Test func computerAudioAloneIsPaddedWithSilenceAndNeverClips() {
         let m = NotesMixer()
         m.addComputer([2])
-        #expect(m.mix(withMic: [0, 0, 0]) == [1, 0, 0])
+        let out = m.takeComputer(3)
+        #expect(out == [1, 0, 0])
+        #expect(out.map { Int16(($0 * 32767).rounded(.toNearestOrEven)) } == [32767, 0, 0])
     }
 
     // Windows: A_runaway_computer_backlog_is_trimmed_to_a_second.
@@ -41,7 +83,7 @@ private func localDate(_ y: Int, _ m: Int, _ d: Int, _ h: Int, _ min: Int) -> Da
         m.addComputer([Float](repeating: 0.25, count: NotesMixer.maxBacklog * 3))
         _ = m.mix(withMic: [Float](repeating: 0, count: 100))
         // After the trim, about a second waits: the next second is still computer audio, then silence.
-        let out = m.mix(withMic: [Float](repeating: 0, count: NotesMixer.maxBacklog + 500))
+        let out = m.takeComputer(NotesMixer.maxBacklog + 500)
         #expect(out.contains(0))
         #expect(out[NotesMixer.maxBacklog - 1] == 0.25)
         #expect(out[NotesMixer.maxBacklog] == 0)
@@ -111,12 +153,13 @@ private func localDate(_ y: Int, _ m: Int, _ d: Int, _ h: Int, _ min: Int) -> Da
         #expect(Self.edits(WordDiff.compute(a, b)) == Self.edits(d)) // just as few changes
     }
 
-    // Windows: Copes_with_ten_thousand_words_and_few_edits, with a fixed seed and the strings (not the word lists) diffed.
+    // Windows: Copes_with_ten_thousand_words_and_few_edits, with Windows' own generator and seed, so the same words and
+    // the same edit positions.
     @Test func copesWithTenThousandWordsAndFewEditsSeeded() {
-        var rng = SplitMix64(seed: 7)
-        let words = (0..<10_000).map { _ in "w\(Int.random(in: 0..<500, using: &rng))" }
+        var rng = DotNetRandom(7)
+        let words = (0..<10_000).map { _ in "w\(rng.next(500))" }
         var edited = words
-        for k in 0..<40 { edited[Int.random(in: 0..<edited.count, using: &rng)] = "CHANGED\(k)" }
+        for k in 0..<40 { edited[rng.next(edited.count)] = "CHANGED\(k)" }
         edited.insert("inserted", at: 5000)
         edited.remove(at: 100)
         let a = words.joined(separator: " "), b = edited.joined(separator: " ")
@@ -621,6 +664,23 @@ private final class DocxParagraphs: NSObject, XMLParserDelegate {
 @Suite struct NotesModelParityTests {
     static let gb: Int64 = 1024 * 1024 * 1024
     static func size(_ g: Double) -> Int64 { Int64(g * Double(gb)) }
+
+    // Windows: An_ollama_cloud_model_is_never_the_best, with its model and figures.
+    @Test func anOllamaCloudModelIsNeverTheBest() {
+        let cloud = LocalModel(name: "gpt-oss:120b-cloud", billions: 116.8, bytes: 384, family: "gptoss") // listed like an installed one
+        #expect(NotesModels.pickBest([cloud, Self.qwen7B], gpuBytes: 6 * Self.gb) == Self.qwen7B)
+        #expect(NotesModels.pickBest([cloud], gpuBytes: 6 * Self.gb) == nil)
+    }
+
+    // Windows writes a usage day as a DateTime at its midnight; the Mac reads it as that day.
+    @Test func aWindowsUsageDayIsReadAsThatDay() throws {
+        let raw = #"{"day":"2026-11-03T00:00:00","sessions":2}"#
+        let d = try JSONDecoder().decode(NotesUsageDay.self, from: Data(raw.utf8))
+        #expect(NotesUsageDay.dayFormat.string(from: d.day) == "2026-11-03")
+        #expect(d.sessions == 2)
+        let withOffset = try JSONDecoder().decode(NotesUsageDay.self, from: Data(#"{"day":"2026-11-03T00:00:00+01:00"}"#.utf8))
+        #expect(NotesUsageDay.dayFormat.string(from: withOffset.day) == "2026-11-03")
+    }
 
     static let qwen3B = LocalModel(name: "qwen2.5:3b", billions: 3.1, bytes: size(1.9), family: "qwen2")
     static let qwen7B = LocalModel(name: "qwen2.5:7b", billions: 7.6, bytes: size(4.7), family: "qwen2")

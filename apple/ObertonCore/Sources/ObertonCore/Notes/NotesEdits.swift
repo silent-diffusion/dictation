@@ -24,7 +24,9 @@ public enum LongDiff {
             endA -= 1; endB -= 1
             tail.append(DiffToken(word: b[endB], kind: .same))
         }
-        if let middle = myers(a, b, na, nb, start, endA, endB) {
+        // The edit script must give back both texts exactly; if it doesn't (a corner case of the walk-back), the middle is
+        // reported as replaced rather than shown wrong (LongDiff.Reproduces).
+        if let middle = myers(a, b, na, nb, start, endA, endB), reproduces(middle, na, nb, start, endA, endB) {
             result += middle
         } else {
             for i in start..<endA { result.append(DiffToken(word: a[i], kind: .removed)) }
@@ -34,7 +36,27 @@ public enum LongDiff {
         return result
     }
 
-    /// The edit script between a[start..<endA] and b[start..<endB]; nil when it has more than `maxEdits` edits.
+    static func reproduces(_ middle: [DiffToken], _ na: [String], _ nb: [String], _ start: Int, _ endA: Int, _ endB: Int) -> Bool {
+        var i = start, j = start
+        for t in middle {
+            let w = WordDiff.normalize(t.word)
+            switch t.kind {
+            case .same:
+                guard i < endA, j < endB, na[i] == nb[j], nb[j] == w else { return false }
+                i += 1; j += 1
+            case .removed:
+                guard i < endA, na[i] == w else { return false }
+                i += 1
+            default:
+                guard j < endB, nb[j] == w else { return false }
+                j += 1
+            }
+        }
+        return i == endA && j == endB
+    }
+
+    /// The edit script between a[start..<endA] and b[start..<endB]; nil when it has more than `maxEdits` edits, or when
+    /// the walk-back would step outside the texts (Windows catches that and reports the middle as replaced).
     static func myers(_ a: [String], _ b: [String], _ na: [String], _ nb: [String], _ start: Int, _ endA: Int, _ endB: Int) -> [DiffToken]? {
         let n = endA - start, m = endB - start
         if n == 0 && m == 0 { return [] }
@@ -62,18 +84,22 @@ public enum LongDiff {
         var x = n, y = m
         for d in stride(from: trace.count - 1, through: 0, by: -1) {
             let row = trace[d] // v[-d-1 ... d+1] before step d
-            func at(_ k: Int) -> Int { row[k + d + 1] }
+            func at(_ k: Int) -> Int? { row.indices.contains(k + d + 1) ? row[k + d + 1] : nil }
+            func inB(_ y: Int) -> Bool { y >= 1 && start + y - 1 < b.count }
+            func inA(_ x: Int) -> Bool { x >= 1 && start + x - 1 < a.count }
             let k = x - y
             if d == 0 {
-                while x > 0 && y > 0 { out.append(DiffToken(word: b[start + y - 1], kind: .same)); x -= 1; y -= 1 }
+                while x > 0 && y > 0 { guard inB(y) else { return nil }; out.append(DiffToken(word: b[start + y - 1], kind: .same)); x -= 1; y -= 1 }
                 break
             }
-            let down = k == -d || (k != d && at(k - 1) < at(k + 1))
+            guard let left = at(k - 1), let right = at(k + 1) else { return nil }
+            let down = k == -d || (k != d && left < right)
             let prevK = down ? k + 1 : k - 1
-            let prevX = at(prevK), prevY = prevX - prevK
-            while x > prevX && y > prevY { out.append(DiffToken(word: b[start + y - 1], kind: .same)); x -= 1; y -= 1 }
-            if down { out.append(DiffToken(word: b[start + y - 1], kind: .added)); y -= 1 }
-            else { out.append(DiffToken(word: a[start + x - 1], kind: .removed)); x -= 1 }
+            guard let prevX = at(prevK) else { return nil }
+            let prevY = prevX - prevK
+            while x > prevX && y > prevY { guard inB(y) else { return nil }; out.append(DiffToken(word: b[start + y - 1], kind: .same)); x -= 1; y -= 1 }
+            if down { guard inB(y) else { return nil }; out.append(DiffToken(word: b[start + y - 1], kind: .added)); y -= 1 }
+            else { guard inA(x) else { return nil }; out.append(DiffToken(word: a[start + x - 1], kind: .removed)); x -= 1 }
         }
         return out.reversed()
     }
