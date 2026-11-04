@@ -160,7 +160,7 @@ public final class LiveTranscriber: @unchecked Sendable {
         lock.withLock {
             generation += 1
             pieces = []; volatile = ""; heardWords = []; waiting = []; streaming = false
-            guessSentAt = .distantPast; guessWaiting = nil; failure = nil
+            guessSentAt = .distantPast; guessWaiting = nil; guessTimer = false; failure = nil
             live = false; stopping = false; heldText = ""; heldEnd = 0; pieceEnd = 0; tail = ""
             peakLevel = 0; silentFrames = 0; sawSignal = false
             self.evenOut = evenOut
