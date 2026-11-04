@@ -63,6 +63,32 @@ public struct HistoryEntry: Codable, Identifiable, Sendable, Hashable {
     public var isSafetyNet: Bool { safetyNet ?? (aiEdit != nil && aiEdit == transcription && warning != nil) }
     /// The app's name, or "Unknown app".
     public var appLabel: String { appName.flatMap { $0.isEmpty ? nil : $0 } ?? "Unknown app" }
+
+    /// The list's text: what went in (or what was heard), on one line, at most 120 characters (HistoryEntry.Preview:
+    /// .NET's ReplaceLineEndings, UTF-16 lengths, the cut trimmed at its end).
+    public var preview: String {
+        var t = inserted.isEmpty ? transcription : inserted
+        t = t.replacingOccurrences(of: "\r\n", with: " ")
+        for c in ["\r", "\n", "\u{0C}", "\u{85}", "\u{2028}", "\u{2029}"] { t = t.replacingOccurrences(of: c, with: " ") }
+        let utf16 = t as NSString
+        if utf16.length <= 120 { return t }
+        var cut = utf16.substring(to: 117)
+        while let last = cut.unicodeScalars.last, last.properties.isWhitespace { cut.unicodeScalars.removeLast() }
+        return cut + "…"
+    }
+
+    /// "14:32", "Yesterday 14:32" or "3 Nov, 14:32" (HistoryEntry.When), day before month as on Windows.
+    public static func when(_ d: Date, now: Date = Date()) -> String {
+        let cal = Calendar.current
+        if cal.isDate(d, inSameDayAs: now) { return DateText.time(d) }
+        if let yesterday = cal.date(byAdding: .day, value: -1, to: now), cal.isDate(d, inSameDayAs: yesterday) { return "Yesterday " + DateText.time(d) }
+        return DateText.dayMonthTime(d)
+    }
+
+    /// "40 s" or "1:05 min" (HistoryEntry.Duration).
+    public static func duration(_ s: Double) -> String {
+        s < 60 ? "\(Int(s.rounded())) s" : String(format: "%d:%02d min", Int(s) / 60, Int(s) % 60)
+    }
     /// The browser site it went to, by name only (`WebSites`); nil when it didn't go into a browser, or when its
     /// window title was never read (the App Store build, and entries from before titles were kept).
     public var site: String? { windowTitle == nil ? nil : WebSites.site(appName, windowTitle) }
@@ -136,19 +162,39 @@ public final class HistoryStore {
 
     /// `legacyFile`: the single history.json earlier versions kept; its entries move into folders once, and the file is
     /// renamed history.json.moved (not deleted).
+    /// The folder itself is made only when the first dictation is saved into it (as Windows' HistoryStore).
     public init(dir: URL?, legacyFile: URL? = nil) {
         self.dir = dir
         guard let dir else { return }
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         if let legacyFile, FileManager.default.fileExists(atPath: legacyFile.path(percentEncoded: false)) { migrate(legacyFile) }
-        let folders = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+        // Folders in name order (Directory.GetDirectories), then newest first; dictations at the same moment keep that
+        // order (a stable sort, as OrderByDescending).
+        let folders = ((try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.isDirectoryKey])) ?? [])
+            .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        var loaded: [HistoryEntry] = []
         for folder in folders {
-            guard let data = try? Data(contentsOf: folder.appending(path: "entry.json")),
-                  var e = try? Self.decoder.decode(HistoryEntry.self, from: data) else { continue }
+            guard var e = Self.load(folder.appending(path: "entry.json")) else { continue }
             e.folder = folder
-            entries.append(e)
+            loaded.append(e)
         }
-        entries.sort { $0.date > $1.date }
+        entries = loaded.enumerated().sorted { $0.element.date != $1.element.date ? $0.element.date > $1.element.date : $0.offset < $1.offset }
+            .map(\.element)
+    }
+
+    /// One entry.json, or nil when it is missing or can't be read. An unreadable one is logged and kept beside itself as
+    /// entry.json.bad (Windows' JsonStore.Load).
+    static func load(_ url: URL) -> HistoryEntry? {
+        guard FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) else { return nil }
+        do {
+            return try decoder.decode(HistoryEntry.self, from: Data(contentsOf: url))
+        } catch {
+            CoreLog.error("Could not read \(url.path(percentEncoded: false)); keeping a .bad copy: \(error)")
+            let bad = url.appendingPathExtension("bad")
+            try? FileManager.default.removeItem(at: bad)
+            try? FileManager.default.copyItem(at: url, to: bad)
+            return nil
+        }
     }
 
     private func migrate(_ file: URL) {
@@ -173,12 +219,16 @@ public final class HistoryStore {
         if FileManager.default.fileExists(atPath: folder.path(percentEncoded: false)) {
             folder = dir.appending(path: Self.folderName(entry.date) + "-" + entry.id.uuidString.prefix(4), directoryHint: .isDirectory)
         }
-        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         entry.folder = folder
-        saveJSON(entry)
-        if let pcm, !pcm.isEmpty, let url = entry.audioURL {
-            try? WavFile.data(pcm: pcm).write(to: url, options: .atomic)
-            if !words.isEmpty, let w = entry.wordsURL, let data = try? JSONEncoder().encode(words) { try? data.write(to: w, options: .atomic) }
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try writeJSON(entry, to: folder)
+            if let pcm, !pcm.isEmpty, let url = entry.audioURL {
+                try WavFile.data(pcm: pcm).write(to: url, options: .atomic)
+                if !words.isEmpty, let w = entry.wordsURL, let data = try? JSONEncoder().encode(words) { try? data.write(to: w, options: .atomic) }
+            }
+        } catch {
+            CoreLog.error("Saving a dictation to History failed: \(error)")
         }
         return entry
     }
@@ -189,19 +239,25 @@ public final class HistoryStore {
         var entry = entry
         entry.folder = entries[i].folder
         entries[i] = entry
-        saveJSON(entry)
+        guard let folder = entry.folder else { return }
+        do { try writeJSON(entry, to: folder) } catch { CoreLog.error("Saving a changed dictation to History failed: \(error)") }
     }
 
-    private func saveJSON(_ entry: HistoryEntry) {
-        guard let folder = entry.folder, let data = try? Self.encoder.encode(entry) else { return }
-        try? data.write(to: folder.appending(path: "entry.json"), options: .atomic)
+    private func writeJSON(_ entry: HistoryEntry, to folder: URL) throws {
+        try Self.encoder.encode(entry).write(to: folder.appending(path: "entry.json"), options: .atomic)
     }
 
     /// How many dictations keeping the newest `limit` or the last `days` days would delete now (for the confirmation).
     public func wouldDelete(limit: Int, days: Int, now: Date = Date()) -> Int {
         if limit > 0 { return max(0, entries.count - limit) }
-        if days > 0 { return entries.filter { $0.date < now.addingTimeInterval(-Double(days) * 86400) }.count }
+        if days > 0 { return entries.filter { $0.date < Self.cutoff(days, now) }.count }
         return 0
+    }
+
+    /// `days` calendar days before `now`, on the local clock (DateTime.Now.AddDays(-days)): the same time of day,
+    /// whatever daylight saving did in between.
+    static func cutoff(_ days: Int, _ now: Date) -> Date {
+        Calendar.current.date(byAdding: .day, value: -days, to: now) ?? now.addingTimeInterval(-Double(days) * 86400)
     }
 
     /// Drop the entries beyond what is kept (by number or by age), and the recordings beyond what is kept of them; on
@@ -209,15 +265,18 @@ public final class HistoryStore {
     public func prune(_ s: AppSettings, now: Date = Date()) {
         if s.historyLimit > 0, entries.count > s.historyLimit { delete(Set(entries[s.historyLimit...].map(\.id))) }
         if s.historyDays > 0 {
-            let cutoff = now.addingTimeInterval(-Double(s.historyDays) * 86400)
+            let cutoff = Self.cutoff(s.historyDays, now)
             delete(Set(entries.filter { $0.date < cutoff }.map(\.id)))
         }
         guard s.audioLimit > 0 || s.audioDays > 0 else { return } // recordings: as long as the text
-        let cutoff = now.addingTimeInterval(-Double(s.audioDays) * 86400)
+        let cutoff = Self.cutoff(s.audioDays, now)
         for (i, e) in entries.enumerated() {
             let drop = (s.audioLimit > 0 && i >= s.audioLimit) || (s.audioDays > 0 && e.date < cutoff)
             if drop, e.hasAudio, let url = e.audioURL {
-                try? FileManager.default.removeItem(at: url)
+                do { try FileManager.default.removeItem(at: url) } catch {
+                    CoreLog.warn("Could not delete a History recording: \(error.localizedDescription)")
+                    continue
+                }
                 if let w = e.wordsURL { try? FileManager.default.removeItem(at: w) } // its words go with it
             }
         }
@@ -226,7 +285,10 @@ public final class HistoryStore {
     public func delete(_ ids: Set<UUID>) {
         guard !ids.isEmpty else { return }
         for e in entries where ids.contains(e.id) {
-            if let folder = e.folder { try? FileManager.default.removeItem(at: folder) }
+            guard let folder = e.folder, FileManager.default.fileExists(atPath: folder.path(percentEncoded: false)) else { continue }
+            do { try FileManager.default.removeItem(at: folder) } catch {
+                CoreLog.warn("Could not delete a History entry: \(error.localizedDescription)")
+            }
         }
         entries.removeAll { ids.contains($0.id) }
     }
@@ -263,28 +325,43 @@ public final class HistoryStore {
         return f.string(from: d)
     }
 
+    /// Dates to the millisecond (as the folder names), so dictations a moment apart keep their order after a restart
+    /// (Windows keeps the full time); entries from before were written in whole seconds and still read.
     static let encoder: JSONEncoder = {
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
-        enc.dateEncodingStrategy = .iso8601
+        enc.dateEncodingStrategy = .custom { date, encoder in
+            var c = encoder.singleValueContainer()
+            try c.encode(Date.ISO8601FormatStyle(includingFractionalSeconds: true).format(date))
+        }
         return enc
     }()
 
     static let decoder: JSONDecoder = {
         let dec = JSONDecoder()
-        dec.dateDecodingStrategy = .iso8601
+        dec.dateDecodingStrategy = .custom { decoder in
+            let c = try decoder.singleValueContainer()
+            let text = try c.decode(String.self)
+            if let d = try? Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(text) { return d }
+            if let d = try? Date.ISO8601FormatStyle().parse(text) { return d }
+            throw DecodingError.dataCorruptedError(in: c, debugDescription: "Not an ISO 8601 date: \(text)")
+        }
         return dec
     }()
 }
 
 public enum WavFile {
-    /// 16-bit mono PCM as a .wav file.
+    /// The header's length: NAudio's WaveFileWriter (Windows) writes an 18-byte fmt chunk (WAVEFORMATEX with
+    /// cbSize 0), so the samples start at byte 46.
+    public static let headerSize = 46
+
+    /// 16-bit mono PCM as a .wav file, byte for byte as Windows writes it.
     public static func data(pcm: Data, sampleRate: Int = 16000) -> Data {
         var d = Data()
         func u32(_ v: Int) { withUnsafeBytes(of: UInt32(v).littleEndian) { d.append(contentsOf: $0) } }
         func u16(_ v: Int) { withUnsafeBytes(of: UInt16(v).littleEndian) { d.append(contentsOf: $0) } }
-        d.append(contentsOf: Array("RIFF".utf8)); u32(36 + pcm.count); d.append(contentsOf: Array("WAVE".utf8))
-        d.append(contentsOf: Array("fmt ".utf8)); u32(16); u16(1); u16(1); u32(sampleRate); u32(sampleRate * 2); u16(2); u16(16)
+        d.append(contentsOf: Array("RIFF".utf8)); u32(headerSize - 8 + pcm.count); d.append(contentsOf: Array("WAVE".utf8))
+        d.append(contentsOf: Array("fmt ".utf8)); u32(18); u16(1); u16(1); u32(sampleRate); u32(sampleRate * 2); u16(2); u16(16); u16(0)
         d.append(contentsOf: Array("data".utf8)); u32(pcm.count)
         d.append(pcm)
         return d

@@ -22,7 +22,7 @@ import Testing
         #expect(reloaded.entries[1].hasAudio)
         #expect(!reloaded.entries[0].hasAudio)
         let wav = try? Data(contentsOf: reloaded.entries[1].audioURL!)
-        #expect(wav?.count == 44 + 3200)
+        #expect(wav?.count == 46 + 3200) // NAudio's header: an 18-byte fmt chunk
         #expect(wav.map { String(decoding: $0.prefix(4), as: UTF8.self) } == "RIFF")
     }
 
@@ -73,7 +73,107 @@ import Testing
         #expect(!FileManager.default.fileExists(atPath: legacy.path(percentEncoded: false)))
     }
 
+    // ThreeZeroTests.HistoryEntryTests
+    @Test func previewPrefersTheInsertedTextAndIsShort() {
+        var e = HistoryEntry(transcription: "raw words", aiEdit: nil, inserted: String(repeating: "a", count: 300), profileName: "Raw",
+                             model: nil, appName: nil, seconds: 1, turnaroundSeconds: 0, warning: nil)
+        #expect(e.preview.utf16.count <= 120)
+        #expect(e.preview.hasPrefix("aaa"))
+        e.inserted = ""
+        #expect(e.preview == "raw words")
+    }
+
+    @Test func durationReadsNaturally() {
+        #expect(HistoryEntry.duration(12.4) == "12 s")
+        #expect(HistoryEntry.duration(75) == "1:15 min")
+    }
+
+    @Test func anUnknownAppStillHasAName() {
+        let e = HistoryEntry(transcription: "", aiEdit: nil, inserted: "", profileName: "", model: nil, appName: nil, seconds: 0,
+                             turnaroundSeconds: 0, warning: nil)
+        #expect(e.appLabel == "Unknown app")
+        var named = e
+        named.appName = ""
+        #expect(named.appLabel == "Unknown app")
+    }
+
+    @Test func recordingsAreWrittenAs16kHzMonoWav() {
+        let bytes = [UInt8](WavFile.data(pcm: Data(count: 32000))) // one second
+        #expect(String(decoding: bytes[0..<4], as: UTF8.self) == "RIFF")
+        func i32(_ at: Int) -> Int { Int(bytes[at]) | Int(bytes[at + 1]) << 8 | Int(bytes[at + 2]) << 16 | Int(bytes[at + 3]) << 24 }
+        #expect(i32(24) == 16000) // sample rate
+        #expect(Int(bytes[22]) | Int(bytes[23]) << 8 == 1) // channels
+        #expect(bytes.count >= 32044)
+        #expect(i32(16) == 18 && i32(4) == bytes.count - 8 && i32(42) == 32000) // NAudio's fmt chunk, RIFF and data sizes
+        let url = dir.appending(path: "check.wav")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? Data(bytes).write(to: url)
+        #expect((try? HistoryRerun.checkFormat(url)) != nil)
+    }
+
+    @Test func theFolderIsMadeOnlyWhenSomethingIsSaved() {
+        let store = HistoryStore(dir: dir)
+        #expect(!FileManager.default.fileExists(atPath: dir.path(percentEncoded: false)))
+        store.add(entry("one", daysAgo: 0, now: Date()), pcm: nil)
+        #expect(FileManager.default.fileExists(atPath: dir.path(percentEncoded: false)))
+    }
+
+    @Test func dictationsMomentsApartKeepTheirOrderAfterARestart() {
+        let store = HistoryStore(dir: dir)
+        let now = Date(timeIntervalSince1970: 1_800_000_000.25)
+        let first = entry("first", daysAgo: 0, now: now)
+        var second = entry("second", daysAgo: 0, now: now)
+        second.date = now.addingTimeInterval(0.4) // the same second
+        store.add(first, pcm: nil)
+        store.add(second, pcm: nil)
+        let reloaded = HistoryStore(dir: dir).entries
+        #expect(reloaded.map(\.transcription) == ["second", "first"])
+        #expect(abs(reloaded[1].date.timeIntervalSince(now)) < 0.002)
+    }
+
+    @Test func entriesWrittenInWholeSecondsStillLoad() throws {
+        let folder = dir.appending(path: "20261103-124100-000")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        var e = entry("old", daysAgo: 0, now: Date())
+        e.date = Date(timeIntervalSince1970: 1_800_000_000)
+        let enc = JSONEncoder()
+        enc.dateEncodingStrategy = .iso8601
+        try enc.encode(e).write(to: folder.appending(path: "entry.json"))
+        #expect(HistoryStore(dir: dir).entries.first?.date == e.date)
+    }
+
+    @Test func keepingByAgeCountsCalendarDays() {
+        // N days back on the local clock: the same time of day, also across a change of daylight saving time.
+        let now = Date()
+        let cutoff = HistoryStore.cutoff(30, now)
+        #expect(cutoff == Calendar.current.date(byAdding: .day, value: -30, to: now))
+        let cal = Calendar.current
+        #expect(cal.component(.hour, from: cutoff) == cal.component(.hour, from: now))
+    }
+
     @Test func daysLabels() {
         #expect([1, 3, 7, 14, 30, 90, 365, 21].map(HistoryStore.daysLabel) == ["24 hours", "3 days", "week", "2 weeks", "month", "3 months", "year", "3 weeks"])
+    }
+}
+
+// These catch the log through CoreLog.sink, which BrokenFileTests' serialized suite keeps to one test at a time.
+extension BrokenFileTests {
+    @Test func anUnreadableEntryIsSkippedAndKeptAsBad() throws {
+        let dir = FileManager.default.temporaryDirectory.appending(path: "oberton-history-tests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = HistoryStore(dir: dir)
+        var e = HistoryEntry(transcription: "good", aiEdit: nil, inserted: "good", profileName: "Raw", model: nil, appName: nil,
+                             seconds: 1, turnaroundSeconds: 0, warning: nil)
+        e.date = Date()
+        store.add(e, pcm: nil)
+        let broken = dir.appending(path: "20260101-120000-000")
+        try FileManager.default.createDirectory(at: broken, withIntermediateDirectories: true)
+        try Data("{ not json".utf8).write(to: broken.appending(path: "entry.json"))
+        var lines: [String] = []
+        CoreLog.sink = { level, message in lines.append(level + " " + message) }
+        defer { CoreLog.sink = nil }
+        #expect(HistoryStore(dir: dir).entries.map(\.transcription) == ["good"])
+        #expect(FileManager.default.fileExists(atPath: broken.appending(path: "entry.json.bad").path(percentEncoded: false)))
+        #expect(lines.contains { $0.hasPrefix("ERROR Could not read ") && $0.contains("entry.json; keeping a .bad copy") })
     }
 }

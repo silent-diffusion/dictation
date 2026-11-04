@@ -110,6 +110,54 @@ import Testing
         #expect(try JSONDecoder().decode(WordTally.self, from: Data(json.utf8)) == tally)
     }
 
+    @Test func seedingFromHistoryCountsOnceAndKeepsNoSentences() throws {
+        let file = JSONFile<WordTally>(url: FileManager.default.temporaryDirectory.appending(path: "oberton-words-\(UUID().uuidString).json"))
+        defer { try? FileManager.default.removeItem(at: file.url) }
+        let morning = Calendar.current.date(bySettingHour: 10, minute: 0, second: 0, of: Date())!
+        let history = [entry("the Overton release is ready", ai: "The Oberton release is ready.", date: morning)]
+        let tally = WordTally.load(file, seed: history, enabled: true)
+        let day = try #require(tally.days.first)
+        #expect(tally.days.count == 1)
+        #expect(day.words["oberton"] == 1)
+        #expect(day.corrections["overton" + WordTally.arrow + "Oberton"] == 1)
+        #expect(day.hours[10] == 1)
+        #expect(!String(decoding: try Data(contentsOf: file.url), as: UTF8.self).contains("release is ready."))
+        // Loads back; not seeded twice.
+        let again = WordTally.load(file, seed: history + history, enabled: true)
+        #expect(again.days.count == 1 && again.days[0].words["oberton"] == 1)
+        // Off: no tally and no file.
+        let off = JSONFile<WordTally>(url: file.url.appendingPathExtension("off"))
+        #expect(WordTally.load(off, seed: history, enabled: false).days.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: off.url.path(percentEncoded: false)))
+    }
+
+    @Test func lowerCaseIsDotNetsInvariantOne() {
+        // ToLowerInvariant maps each character alone and leaves İ as it is.
+        #expect(WordTally.tokens("İstanbul ΣΟΦΙΑ") == ["İstanbul", "σοφια"])
+        #expect(WordTally.correction(removed: ["İzmir"], added: ["Izmir"]) == "İzmir" + WordTally.arrow + "Izmir")
+    }
+
+    @Test func digitsOutsideTheBasicPlaneAreNotDigitsAsOnWindows() {
+        // U+1D7CE MATHEMATICAL BOLD DIGIT ZERO, twice: four UTF-16 surrogates, none a digit to char.IsDigit.
+        let item = WordTally.analyze(transcript: "x", aiOutput: nil, final: "\u{1D7CE}\u{1D7CE} 2026")
+        #expect(item.words == ["\u{1D7CE}\u{1D7CE}"])
+    }
+
+    @Test func aWrittenWordOfThreeUTF16UnitsCarriesMeaning() {
+        // Two letters outside the BMP are four UTF-16 units: long enough on Windows (w.Length >= 3).
+        #expect(WordTally.correction(removed: ["ab"], added: ["\u{20000}\u{20001}"]) != nil)
+    }
+
+    @Test func profilesUsedEquallyOnOneDayKeepTheOrderTheyWereUsed() {
+        var tally = WordTally()
+        tally.record(entry("one two", profile: "Zebra"))
+        tally.record(entry("one two", profile: "Alpha"))
+        #expect(WordTally.byProfile(tally.days).map(\.profile) == ["Zebra", "Alpha"])
+        let json = try! JSONEncoder().encode(tally)
+        let back = try! JSONDecoder().decode(WordTally.self, from: json)
+        #expect(WordTally.byProfile(back.days).map(\.profile) == ["Zebra", "Alpha"])
+    }
+
     @Test func eachDictationIsCountedAgainOnTheSameDay() {
         var tally = WordTally()
         tally.record(entry("release notes", inserted: "Release notes.", profile: "Raw"))
@@ -219,6 +267,21 @@ import Testing
         #expect(d.readings == 1 && d.wordsRead == 120 && d.secondsRead == 45.5)
     }
 
+    // WordsReadPerDayTests (MarkdownDocTests.cs)
+    @Test func wordsReadAloudAreCountedPerDayNextToWordsDictated() {
+        let now = Calendar.current.date(bySettingHour: 12, minute: 0, second: 0, of: Date())!
+        var log = UsageLog()
+        log.recordReading(words: 120, on: now)
+        log.recordReading(words: 30, on: Calendar.current.date(byAdding: .day, value: -1, to: now)!)
+        log.record(HistoryEntry(transcription: "one two three", aiEdit: nil, inserted: "one two three", profileName: "Raw", model: nil,
+                                appName: nil, seconds: 1, turnaroundSeconds: 0, warning: nil))
+        let days = log.perDay(7, until: now)
+        #expect(days[days.count - 1].wordsRead == 120)
+        #expect(days[days.count - 1].words == 3)
+        #expect(days[days.count - 2].wordsRead == 30)
+        #expect(days[days.count - 2].words == 0)
+    }
+
     @Test func appsIgnoreCaseAnUnnamedAppIsCountedAndResetKeepsTheTurnarounds() {
         var log = UsageLog()
         let now = Date()
@@ -267,5 +330,22 @@ import Testing
     @Test func weekdayRowsStartOnMonday() {
         #expect(UsageLog.weekdayRow(UsageLog.date("2026-10-12")!) == 0) // a Monday
         #expect(UsageLog.weekdayRow(UsageLog.date("2026-10-18")!) == 6) // a Sunday
+    }
+}
+
+extension BrokenFileTests {
+    @Test func aUsageFileWithAValueThatWontReadFailsAsAWhole() throws {
+        // Windows' strict read: kept as usage.json.bad, logged, and the counts seeded again from History.
+        let url = FileManager.default.temporaryDirectory.appending(path: "oberton-usage-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url); try? FileManager.default.removeItem(at: url.appendingPathExtension("bad")) }
+        try Data(#"{"version":2,"days":{"2026-10-01":{"dictations":"two"}},"samples":[]}"#.utf8).write(to: url)
+        var lines: [String] = []
+        CoreLog.sink = { level, message in lines.append(level + " " + message) }
+        defer { CoreLog.sink = nil }
+        #expect(JSONFile<UsageLog>(url: url).load() == nil)
+        #expect(FileManager.default.fileExists(atPath: url.appendingPathExtension("bad").path(percentEncoded: false)))
+        #expect(lines.contains { $0.contains("keeping a .bad copy") })
+        // A missing key is fine: it keeps its default.
+        #expect(try JSONDecoder().decode(UsageLog.self, from: Data(#"{"days":{"2026-10-01":{"words":3}}}"#.utf8)).days["2026-10-01"]?.words == 3)
     }
 }

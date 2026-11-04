@@ -67,8 +67,18 @@ public struct TallyDay: Codable, Sendable, Equatable {
     /// The same counts per app ("Mail") and per browser site ("Safari › Gmail", see `WordTally.appKey`), so Analytics
     /// can show one app's (or site's) words.
     public var apps: [String: TallyPart] = [:]
+    /// The profiles in the order they were first used that day (Windows' Profiles dictionary keeps that order, also in
+    /// words.json), so equally used ones are listed the same way; empty in days from before it was kept.
+    public var profileOrder: [String] = []
 
     public init(day: String) { self.day = day }
+
+    /// The day's profiles in the order they were first used (days from before that was kept: by name, after the rest).
+    public var profilesInOrder: [(name: String, tally: ProfileTally)] {
+        let known = profileOrder.filter { profiles[$0] != nil }
+        let rest = profiles.keys.filter { !known.contains($0) }.sorted(by: WordTally.before)
+        return (known + rest).map { ($0, profiles[$0]!) }
+    }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -80,6 +90,7 @@ public struct TallyDay: Codable, Sendable, Equatable {
         hours = Self.fit((try? c.decode([Int].self, forKey: .hours)) ?? [])
         profiles = (try? c.decode([String: ProfileTally].self, forKey: .profiles)) ?? [:]
         apps = (try? c.decode([String: TallyPart].self, forKey: .apps)) ?? [:]
+        profileOrder = (try? c.decode([String].self, forKey: .profileOrder)) ?? []
     }
 
     /// The day as a date (local midnight).
@@ -127,6 +138,28 @@ public struct WordTally: Codable, Sendable, Equatable {
         compact(now: now)
     }
 
+    /// words.json as the app starts with it (WordTally's constructor): what the file holds, or, when there is none yet
+    /// (or it can't be read, then kept as words.json.bad), a tally seeded once from the dictations in History, if the
+    /// tally is on. `persist` false (snapshots) leaves the file alone.
+    public static func load(_ file: JSONFile<WordTally>, seed history: [HistoryEntry], enabled: Bool, persist: Bool = true,
+                            now: Date = Date()) -> WordTally {
+        if let loaded = file.load() { return loaded }
+        guard enabled else { return WordTally() }
+        let seeded = WordTally(seed: history, now: now)
+        if persist { seeded.save(to: file) }
+        return seeded
+    }
+
+    /// Write the tally to its file (as `JSONFile.save`), logging a failure as Windows does.
+    public func save(to file: JSONFile<WordTally>) {
+        let enc = JSONEncoder()
+        enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+        enc.dateEncodingStrategy = .iso8601
+        do { try enc.encode(self).write(to: file.url, options: .atomic) } catch {
+            CoreLog.warn("Saving the word tally failed: " + error.localizedDescription)
+        }
+    }
+
     /// Count a finished dictation.
     public mutating func record(_ e: HistoryEntry, now: Date = Date()) {
         count(e)
@@ -170,7 +203,8 @@ public struct WordTally: Codable, Sendable, Equatable {
         for f in item.fillers { d.fillers[f, default: 0] += 1 }
         d.hours[hour] += 1
 
-        let name = e.profileName.trimmingCharacters(in: .whitespaces).isEmpty ? "Unknown profile" : e.profileName
+        let name = e.profileName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Unknown profile" : e.profileName
+        if d.profiles[name] == nil { d.profileOrder.append(name) }
         var p = d.profiles[name] ?? ProfileTally()
         p.dictations += 1
         if aiOutput != nil || safetyNet {
@@ -244,8 +278,25 @@ public struct WordTally: Codable, Sendable, Equatable {
         guard let text, !text.isEmpty else { return [] }
         let ns = text as NSString
         return wordRx.matches(in: text, range: NSRange(location: 0, length: ns.length)).map {
-            ns.substring(with: $0.range).replacingOccurrences(of: "’", with: "'").lowercased()
+            lowerInvariant(ns.substring(with: $0.range).replacingOccurrences(of: "’", with: "'"))
         }
+    }
+
+    /// .NET's ToLowerInvariant: each character on its own (simple case mapping, never changing the length), and İ
+    /// (U+0130) left as it is, as .NET's invariant casing does; Swift's `lowercased()` would make it "i̇".
+    static func lowerInvariant(_ s: String) -> String {
+        var out = String.UnicodeScalarView()
+        for u in s.unicodeScalars {
+            let lower = u.properties.lowercaseMapping.unicodeScalars
+            if u.value == 0x130 || lower.count != 1 { out.append(u) } else { out.append(lower.first!) }
+        }
+        return String(out)
+    }
+
+    /// .NET's `t.All(char.IsDigit)`: every UTF-16 unit a decimal digit (a digit outside the BMP is two surrogates there,
+    /// which aren't digits).
+    static func allDigits(_ s: String) -> Bool {
+        s.utf16.allSatisfy { Unicode.Scalar($0)?.properties.generalCategory == .decimalNumber }
     }
 
     static func sentences(_ text: String) -> [String] {
@@ -265,7 +316,7 @@ public struct WordTally: Codable, Sendable, Equatable {
         let text = final.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? transcript : final
         // .NET: at least two UTF-16 units, and not all decimal digits (char.IsDigit).
         let words = tokens(text).filter {
-            $0.utf16.count >= 2 && !commonWords.contains($0) && !$0.unicodeScalars.allSatisfy { $0.properties.generalCategory == .decimalNumber }
+            $0.utf16.count >= 2 && !commonWords.contains($0) && !allDigits($0)
         }
 
         var phrases: [String] = []
@@ -313,10 +364,10 @@ public struct WordTally: Codable, Sendable, Equatable {
         guard !heard.isEmpty, !written.isEmpty else { return nil }
         let heardWords = tokens(heard), writtenWords = tokens(written)
         if heardWords.allSatisfy(fillerWords.contains) { return nil }
-        guard writtenWords.contains(where: { $0.count >= 3 && !commonWords.contains($0) }) else { return nil }
+        guard writtenWords.contains(where: { $0.utf16.count >= 3 && !commonWords.contains($0) }) else { return nil }
         // Only capitals or punctuation changed: not a correction anyone needs to teach.
         if heardWords == writtenWords { return nil }
-        return heard.lowercased() + arrow + written
+        return lowerInvariant(heard) + arrow + written
     }
 
     private static func clean(_ s: String) -> String {
@@ -366,12 +417,12 @@ public struct WordTally: Codable, Sendable, Equatable {
     }
 
     /// Profiles summed over the days, busiest first; equal ones in the order they were first met (Windows' stable
-    /// sort), oldest day first and by name within a day.
+    /// sort), oldest day first and in the order they were first used within a day.
     public static func byProfile(_ days: [TallyDay]) -> [(profile: String, total: ProfileTally)] {
         var sum: [String: ProfileTally] = [:]
         var order: [String] = []
         for d in days {
-            for (name, p) in d.profiles.sorted(by: { before($0.key, $1.key) }) {
+            for (name, p) in d.profilesInOrder {
                 if sum[name] == nil { order.append(name) }
                 var t = sum[name] ?? ProfileTally()
                 t.dictations += p.dictations; t.aiEdited += p.aiEdited; t.aiKept += p.aiKept

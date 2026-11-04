@@ -26,14 +26,15 @@ public struct UsageDay: Codable, Sendable, Equatable {
 
     public init() {}
 
-    // Files from older versions are missing newer keys: decode what is there, default the rest.
+    // Files from older versions are missing newer keys: those keep their defaults. A value that is there but won't read
+    // fails the whole file, as Windows' strict read does (kept as usage.json.bad, the counts seeded again from History).
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        func take<T: Decodable>(_ key: CodingKeys, _ into: inout T) { if let v = try? c.decode(T.self, forKey: key) { into = v } }
-        take(.dictations, &dictations); take(.words, &words); take(.secondsSpoken, &secondsSpoken)
-        take(.turnaroundSeconds, &turnaroundSeconds); take(.turnaroundCount, &turnaroundCount)
-        take(.readings, &readings); take(.wordsRead, &wordsRead); take(.secondsRead, &secondsRead)
-        take(.aiEdits, &aiEdits); take(.aiKept, &aiKept); take(.apps, &apps); take(.sites, &sites); take(.hours, &hours)
+        func take<T: Decodable>(_ key: CodingKeys, _ into: inout T) throws { if let v = try c.decodeIfPresent(T.self, forKey: key) { into = v } }
+        try take(.dictations, &dictations); try take(.words, &words); try take(.secondsSpoken, &secondsSpoken)
+        try take(.turnaroundSeconds, &turnaroundSeconds); try take(.turnaroundCount, &turnaroundCount)
+        try take(.readings, &readings); try take(.wordsRead, &wordsRead); try take(.secondsRead, &secondsRead)
+        try take(.aiEdits, &aiEdits); try take(.aiKept, &aiKept); try take(.apps, &apps); try take(.sites, &sites); try take(.hours, &hours)
         hours = TallyDay.fit(hours)
     }
 }
@@ -86,9 +87,11 @@ public struct UsageLog: Codable, Sendable, Equatable {
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        version = (try? c.decode(Int.self, forKey: .version)) ?? 1
-        days = (try? c.decode([String: UsageDay].self, forKey: .days)) ?? [:]
-        samples = (try? c.decode([TurnaroundSample].self, forKey: .samples)) ?? []
+        // Strict, as Windows: a value that won't read fails the file (`JSONFile.load` keeps it as .bad and logs it), and
+        // the counts are seeded again from History rather than silently starting from nothing.
+        version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 1
+        days = try c.decodeIfPresent([String: UsageDay].self, forKey: .days) ?? [:]
+        samples = try c.decodeIfPresent([TurnaroundSample].self, forKey: .samples) ?? []
     }
 
     public static func key(_ date: Date) -> String {

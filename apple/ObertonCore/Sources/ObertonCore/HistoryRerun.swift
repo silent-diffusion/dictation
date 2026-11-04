@@ -16,7 +16,6 @@ public enum HistoryRerun {
         guard entry.hasAudio, let url = entry.audioURL else {
             throw UserFacingError("The recording of this dictation isn't kept any more, so it can't be run again.")
         }
-        try checkFormat(url)
         let found = profiles.first { $0.name.caseInsensitiveCompare(entry.profileName) == .orderedSame }
         let profileNote = found == nil ? " (the profile \"\(entry.profileName)\" is gone, so \(active.name) was used)" : ""
         let profile = found ?? active
@@ -32,10 +31,13 @@ public enum HistoryRerun {
                 try await WhisperEngine.shared.load(whisper)
             }
             await progress("Transcribing again with \(WhisperModels.name(of: whisper))…")
+            // As Windows, the file is checked once the model is in and transcribing begins.
+            try checkFormat(url)
             heard = try await WhisperAudio.rerun(url, model: whisper, language: settings.whisperLanguage,
                                                  vocabulary: settings.vocabularyHint, even: settings.evenOutVolume)
         } else {
             await progress("Transcribing again with on-device speech recognition…")
+            try checkFormat(url)
             heard = try await transcribe(url, locale: settings.speechLocale, vocabulary: settings.vocabulary, even: settings.evenOutVolume)
         }
         try Task.checkCancellation()
@@ -48,12 +50,20 @@ public enum HistoryRerun {
         var aiEdit: String?, warning: String?, final = raw, safetyNet = false
         if !profile.isRaw {
             await progress("Cleaning up with \(profile.name)…")
-            let result = await TextProcessor(settings: settings).process(raw, profile: profile)
-            final = result.text
-            if result.modified { aiEdit = result.text }
-            safetyNet = result.safetyNet
-            // An AI error keeps the transcription as heard; the safety net's note only when it stepped in.
-            warning = result.error.map { $0 + " The transcription was kept as heard." } ?? (safetyNet ? result.warning : nil)
+            // As Windows: an AI error put into words for the user keeps the transcription as heard, with that note;
+            // anything else ends the rerun with nothing changed ("See the log for details").
+            let processor = TextProcessor(settings: settings)
+            let model = processor.model(for: profile)
+            do {
+                let result = try await processor.edit(raw.trimmingCharacters(in: .whitespacesAndNewlines), profile: profile, backend: try await processor.backend(for: model, ask: false),
+                                                      cloud: model.isCloud, model: model.windowsForm)
+                final = result.text
+                if result.modified { aiEdit = result.text }
+                if result.safetyNet { safetyNet = true; warning = result.warning }
+            } catch let e as UserFacingError where !Task.isCancelled {
+                CoreLog.warn("History: the AI step of running a dictation again failed: " + e.message)
+                warning = e.message + " The transcription was kept as heard."
+            }
         }
         try Task.checkCancellation()
 
@@ -64,7 +74,7 @@ public enum HistoryRerun {
         changed.runAgainAt = Date()
         changed.showingEarlier = false
         let speech = whisper.map(WhisperModels.name(of:)) ?? "on-device speech recognition"
-        CoreLog.info("History: ran \(HistoryStore.folderName(entry.date)) again (\(speech), \(profile.name)): "
+        CoreLog.info("History: ran \(DateText.format(entry.date, "yyyyMMdd-HHmmss", Locale(identifier: "en_US_POSIX"))) again (\(speech), \(profile.name)): "
                      + "\(entry.transcription.utf16.count)->\(raw.utf16.count) chars heard")
         return (changed, "Run again with \(speech) and the \(profile.name) profile\(profileNote). Not inserted anywhere: copy it, or insert it below.")
     }

@@ -498,32 +498,6 @@ final class HistoryPlayer: ObservableObject {
     }
 }
 
-extension HistoryEntry {
-    /// "14:32", "Yesterday 14:32" or "3 Nov, 14:32" (HistoryEntry.When), day before month as on Windows.
-    static func when(_ d: Date) -> String {
-        if Calendar.current.isDateInToday(d) { return DateText.time(d) }
-        if Calendar.current.isDateInYesterday(d) { return "Yesterday " + DateText.time(d) }
-        return DateText.dayMonthTime(d)
-    }
-
-    /// The list's text: what went in (or what was heard), on one line, at most 120 characters (HistoryEntry.Preview:
-    /// .NET's ReplaceLineEndings, UTF-16 lengths, the cut trimmed at its end).
-    var preview: String {
-        var t = inserted.isEmpty ? transcription : inserted
-        t = t.replacingOccurrences(of: "\r\n", with: " ")
-        for c in ["\r", "\n", "\u{0C}", "\u{85}", "\u{2028}", "\u{2029}"] { t = t.replacingOccurrences(of: c, with: " ") }
-        let utf16 = t as NSString
-        if utf16.length <= 120 { return t }
-        var cut = utf16.substring(to: 117)
-        while let last = cut.unicodeScalars.last, last.properties.isWhitespace { cut.unicodeScalars.removeLast() }
-        return cut + "…"
-    }
-
-    static func duration(_ s: Double) -> String {
-        s < 60 ? "\(Int(s.rounded())) s" : String(format: "%d:%02d min", Int(s) / 60, Int(s) % 60)
-    }
-}
-
 #if DEBUG && os(macOS)
 /// History's three boxes mid-playback (the word being said lit), drawn to PNGs with the page snapshots.
 @MainActor

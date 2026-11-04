@@ -287,16 +287,8 @@ final class AppModel: ObservableObject {
             usage = seeded
             if !Self.snapshotMode { usageFile.save(seeded) }
         }
-        if let loaded = wordsFile.load() {
-            words = loaded
-        } else if loadedSettings.keepWordTally {
-            // The first time: seed the tally from what History already has, so Analytics doesn't start empty.
-            let seeded = WordTally(seed: history)
-            words = seeded
-            if !Self.snapshotMode { wordsFile.save(seeded) }
-        } else {
-            words = WordTally()
-        }
+        // The first time: the tally is seeded from what History already has, so Analytics doesn't start empty.
+        words = WordTally.load(wordsFile, seed: history, enabled: loadedSettings.keepWordTally, persist: !Self.snapshotMode)
         if settingsFile.load() == nil {
             // A new install's AI model (`LocalAISetup`): Windows' qwen2.5:3b on Oberton's own runtime in the direct
             // download, Apple Intelligence in the App Store version.
@@ -1109,7 +1101,7 @@ final class AppModel: ObservableObject {
         usageFile.save(usage)
         if settings.keepWordTally {
             words.record(entry)
-            wordsFile.save(words)
+            words.save(to: wordsFile)
         }
         let pcm = historyAudio.finish()
         guard settings.keepHistory else { return }
@@ -1192,7 +1184,7 @@ final class AppModel: ObservableObject {
     /// Forget the word tally (Settings › History).
     func resetWordTally() {
         words = WordTally()
-        wordsFile.save(words)
+        words.save(to: wordsFile)
     }
 
     /// Whether a word is in the speech vocabulary hint (Settings › Speech recognition).
