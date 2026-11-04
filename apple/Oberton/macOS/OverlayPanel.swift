@@ -19,7 +19,6 @@ final class OverlayController {
     private let panel: NSPanel
     private let host: NSHostingView<AnyView>
     private let model: AppModel
-    private let flash = OverlayFlash()
     private var bag: Set<AnyCancellable> = []
     private var contentSize: CGSize?
     private var room: CGSize?
@@ -28,7 +27,6 @@ final class OverlayController {
     private var fromBottom = true
     /// The frame is being set by `layout`, not dragged by the user.
     private var placing = false
-    private var flashTask: Task<Void, Never>?
     static let margin: CGFloat = 8
     static let padding: CGFloat = 16
 
@@ -52,7 +50,7 @@ final class OverlayController {
         panel.contentView = host
 
         // After each change has landed (objectWillChange fires before it; the hop to the main run loop waits it out).
-        model.objectWillChange.merge(with: flash.objectWillChange)
+        model.objectWillChange
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.update() }
             .store(in: &bag)
@@ -83,7 +81,7 @@ final class OverlayController {
     private func update() {
         let phase = model.phase
         let done = { if case .done = phase { true } else { false } }()
-        let visible = phase == .preview || phase == .placing || model.overlayNotice != nil || model.profileNotice || flash.on
+        let visible = phase == .preview || phase == .placing || model.overlayNotice != nil || model.profileNotice || model.positionFlash
             || { if case .failed = phase { true } else { false } }()
             || (model.settings.showOverlay && phase != .idle && (!done || model.receipt != nil)) // no receipt: read aloud took its place
         guard visible else { panel.orderOut(nil); return }
@@ -91,19 +89,13 @@ final class OverlayController {
         panel.orderFrontRegardless()
     }
 
-    /// ● DICTATION APPEARS HERE for 1.5 s at the new position, unless a dictation is showing. It drops a receipt, which
-    /// doesn't come back after (OverlayWindow.ShowPositionPreview).
+    /// ● DICTATION APPEARS HERE for 1.5 s at the new position, unless a dictation is showing. It takes the place of
+    /// a receipt, notice or profile pill, which don't come back after (OverlayWindow.ShowPositionPreview).
     private func previewPosition() {
         anchor = nil
         guard !model.overlayPinned else { return }
-        model.dismissReceipt()
-        flash.on = true
+        model.flashPosition()
         if panel.isVisible { layout(fresh: true) }
-        flashTask?.cancel()
-        flashTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(1.5))
-            if !Task.isCancelled { self?.flash.on = false }
-        }
     }
 
     /// The user dragged it: remember the spot (WindowDrag.Remember).
@@ -122,7 +114,7 @@ final class OverlayController {
         let room = CGSize(width: screen.width - inset, height: screen.height - inset)
         if room != self.room {
             self.room = room
-            host.rootView = AnyView(OverlayView(flash: flash) { [weak self] in self?.fit($0) }
+            host.rootView = AnyView(OverlayView { [weak self] in self?.fit($0) }
                 .environmentObject(model).environment(\.overlayRoom, room))
         }
         let size = contentSize ?? host.fittingSize
@@ -317,14 +309,7 @@ enum OverlaySnapshots {
 }
 #endif
 
-/// The position flash is on (Settings › Layout just moved the overlay).
-@MainActor
-final class OverlayFlash: ObservableObject {
-    @Published var on = false
-}
-
 struct OverlayView: View {
-    @ObservedObject var flash: OverlayFlash
     var onSize: (CGSize) -> Void = { _ in }
     @EnvironmentObject var model: AppModel
     @State private var showReceipt = false
@@ -332,7 +317,7 @@ struct OverlayView: View {
     var body: some View {
         let alignment = model.settings.overlayPosition.alignment
         VStack(alignment: alignment.horizontal, spacing: 10) {
-            if flash.on, !model.overlayPinned {
+            if model.positionFlash, !model.overlayPinned {
                 PositionPill(opacity: model.settings.overlayOpacity)
             } else {
                 OverlayPill(reader: model.reader, open: $showReceipt)

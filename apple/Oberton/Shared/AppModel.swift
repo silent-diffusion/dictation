@@ -224,6 +224,8 @@ final class AppModel: ObservableObject {
     private var placingEntry: HistoryEntry?
     private var overlayNoticeTask: Task<Void, Never>?
     private var limitTimer: Timer?
+    /// Counts dictations, so a timer of an earlier one can't act on this one.
+    private var dictationNumber = 0
     /// When the recording stopped (the pill's "N S OF AUDIO").
     private(set) var stoppedAt: Date?
     /// Loads the speech model if needed, then hands the recognizer what was recorded so far.
@@ -233,8 +235,9 @@ final class AppModel: ObservableObject {
     private var speechModelUsed = "", aiModelUsed = ""
     private var speechWarm = true
     private var aiWarm: Task<Bool, Never>?
-    /// A previewed dictation's turnaround, taken when the preview showed (reading it isn't processing time).
-    private var previewTurnaround: Double?
+    /// The turnaround clock (Windows' `_finishClock`): runs from the stop press until the text is in place, paused
+    /// while a preview or NO PLACE TO PASTE waits for the user (reading or choosing isn't processing time).
+    private var finishClock = Stopwatch()
     /// The text waited for a click (nowhere to type): its turnaround isn't a fair one.
     private var placed = false
     private var notesChange: AnyCancellable?
@@ -403,7 +406,7 @@ final class AppModel: ObservableObject {
         pending = nil
         receipt = nil
         historyAudio.begin()
-        previewTurnaround = nil
+        finishClock = Stopwatch()
         placed = false
         let profile = activeProfile
         // Were the models already loaded? A turnaround that includes loading one isn't a fair turnaround.
@@ -452,13 +455,18 @@ final class AppModel: ObservableObject {
         }
         // The AI model too, so the cleanup at the end doesn't wait for it to load.
         warmUpAI(profile, forDictation: true)
-        limitTimer = Timer.scheduledTimer(withTimeInterval: max(10, settings.maxRecordingSeconds), repeats: false) { [weak self] _ in
+        // One timer per dictation: an earlier one (a dictation that failed) must not cut this one short.
+        limitTimer?.invalidate()
+        dictationNumber += 1
+        let number = dictationNumber
+        let limit = Timer.scheduledTimer(withTimeInterval: max(10, settings.maxRecordingSeconds), repeats: false) { [weak self] _ in
             Task { @MainActor in
-                guard let self, self.phase == .recording else { return }
+                guard let self, self.dictationNumber == number, self.phase == .recording else { return }
                 self.notify("Maximum recording length reached; finishing up.", level: .info)
                 self.stop()
             }
         }
+        limitTimer = limit
     }
 
     func stop() {
@@ -466,6 +474,7 @@ final class AppModel: ObservableObject {
         limitTimer?.invalidate()
         transcriber.stopRecording()
         stoppedAt = Date()
+        finishClock.restart()
         let seconds = (stoppedAt ?? Date()).timeIntervalSince(startedAt ?? Date())
         phase = .transcribing
         level = 0
@@ -532,8 +541,8 @@ final class AppModel: ObservableObject {
             // A safety-net rejection is reported on the receipt; any other AI problem is a HEADS UP notice of its own,
             // and the original words go in (DictationController.StopAsync).
             if let warning = result.warning, !result.safetyNet {
-                Log.warn("AI step failed: " + warning)
                 aiNotice = Self.aiFailureNotice(warning)
+                Log.warn("LLM step failed: " + aiNotice!.dropLast(Self.aiFailureSuffix.count))
                 result.warning = nil
             }
         }
@@ -545,10 +554,10 @@ final class AppModel: ObservableObject {
                                  safetyNet: result.safetyNet)
         entry.date = startedAt ?? entry.date
         if profile.showPreview, live?.hasTyped != true { // the profile may have been switched mid-dictation
-            previewTurnaround = Date().timeIntervalSince(stoppedAt ?? Date()) // time spent reading the preview isn't processing time
+            finishClock.stop() // time spent reading the preview isn't processing time
             pending = entry
             phase = .preview
-            showAINotice()
+            showAINotice(over: true)
             return
         }
         await insert(entry, readBack: profile.readAloudAfterInsert ? profile.voice : nil, readBackRequested: profile.readAloudAfterInsert)
@@ -558,17 +567,21 @@ final class AppModel: ObservableObject {
     /// state.
     private var aiNotice: String?
 
-    private func showAINotice() {
+    /// Said while the words go in, as on Windows: it takes the INSERTING pill, and the receipt follows it. Over the
+    /// preview or NO PLACE TO PASTE (`over`) it goes after its time and gives the pill back (Windows would leave it
+    /// covering them).
+    private func showAINotice(over: Bool = false) {
         guard let text = aiNotice else { return }
         aiNotice = nil
-        // Over the preview it goes after its time and gives the preview back (Windows would leave it covering it).
-        notice(text, kind: .warning, hold: false)
+        notice(text, kind: .warning, hold: !over)
     }
+
+    private static let aiFailureSuffix = " Inserting your original words."
 
     /// A failed AI step, as Windows says it while the words go in: "{problem} Inserting your original words."
     /// (TextProcessor words it so now; older wording is converted, and the sentence is never added twice.)
     static func aiFailureNotice(_ warning: String) -> String {
-        let windows = " Inserting your original words."
+        let windows = aiFailureSuffix
         if warning.hasSuffix(windows) { return warning }
         let suffix = " Your original words were inserted."
         let problem = warning.hasSuffix(suffix) ? String(warning.dropLast(suffix.count)) : warning
@@ -595,6 +608,7 @@ final class AppModel: ObservableObject {
         }
         var entry = entry
         phase = .inserting
+        showAINotice() // Windows raises it before the paste: on screen while inserting, then the receipt
         let typed = live
         live = nil
         // The user's clipboard, back once the last live paste landed (nothing to do if it was never taken, or left).
@@ -617,7 +631,7 @@ final class AppModel: ObservableObject {
                 receipt = try await platform?.insert(text) ?? "Done"
             }
             // The turnaround runs from the stop press until the text is in place.
-            entry.turnaroundSeconds = previewTurnaround ?? Date().timeIntervalSince(stoppedAt ?? Date())
+            entry.turnaroundSeconds = finishClock.elapsed
             await recordTurnaround(entry)
             record(entry)
             // A profile can read what went in aloud. The player then takes the receipt's place, unless the receipt has
@@ -626,7 +640,6 @@ final class AppModel: ObservableObject {
             let readIt = readBackRequested && !text.isEmpty
             self.receipt = !readIt || entry.safetyNet == true || entry.warning != nil ? entry : nil
             phase = .done(entry.warning ?? receipt)
-            showAINotice()
             if readIt { reader.read(text, voice: Profile.readVoice(voice, fallback: settings.ttsVoice)) }
         } catch {
             // The text is on the clipboard now (the platform put it there): a HEADS UP, not a failure; History keeps
@@ -640,10 +653,9 @@ final class AppModel: ObservableObject {
                     message += " The text was copied to your clipboard."
                 }
             }
-            entry.turnaroundSeconds = previewTurnaround ?? Date().timeIntervalSince(stoppedAt ?? Date())
+            entry.turnaroundSeconds = finishClock.elapsed
             entry.wasInserted = false
             record(entry)
-            aiNotice = nil
             level = 0
             phase = .idle
             Log.warn("Insert failed: " + message)
@@ -657,16 +669,16 @@ final class AppModel: ObservableObject {
     // MARK: Nowhere to type: wait for a click, or copy
 
     private func waitForPlace(_ entry: HistoryEntry, readBack voice: String?, readBackRequested: Bool) {
-        // Waiting for the user isn't processing time.
-        if previewTurnaround == nil { previewTurnaround = Date().timeIntervalSince(stoppedAt ?? Date()) }
+        finishClock.stop() // waiting for the user isn't processing time
         placed = true
         live?.stop()
         live = nil
         var entry = entry
-        entry.turnaroundSeconds = previewTurnaround ?? 0
+        entry.turnaroundSeconds = finishClock.elapsed
         placingEntry = entry
         placingText = entry.inserted
         phase = .placing
+        showAINotice(over: true)
         placeTask?.cancel()
         placeTask = Task {
             // How long the text waits for a click before it is copied to the clipboard instead (as on Windows).
@@ -674,6 +686,11 @@ final class AppModel: ObservableObject {
             guard !Task.isCancelled, phase == .placing else { return }
             if found {
                 endPlacing()
+                // Saved and counted with the app (and window) it went into, and the insert after the click is timed.
+                var entry = entry
+                entry.appName = platform?.targetAppName
+                entry.windowTitle = await platform?.targetWindowTitle
+                finishClock.start()
                 await insert(entry, readBack: voice, readBackRequested: readBackRequested)
             } else {
                 copyPlacingToClipboard(timedOut: true)
@@ -704,6 +721,8 @@ final class AppModel: ObservableObject {
     /// As on Windows: back to idle, and the error as the overlay's SOMETHING WENT WRONG notice. A problem the user can
     /// act on says so; anything else points to the log (DictationController.Fail).
     private func fail(_ error: Error) {
+        limitTimer?.invalidate() // as Windows' Fail cancels _maxDuration
+        limitTimer = nil
         live?.stop() // whatever was typed live stays
         live = nil
         level = 0
@@ -750,6 +769,7 @@ final class AppModel: ObservableObject {
     /// stays until the next state (`hold: false` gives it its time instead). Shown even with "Show overlay" off.
     func notice(_ text: String, kind: NoticeKind = .info, hold: Bool = true) {
         if kind == .info, overlayPinned { return }
+        clearOverlay()
         let pinned = hold && overlayPinned
         let notice = OverlayNotice(text: text, kind: kind, pinned: pinned)
         overlayNotice = notice
@@ -788,6 +808,36 @@ final class AppModel: ObservableObject {
         phase = .idle
     }
 
+    /// Settings › Layout moved the overlay: ● DICTATION APPEARS HERE for 1.5 s at the new spot, unless a dictation is
+    /// showing (OverlayWindow.ShowPositionPreview).
+    @Published private(set) var positionFlash = false
+    private var flashTask: Task<Void, Never>?
+
+    func flashPosition() {
+        guard !overlayPinned else { return }
+        clearOverlay()
+        positionFlash = true
+        flashTask = Task {
+            try? await Task.sleep(for: .seconds(1.5))
+            if !Task.isCancelled { positionFlash = false }
+        }
+    }
+
+    /// A message, the profile pill or the position flash takes the overlay from whatever it showed (Windows'
+    /// `ResetView`): the receipt, an earlier message, the profile pill or the flash is gone and doesn't come back when
+    /// the new one's time is up. A message held by the dictation state stays until the state changes.
+    private func clearOverlay() {
+        if case .done = phase { receipt = nil }
+        if overlayNotice?.pinned != true {
+            overlayNotice = nil
+            overlayNoticeTask?.cancel()
+        }
+        profileNotice = false
+        noticeTask?.cancel()
+        positionFlash = false
+        flashTask?.cancel()
+    }
+
     func cycleProfile() {
         guard let i = profiles.firstIndex(where: { $0.id == activeProfile.id }), !profiles.isEmpty else { return }
         activeProfile = profiles[(i + 1) % profiles.count]
@@ -798,6 +848,7 @@ final class AppModel: ObservableObject {
             idleTask?.cancel()
             phase = .idle
         }
+        clearOverlay()
         profileNotice = true
         noticeTask?.cancel()
         noticeTask = Task {
@@ -1434,6 +1485,21 @@ final class AppModel: ObservableObject {
         guard let url = try? OllamaBackend.validated(settings.ollamaEndpoint) else { ollamaModels = []; return }
         try? await OllamaRuntime.ensureRunning(settings: settings)
         ollamaModels = await OllamaBackend.installedModels(endpoint: url)
+    }
+}
+
+/// A stopwatch that can pause, as .NET's: `elapsed` adds up the time it ran.
+struct Stopwatch {
+    private var total: TimeInterval = 0
+    private var since: Date?
+
+    var elapsed: Double { total + (since.map { Date().timeIntervalSince($0) } ?? 0) }
+
+    mutating func restart() { total = 0; since = Date() }
+    mutating func start() { if since == nil { since = Date() } }
+    mutating func stop() {
+        if let since { total += Date().timeIntervalSince(since) }
+        since = nil
     }
 }
 
