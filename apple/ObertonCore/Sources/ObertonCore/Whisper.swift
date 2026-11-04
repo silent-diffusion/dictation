@@ -189,7 +189,7 @@ public actor WhisperEngine {
         if let loading, loadingID == id { return try await loading.value }
         guard let m = WhisperModels.model(id) else { throw UserFacingError("Oberton doesn't know the speech model \(id).") }
         guard WhisperModels.isDownloaded(id) else {
-            throw UserFacingError("\(m.name) isn't downloaded. Download it under Settings › Speech recognition, or pick another model.")
+            throw UserFacingError("\(m.name) isn't downloaded. Download it under Settings › Models, or pick another model.")
         }
         // Let go of the model loaded now (and any other load) before this one comes in. Nothing here waits between
         // checking `loading` and setting it, so two callers for the same model share one load.

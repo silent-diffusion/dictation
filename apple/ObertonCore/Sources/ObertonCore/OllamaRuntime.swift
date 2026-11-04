@@ -68,7 +68,8 @@ public enum OllamaRuntime {
 
     #if os(macOS)
     /// Download and unpack Oberton's own copy (about 190 MB). `progress` gets the fraction (nil while unknown).
-    public static func install(progress: @escaping @Sendable (Double?) -> Void) async throws {
+    /// `unpacking` is called once the download is in and it is being unpacked.
+    public static func install(progress: @escaping @Sendable (Double?) -> Void, unpacking: @Sendable () -> Void = {}) async throws {
         guard canManage else { throw UserFacingError("Install Ollama from ollama.com; this version of Oberton can't install it itself.") }
         let fm = FileManager.default
         let tgz = AppPaths.dataDir.appending(path: "runtime/ollama-darwin.tgz")
@@ -79,7 +80,8 @@ public enum OllamaRuntime {
         } catch let e as URLError where e.code != .cancelled {
             throw UserFacingError("Downloading the AI runtime (Ollama) failed. Check your internet connection and try again.")
         }
-        progress(nil) // unpacking
+        progress(nil)
+        unpacking()
         let tmp = AppPaths.dataDir.appending(path: "runtime/ollama-tmp", directoryHint: .isDirectory)
         try? fm.removeItem(at: tmp)
         try fm.createDirectory(at: tmp, withIntermediateDirectories: true)
@@ -100,6 +102,9 @@ public enum OllamaRuntime {
     /// Stop the copy Oberton started (at quit; Windows ties it to the app with a job object).
     public static func stop() { Host.shared.stop() }
 
+    /// Windows' words when its runtime didn't come up, with the Mac's log (in the data folder's logs, as Windows').
+    static let didntStart = "The local AI runtime (Ollama) didn't start. See logs/dictation.log."
+
     /// The running `ollama serve`, at most one.
     final class Host: @unchecked Sendable {
         static let shared = Host()
@@ -107,9 +112,11 @@ public enum OllamaRuntime {
         private var process: Process?
 
         func start(endpoint: URL, keepAlive: String) async throws {
+            // Through a small shell that ends `ollama serve` when Oberton goes, also when it crashes (Windows puts the
+            // runtime in a job object that dies with the app).
             let p = Process()
-            p.executableURL = OllamaRuntime.executable
-            p.arguments = ["serve"]
+            p.executableURL = URL(fileURLWithPath: "/bin/sh")
+            p.arguments = ["-c", Self.watchdog, "oberton-ollama", OllamaRuntime.executable.path, String(getpid())]
             var env = ProcessInfo.processInfo.environment
             env["OLLAMA_HOST"] = "127.0.0.1:\(endpoint.port ?? 11434)"
             env["OLLAMA_MODELS"] = OllamaRuntime.modelsDir.path
@@ -118,30 +125,39 @@ public enum OllamaRuntime {
             p.environment = env
             p.currentDirectoryURL = OllamaRuntime.dir
             try? FileManager.default.createDirectory(at: OllamaRuntime.modelsDir, withIntermediateDirectories: true)
-            // Its own log beside Oberton's (the runtime logs requests, never their text).
-            let logURL = AppPaths.dataDir.appending(path: "logs/ollama.log")
-            try? FileManager.default.createDirectory(at: logURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            if !FileManager.default.fileExists(atPath: logURL.path) { FileManager.default.createFile(atPath: logURL.path, contents: nil) }
-            if let log = try? FileHandle(forWritingTo: logURL) {
-                _ = try? log.seekToEnd()
-                p.standardOutput = log
-                p.standardError = log
+            // Its output goes into Oberton's log line by line, "ollama: …", as Windows logs it (the runtime logs
+            // requests, never their text).
+            let out = Pipe()
+            p.standardOutput = out
+            p.standardError = out
+            let lines = LineSplitter()
+            out.fileHandleForReading.readabilityHandler = { h in
+                let data = h.availableData
+                if data.isEmpty { h.readabilityHandler = nil; lines.flush { CoreLog.info("ollama: " + $0) }; return }
+                lines.add(data) { CoreLog.info("ollama: " + $0) }
             }
             lock.withLock { stopLocked(); process = p }
             do { try p.run() } catch {
                 CoreLog.error("The AI runtime didn't start: \(error)")
-                throw UserFacingError("The local AI runtime (Ollama) didn't start. See logs/dictation.log.")
+                throw UserFacingError(OllamaRuntime.didntStart)
             }
             Self.killAtExit()
-            CoreLog.info("Started the AI runtime (Ollama) on port \(endpoint.port ?? 11434)")
             for _ in 0..<60 {
                 if !p.isRunning { break }
                 if await OllamaBackend.ping(endpoint: endpoint) { return }
                 try await Task.sleep(for: .milliseconds(500))
             }
-            CoreLog.error("The AI runtime (Ollama) didn't answer within 30 s")
-            throw UserFacingError("The local AI runtime (Ollama) didn't start. See logs/ollama.log.")
+            throw UserFacingError(OllamaRuntime.didntStart)
         }
+
+        /// `sh -c <this> oberton-ollama <ollama> <oberton's pid>`: runs `ollama serve`, and stops it when Oberton is
+        /// gone or this shell is told to stop.
+        static let watchdog = """
+            "$1" serve & c=$!
+            trap 'kill $c 2>/dev/null; wait $c; exit 0' TERM INT HUP
+            while kill -0 "$2" 2>/dev/null && kill -0 $c 2>/dev/null; do sleep 1; done
+            kill $c 2>/dev/null; wait $c
+            """
 
         func stop() { lock.withLock { stopLocked() } }
 
@@ -162,6 +178,30 @@ public enum OllamaRuntime {
 }
 
 #if os(macOS)
+/// Bytes from a pipe as whole lines.
+final class LineSplitter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pending = Data()
+
+    func add(_ data: Data, _ line: (String) -> Void) {
+        let done: [String] = lock.withLock {
+            pending.append(data)
+            var out: [String] = []
+            while let nl = pending.firstIndex(of: 0x0A) {
+                out.append(String(decoding: pending[pending.startIndex..<nl], as: UTF8.self).trimmingCharacters(in: CharacterSet(charactersIn: "\r")))
+                pending.removeSubrange(pending.startIndex...nl)
+            }
+            return out
+        }
+        done.forEach(line)
+    }
+
+    func flush(_ line: (String) -> Void) {
+        let rest = lock.withLock { () -> String in defer { pending = Data() }; return String(decoding: pending, as: UTF8.self) }
+        if !rest.isEmpty { line(rest) }
+    }
+}
+
 /// One file download with progress (URLSession's delegate API), for the runtime.
 final class FileDownload: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
     private let progress: @Sendable (Double?) -> Void

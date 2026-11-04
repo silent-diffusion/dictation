@@ -251,17 +251,26 @@ public struct OllamaBackend: LanguageModelBackend {
 
     public static func validated(_ s: String) throws -> URL {
         guard let url = URL(string: s), isLoopback(url) else {
-            throw UserFacingError("The Ollama address must be on this Mac (http://127.0.0.1:11434).")
+            throw UserFacingError("The Ollama address must be on this Mac (\(AppSettings().ollamaEndpoint)).")
         }
         return url
     }
 
-    /// An address on this device (Windows' `Uri.IsLoopback`): localhost, 127.x.x.x or ::1.
+    /// An address on this device (Windows' `Uri.IsLoopback`): localhost, ::1, or any 127.x.x.x, written in any of the
+    /// forms .NET's Uri reads as IPv4 ("127.1", "0x7f.0.0.1", "2130706433" too).
     public static func isLoopback(_ url: URL) -> Bool {
-        guard let host = url.host(percentEncoded: false)?.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]")) else { return false }
-        if host == "localhost" || host == "::1" { return true }
-        let parts = host.split(separator: ".", omittingEmptySubsequences: false)
-        return parts.count == 4 && parts[0] == "127" && parts.allSatisfy { UInt8($0) != nil }
+        guard let host = url.host(percentEncoded: false)?.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]")),
+              !host.isEmpty else { return false }
+        if host == "localhost" { return true }
+        if host.contains(":") {
+            var v6 = in6_addr()
+            guard inet_pton(AF_INET6, host, &v6) == 1 else { return false }
+            return withUnsafeBytes(of: &v6) { Array($0) } == [UInt8](repeating: 0, count: 15) + [1]
+        }
+        guard host.allSatisfy({ $0.isHexDigit || $0 == "." || $0 == "x" }) else { return false }
+        var v4 = in_addr()
+        guard inet_aton(host, &v4) == 1 else { return false }
+        return UInt32(bigEndian: v4.s_addr) >> 24 == 127
     }
 
     public func complete(system: String, examples: [(input: String, output: String)], user: String, maxTokens: Int) async throws -> String {
@@ -405,11 +414,46 @@ public struct OllamaBackend: LanguageModelBackend {
         return size
     }
 
+    /// /api/tags's models, or nil when the runtime can't be listed; that is logged, as Windows' ListModelsAsync and
+    /// ListModelDetailsAsync do ("Listing models failed: …").
+    static func tags(endpoint: URL) async -> [[String: Any]]? {
+        do {
+            let (data, resp) = try await URLSession.shared.data(from: endpoint.appending(path: "api/tags"))
+            let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            guard status / 100 == 2 else { throw ListingFailed(message: "Response status code does not indicate success: \(status).") }
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [] }
+            return json["models"] as? [[String: Any]] ?? []
+        } catch {
+            if error is CancellationError || (error as? URLError)?.code == .cancelled { return nil }
+            CoreLog.warn("Listing models failed: " + listingMessage(error))
+            return nil
+        }
+    }
+
+    private struct ListingFailed: Error { var message: String }
+
+    static func listingMessage(_ error: Error) -> String {
+        if let e = error as? UserFacingError { return e.message }
+        if let e = error as? ListingFailed { return e.message }
+        return error.localizedDescription
+    }
+
+    /// Windows' ListModelsAsync: start Oberton's own runtime if nothing answers, then list. A runtime that can't be
+    /// started or listed is logged ("Listing models failed: …") and lists nothing.
+    public static func listModels(settings: AppSettings) async -> [String] {
+        do {
+            let endpoint = try validated(settings.ollamaEndpoint)
+            try await OllamaRuntime.ensureRunning(settings: settings)
+            return await installedModels(endpoint: endpoint)
+        } catch {
+            if !(error is CancellationError) { CoreLog.warn("Listing models failed: " + listingMessage(error)) }
+            return []
+        }
+    }
+
     /// The installed models with their size on disk, parameters and family.
     static func details(endpoint: URL) async -> [LocalModel] {
-        guard let (data, _) = try? await URLSession.shared.data(from: endpoint.appending(path: "api/tags")),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let models = json["models"] as? [[String: Any]] else { return [] }
+        guard let models = await tags(endpoint: endpoint) else { return [] }
         return models.compactMap { m in
             guard let name = m["name"] as? String else { return nil }
             let size = (m["size"] as? NSNumber)?.int64Value ?? 0
@@ -430,29 +474,39 @@ public struct OllamaBackend: LanguageModelBackend {
         return models.compactMap { $0["name"] as? String }
     }
 
-    /// Ask Ollama to let every model it holds go now (keep_alive 0). Returns how many it let go.
+    /// Ask Ollama to let every model it holds go now (keep_alive 0). Returns how many it let go. A request that fails
+    /// is logged, as Windows' UnloadAllAsync ("Unloading {model} failed: …"); a refusal only isn't counted.
     public static func unloadAll(endpoint: URL) async -> Int {
         var count = 0
-        for name in await loadedModels(endpoint: endpoint) where await unload(endpoint: endpoint, model: name) { count += 1 }
+        for name in await loadedModels(endpoint: endpoint) {
+            do {
+                if try await unloadRequest(endpoint: endpoint, model: name) { count += 1 }
+            } catch {
+                if error is CancellationError || (error as? URLError)?.code == .cancelled { continue }
+                CoreLog.warn("Unloading \(name) failed: \(error.localizedDescription)")
+            }
+        }
         return count
     }
 
     /// Ask Ollama to let one model go now (keep_alive 0).
     @discardableResult
     public static func unload(endpoint: URL, model: String) async -> Bool {
+        (try? await unloadRequest(endpoint: endpoint, model: model)) ?? false
+    }
+
+    private static func unloadRequest(endpoint: URL, model: String) async throws -> Bool {
         var req = URLRequest(url: endpoint.appending(path: "api/generate"), timeoutInterval: 15)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try? JSONSerialization.data(withJSONObject: ["model": model, "keep_alive": 0] as [String: Any])
-        guard let (_, resp) = try? await URLSession.shared.data(for: req) else { return false }
+        let (_, resp) = try await URLSession.shared.data(for: req)
         return ((resp as? HTTPURLResponse)?.statusCode ?? 0) / 100 == 2
     }
 
-    /// The models installed in Ollama, or empty when it isn't running.
+    /// The models installed in Ollama, or empty when it can't be listed (logged).
     public static func installedModels(endpoint: URL) async -> [String] {
-        guard let (data, _) = try? await URLSession.shared.data(from: endpoint.appending(path: "api/tags")),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let models = json["models"] as? [[String: Any]] else { return [] }
+        guard let models = await tags(endpoint: endpoint) else { return [] }
         return sortedLikeWindows(models.compactMap { $0["name"] as? String })
     }
 
@@ -612,9 +666,14 @@ public struct CloudBackend: LanguageModelBackend {
 
         let (data, resp): (Data, URLResponse)
         // A deadline over the whole request (Windows' CancelAfter), so a service that trickles keep-alive bytes still
-        // gives up in time.
-        let request = req
-        do { (data, resp) = try await Deadline.run(seconds: timeout) { try await URLSession.shared.data(for: request) } } catch let e as URLError {
+        // gives up in time. A service that never takes the connection is "Couldn't reach" after Windows' TCP connect
+        // limit (about 21 s), as there, not "took too long".
+        let request = req, watch = ConnectWatch()
+        do {
+            (data, resp) = try await Deadline.run(seconds: timeout, connectWithin: ConnectWatch.windowsConnectLimit, connected: { watch.connected }) {
+                try await URLSession.shared.data(for: request, delegate: watch)
+            }
+        } catch let e as URLError {
             throw UserFacingError(e.code == .timedOut ? "The cloud model took too long to respond."
                 : "Couldn't reach the cloud AI service. Check your internet connection.")
         }
@@ -640,12 +699,22 @@ public struct CloudBackend: LanguageModelBackend {
 /// A deadline over a whole piece of async work (.NET's CancellationTokenSource.CancelAfter): past it the work is
 /// cancelled and `URLError(.timedOut)` thrown. Cancelling the caller still ends in `CancellationError`.
 enum Deadline {
-    static func run<T: Sendable>(seconds: Double, _ work: @escaping @Sendable () async throws -> T) async throws -> T {
+    /// `connectWithin`: when `connected` still says no by then, the work is given up as `URLError(.cannotConnectToHost)`.
+    static func run<T: Sendable>(seconds: Double, connectWithin: Double? = nil, connected: @escaping @Sendable () -> Bool = { true },
+                                 _ work: @escaping @Sendable () async throws -> T) async throws -> T {
         try await withThrowingTaskGroup(of: T?.self) { group in
             group.addTask { try await work() }
             group.addTask {
                 try await Task.sleep(for: .seconds(seconds))
                 return nil
+            }
+            if let connectWithin, connectWithin < seconds {
+                group.addTask {
+                    try await Task.sleep(for: .seconds(connectWithin))
+                    if !connected() { throw URLError(.cannotConnectToHost) }
+                    try await Task.sleep(for: .seconds(seconds)) // connected: the other two decide
+                    return nil
+                }
             }
             defer { group.cancelAll() }
             do {
@@ -656,5 +725,19 @@ enum Deadline {
                 throw e
             }
         }
+    }
+}
+
+/// Whether a request got as far as sending: its body goes out once the connection (and TLS) is up.
+final class ConnectWatch: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    /// Windows gives up a TCP connection that nobody answers after about 21 s (3 tries: 3 + 6 + 12 s).
+    static let windowsConnectLimit = 21.0
+    private let lock = NSLock()
+    private var task: URLSessionTask?
+
+    func urlSession(_ session: URLSession, didCreateTask task: URLSessionTask) { lock.withLock { self.task = task } }
+
+    var connected: Bool {
+        lock.withLock { task.map { $0.countOfBytesSent > 0 || $0.countOfBytesReceived > 0 || $0.response != nil } ?? false }
     }
 }

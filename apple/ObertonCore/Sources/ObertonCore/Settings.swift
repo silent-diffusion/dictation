@@ -100,18 +100,20 @@ public struct AppSettings: Codable, Sendable, Equatable {
     /// The AI model for Extended Notes' formatting and summaries: "" = the best on this Mac (the default), "active" =
     /// the active model, otherwise a model ID. See `NotesModels`.
     public var notesModel = ""
-    /// The AI model used by profiles that don't pick their own. Apple Intelligence where it is available: nothing to
-    /// install, nothing leaves the device.
-    public var defaultModel = ModelID.appleOnDevice
-    /// A local Ollama server, optional (Ollama's own default port; the Windows app's private 11435 is its bundled copy).
-    public var ollamaEndpoint = "http://127.0.0.1:11434"
+    /// The AI model used by profiles that don't pick their own (Windows' Llm.DefaultModel). The direct download has
+    /// Windows' qwen2.5:3b on Oberton's own runtime; the App Store build can't run a runtime of its own, so there it is
+    /// Apple Intelligence (nothing to install, nothing leaves the device).
+    public var defaultModel = AppSettings.ownsRuntime ? ModelID(provider: .ollama, name: LocalCatalog.defaultModel) : ModelID.appleOnDevice
+    /// The local AI runtime's address (Windows' Llm.Endpoint): Windows' private port 11435 for Oberton's own runtime in
+    /// the direct download; Ollama's own port 11434 in the App Store build, where the user runs Ollama themselves.
+    public var ollamaEndpoint = AppSettings.ownsRuntime ? "http://127.0.0.1:11435" : "http://127.0.0.1:11434"
     public var aiTimeoutSeconds = 60.0
     /// Start Oberton's own Ollama when nothing answers at the address (Windows' Llm.AutoStartRuntime; the direct
     /// download only, where Oberton can install it).
     public var startOllama = true
-    /// Speech recognition language (BCP 47, e.g. "en-US"). Empty: Whisper detects it (Apple Speech then uses the
-    /// system's language).
-    public var language = "en-US"
+    /// Speech recognition language, as on Windows (Asr.Language): a two-letter code such as "en", "de" (a full one,
+    /// "en-GB", is taken too). Empty: Whisper detects it (Apple Speech then uses the system's language).
+    public var language = "en"
     /// The speech model: "" for Apple Speech, otherwise a Whisper model's id (`WhisperModels`, Windows' `Asr.Model`).
     public var speechModel = ""
     /// Names and jargon to bias recognition, e.g. "Kubernetes, Dr. Nguyen".
@@ -211,6 +213,9 @@ public struct AppSettings: Codable, Sendable, Equatable {
 
     public init() {}
 
+    /// This build runs a local AI runtime of its own (the direct download; not the App Store sandbox, not iOS).
+    public static var ownsRuntime: Bool { OllamaRuntime.canManage }
+
     // Settings files from older versions are missing newer keys: decode what is there, default the rest.
     public init(from decoder: Decoder) throws {
         self.init()
@@ -269,8 +274,22 @@ extension AppSettings {
 
     /// The Whisper model dictation and Extended Notes use, or nil for Apple Speech.
     public var whisperModel: String? { speechModel.isEmpty ? nil : speechModel }
-    /// The language for Apple Speech: the setting, or the system's when it is empty (auto-detect is Whisper's).
-    public var speechLocale: Locale { Locale(identifier: language.isEmpty ? Locale.current.identifier : language) }
+    /// The language for Apple Speech: the setting, or the system's when it is empty (auto-detect is Whisper's). Apple
+    /// Speech needs a region, so a two-letter code takes this device's region when it speaks that language ("en" on a
+    /// British Mac is en-GB), else the language's main one ("de" is de-DE).
+    public var speechLocale: Locale { Self.speechLocale(for: language) }
+
+    public static func speechLocale(for language: String, current: Locale = .current) -> Locale {
+        let code = language.trimmingCharacters(in: .whitespaces)
+        if code.isEmpty { return current }
+        let given = Locale(identifier: code)
+        if given.region != nil { return given }
+        guard let lang = given.language.languageCode?.identifier else { return given }
+        if current.language.languageCode?.identifier == lang, let r = current.region { return Locale(identifier: "\(lang)-\(r.identifier)") }
+        let max = given.language.maximalIdentifier // "de-Latn-DE"
+        guard let region = max.split(separator: "-").last, region.count == 2 || region.count == 3 else { return given }
+        return Locale(identifier: "\(lang)-\(region)")
+    }
     /// The language to tell Whisper (nil = detect it).
     public var whisperLanguage: String? { WhisperModels.language(for: language, model: speechModel) }
     /// The vocabulary hint's words.

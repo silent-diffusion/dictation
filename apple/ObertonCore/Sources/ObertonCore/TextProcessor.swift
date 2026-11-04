@@ -62,14 +62,16 @@ public struct TextProcessor: Sendable {
     /// A dictation's AI edit. The AI failing (not running, no key, offline, …) never loses the words: they go in as
     /// spoken, with the reason in `error` and the notice in `warning` (Windows' DictationController catch).
     public func process(_ raw: String, profile: Profile) async -> ProcessResult {
+        do { return try await processOrThrow(raw, profile: profile) } catch { return Self.failed(raw.trimmingCharacters(in: .whitespacesAndNewlines), error) }
+    }
+
+    /// Windows' ProcessAsync itself: the AI's problem is thrown (a `UserFacingError` in words for the user), nothing
+    /// logged here. A profile's Try it calls this, as Windows' Run_Click does.
+    public func processOrThrow(_ raw: String, profile: Profile) async throws -> ProcessResult {
         let raw = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if raw.isEmpty || profile.isRaw { return ProcessResult(text: raw, modified: false) }
         let id = model(for: profile)
-        do {
-            return try await edit(raw, profile: profile, backend: try await backend(for: id, ask: false), cloud: id.isCloud, model: id.windowsForm)
-        } catch {
-            return Self.failed(raw, error)
-        }
+        return try await edit(raw, profile: profile, backend: try await backend(for: id, ask: false), cloud: id.isCloud, model: id.windowsForm)
     }
 
     /// The work itself, with the back end given (tests pass a fake). Errors come back as in `process(_:profile:)`.
