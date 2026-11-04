@@ -117,9 +117,10 @@ struct ObMenu<Value: Hashable>: View {
             // (Not in the debug snapshots: the image renderer can't draw the AppKit anchor.)
             .background { if !PageScroll<EmptyView>.flat { DropDownPanel(isPresented: $open, maxHeight: maxListHeight) { list } } }
             .onHover { hover = $0 }
-            .handCursor()
-            .accessibilityLabel(current)
-            .accessibilityValue(current) // a label set on the box still reads its choice
+            // No hand: the Windows app leaves its ComboBoxes WPF's arrow (no Cursor set). No label of its own either: the
+            // page names the box (AutomationProperties.Name, `.accessibilityLabel` at the call), and the box reads its
+            // choice as its value; a box the page doesn't name reads the choice shown.
+            .accessibilityValue(current)
             .accessibilityAddTraits(.isButton)
             .fixedSize(horizontal: width == nil ? false : true, vertical: true)
         #else
@@ -649,7 +650,7 @@ struct TextCopyButton: View {
             Text(label).font(Ob.mono(10.5)).foregroundStyle(onDark ? Color(hex: 0xE8E7E3) : ob.muted)
                 .underline(keyFocused, color: ob.accent)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(BareButtonStyle()) // a bare ContentPresenter: no dimming while pressed
         .disabled(!enabled)
         .tabStop(focused: $keyFocused, action: copy)
         .opacity(enabled ? 1 : 0.35)

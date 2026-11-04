@@ -57,8 +57,9 @@ struct GeneralSection: View {
             ObMenu(options: [(InsertionMode.auto, "Auto"), (.typing, "Typing"), (.clipboard, "Clipboard")],
                    selection: $model.settings.insertion)
                 .frame(width: 220)
-            Caption("Auto pastes the text (your clipboard is saved and restored afterwards), the most reliable method in every kind of app. Typing sends keystrokes instead and never touches the clipboard, but is slower. Typing is also used automatically if pasting fails. Per-app overrides: appOverrides (by bundle ID) in settings.json.")
-                .padding(.top, 6)
+                .accessibilityLabel("Text insertion method") // AutomationProperties.Name
+            Caption("Auto pastes the text (your clipboard is saved and restored afterwards), the most reliable method in every kind of app. Typing sends keystrokes instead and never touches the clipboard, but is slower. Typing is also used automatically if pasting fails. Per-app overrides: appOverrides (by bundle ID) in settings.json.", bottom: 0)
+                .padding(.top, 6) // Margin 0,6,0,0: nothing below
             SwitchCard {
                 ObSwitch("Put my clipboard back after inserting",
                          detail: "Oberton pastes the text at the cursor, then puts back what you had copied.", isOn: $model.settings.restoreClipboard)
@@ -69,12 +70,12 @@ struct GeneralSection: View {
             #endif
 
             FieldLabel("Maximum length of one dictation (seconds)")
-            // UpdateSourceTrigger=LostFocus: any whole number is taken when the box is left (a dictation still gets at
-            // least 10 s); anything else gets the red validation border and the setting stays.
+            // UpdateSourceTrigger=LostFocus: any whole number that fits Windows' Int32 is taken when the box is left (a
+            // dictation still gets at least 10 s); anything else gets the red validation border and the setting stays.
             CommitField(value: Binding(get: { String(Int(model.settings.maxRecordingSeconds)) },
-                                       set: { if let n = Int($0.trimmingCharacters(in: .whitespaces)) { model.settings.maxRecordingSeconds = Double(n) } }),
-                        width: 120, isValid: { Int($0.trimmingCharacters(in: .whitespaces)) != nil })
-                .accessibilityLabel("Maximum length of one dictation (seconds)")
+                                       set: { if let n = Int32($0.trimmingCharacters(in: .whitespaces)) { model.settings.maxRecordingSeconds = Double(n) } }),
+                        width: 120, isValid: { Int32($0.trimmingCharacters(in: .whitespaces)) != nil })
+                .accessibilityLabel("Maximum length of one dictation in seconds")
         }
     }
 }

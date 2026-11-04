@@ -104,6 +104,8 @@ struct CommitField: View {
             .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(invalid ? Color.red : .clear, lineWidth: 1))
             .onAppear { text = value }
             .onChange(of: value) { if !focused { text = value; invalid = false } }
+            // UpdateSourceTrigger=LostFocus on a single-line TextBox: Return does nothing; the value is taken (and
+            // checked) only when the box is left.
             .onChange(of: focused) { if !focused { commit() } }
             .onDisappear(perform: commit)
     }
