@@ -22,7 +22,8 @@ struct HistorySettingsSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Caption("Recent dictations are kept on this \(Device.noun) with everything about them: the recording, the transcription, the AI's output and what was inserted where. They are stored in Oberton's data folder, which app updates never touch.")
-            // The card's StackPanel Margin 18,0: the first switch flush, the second with 4 above and below.
+            // The card's StackPanel Margin 18,0 inside its 1 px line: the first switch flush, the second with 4 above and
+            // below.
             VStack(spacing: 0) {
                 ObSwitch("Keep a history of dictations", isOn: $model.settings.keepHistory)
                 Hairline()
@@ -30,8 +31,8 @@ struct HistorySettingsSection: View {
                          isOn: $model.settings.saveHistoryAudio)
                     .padding(.vertical, 4)
             }
-            .padding(.horizontal, 18)
-            .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
+            .padding(.horizontal, 18 + Ob.border).padding(.vertical, Ob.border)
+            .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: Ob.border))
             .padding(.top, 8)
             label("How long to keep", top: 22)
             // One grid (Margin 18,12): the two rows with a hairline straight between them.
@@ -164,8 +165,12 @@ struct HistorySettingsSection: View {
 }
 
 /// A keep box: everything (text) or as long as the text (recordings), then THE NEWEST and FROM THE LAST under headings
-/// (HistorySettingsPage.FillKeep). Drawn like `ObMenu`. As Windows' list, built once per page: a value outside the usual
-/// ones that was saved when the page opened stays in the list after another is chosen.
+/// (HistorySettingsPage.FillKeep), a stock Fluent ComboBox as `ObMenu` draws it: 240 wide, Windows' list below the box,
+/// the headings greyed items in Cascadia Mono 10 with 4 above that can't be chosen. As Windows' list, built once per
+/// page: a value outside the usual ones that was saved when the page opened stays in the list after another is chosen.
+/// On the Mac it is a Tab stop; ↑/↓ step a closed box to the next choice (each step is a choice, as a ComboBox's
+/// SelectionChanged), skipping the headings; Alt+↓ / F4 / Space / Return open it; in the open list ↑/↓ move, Return
+/// takes, Esc closes. No hand cursor: the page leaves WPF's ComboBox its arrow.
 private struct KeepMenu: View {
     var audio: Bool
     @Binding var selection: HistorySettingsSection.Keep
@@ -175,15 +180,31 @@ private struct KeepMenu: View {
     @Environment(\.ob) private var ob
     @Environment(\.isEnabled) private var enabled
     @FocusState private var focused
+    @State private var keyFocused = false
+    @State private var hover = false
+    @State private var open = false
+    @State private var highlighted: Int?
     /// What was saved when the page opened (FillKeep's `count` and `days`).
     @State private var opened: HistorySettingsSection.Keep?
 
     private typealias Keep = HistorySettingsSection.Keep
 
+    /// One line of the list: a choice, or a heading.
+    private enum Entry: Hashable {
+        case keep(Keep)
+        case heading(String)
+        var keep: Keep? { if case .keep(let k) = self { k } else { nil } }
+    }
+
     private var start: Keep { opened ?? selection }
     private var counts: [Int] { Array(Set([10, 25, 50, 100, 200, 500] + (start.count > 0 ? [start.count] : []))).sorted() }
     private var ages: [Int] { Array(Set([1, 3, 7, 14, 30, 90, 365] + (start.days > 0 ? [start.days] : []))).sorted() }
     private var first: String { audio ? "As long as the text" : "Everything (never delete)" }
+
+    private var entries: [Entry] {
+        [.keep(Keep()), .heading("THE NEWEST")] + counts.map { .keep(Keep(count: $0)) }
+            + [.heading("FROM THE LAST")] + ages.map { .keep(Keep(days: $0)) }
+    }
 
     /// The item the box shows: the one that matches (a hand-edited file keeping both by number and by age matches
     /// none, so the first, as Windows' `?? box.Items[0]`).
@@ -196,41 +217,151 @@ private struct KeepMenu: View {
         k.count > 0 ? "The newest \(k.count) dictations" : k.days > 0 ? "The last \(HistoryStore.daysLabel(k.days))" : first
     }
 
+    /// Picking the item already shown changes nothing (no SelectionChanged).
+    private func choose(_ k: Keep) { if k != shown { selection = k } }
+
     var body: some View {
+        #if os(macOS)
+        Button { toggle() } label: { face }
+            .buttonStyle(.plain)
+            .focused($focused)
+            .tabStop(focused: $keyFocused) { activate() }
+            .onKeyPress(keys: [.upArrow, .downArrow, .escape, .return, .space, KeyEquivalent(Character(UnicodeScalar(NSF4FunctionKey)!))]) { press in
+                key(press)
+            }
+            .background { if !PageScroll<EmptyView>.flat { DropDownPanel(isPresented: $open, maxHeight: nil) { list } } }
+            .onHover { hover = $0 }
+            .fixedSize()
+            // A ComboBox reads its name and the item shown.
+            .accessibilityLabel(name)
+            .accessibilityValue(label(shown))
+            .onAppear { if opened == nil { opened = selection } }
+            .onChange(of: enabled) { _, on in if !on { open = false } }
+        #else
         Menu {
             item(Keep())
-            // Windows' headings are greyed items in capitals.
             SwiftUI.Section("THE NEWEST") { ForEach(counts, id: \.self) { item(Keep(count: $0)) } }
             SwiftUI.Section("FROM THE LAST") { ForEach(ages, id: \.self) { item(Keep(days: $0)) } }
-        } label: {
-            HStack {
-                Text(label(shown)).font(Ob.sans(Ob.body)).lineLimit(1)
-                Spacer(minLength: 8)
-                Image(systemName: "chevron.down").font(.system(size: 10, weight: .medium)).foregroundStyle(ob.muted)
-            }
-            .foregroundStyle(ob.ink)
-            .padding(.horizontal, 8).padding(.vertical, 6)
-            .frame(width: 240)
-            .overlay(Rectangle().strokeBorder(focused ? ob.accent : ob.divider, lineWidth: 1))
-            .contentShape(Rectangle())
-            .opacity(enabled ? 1 : 0.4)
-        }
-        .focused($focused)
-        .handCursor(enabled)
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        // A ComboBox reads its name and the item shown.
-        .accessibilityLabel(name)
-        .accessibilityValue(label(shown))
-        .onAppear { if opened == nil { opened = selection } }
+        } label: { face }
+            .focused($focused)
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .accessibilityLabel(name)
+            .accessibilityValue(label(shown))
+            .onAppear { if opened == nil { opened = selection } }
+        #endif
     }
 
+    #if os(iOS)
     private func item(_ k: Keep) -> some View {
-        // Picking the item already shown changes nothing (no SelectionChanged).
-        Button { if k != shown { selection = k } } label: {
+        Button { choose(k) } label: {
             if k == shown { Label(label(k), systemImage: "checkmark") } else { Text(label(k)) }
         }
     }
+    #endif
+
+    /// ObMenu's face at the page's Width 240: 14 pt, Padding 12,5,0,7 inside the 1 px edge, the chevron 10 from the
+    /// right, at least 32 tall.
+    private var face: some View {
+        HStack(spacing: 0) {
+            Text(label(shown)).font(Ob.sans(14)).lineLimit(1)
+            Spacer(minLength: 8)
+            Image(systemName: "chevron.down").font(.system(size: 11, weight: .regular)).foregroundStyle(ob.ink.opacity(enabled ? 0.62 : 0.36))
+                .padding(.trailing, 10)
+        }
+        // Disabled (Recordings with the recordings switch off): Fluent's TextFillColorDisabled.
+        .foregroundStyle(ob.ink.opacity(enabled ? 1 : 0.36))
+        .padding(EdgeInsets(top: 5 + Ob.border, leading: 12 + Ob.border, bottom: 7 + Ob.border, trailing: Ob.border))
+        .frame(width: 240)
+        .frame(minHeight: 32)
+        .background { FluentComboFace(hover: hover || open, focused: focused || keyFocused) }
+        .contentShape(Rectangle())
+    }
+
+    #if os(macOS)
+    /// The choices' places in `entries` (the headings can't be chosen, by click or by key).
+    private var choices: [Int] { entries.indices.filter { entries[$0].keep != nil } }
+    private var index: Int? { entries.firstIndex(of: .keep(shown)) }
+
+    private func toggle() {
+        highlighted = index
+        open.toggle()
+    }
+
+    private func activate() {
+        if open, let h = highlighted, let k = entries[safe: h]?.keep { choose(k) }
+        if open { open = false } else { toggle() }
+    }
+
+    /// The next choice from `from` in `step`'s direction, past headings; nil at the end.
+    private func next(from: Int?, _ step: Int) -> Int? {
+        guard let from else { return choices.first }
+        return step > 0 ? choices.first { $0 > from } : choices.last { $0 < from }
+    }
+
+    private func key(_ press: KeyPress) -> KeyPress.Result {
+        let f4 = press.key == KeyEquivalent(Character(UnicodeScalar(NSF4FunctionKey)!))
+        if open {
+            switch press.key {
+            case .upArrow: highlighted = next(from: highlighted ?? index, -1) ?? highlighted ?? index
+            case .downArrow: highlighted = next(from: highlighted ?? index, 1) ?? highlighted ?? index
+            case .return, .space:
+                if let h = highlighted, let k = entries[safe: h]?.keep { choose(k) }
+                open = false
+            case .escape: open = false
+            default: if f4 { open = false } else { return .ignored }
+            }
+            return .handled
+        }
+        if press.key == .downArrow && press.modifiers.contains(.option) || f4 || press.key == .space || press.key == .return {
+            toggle()
+            return .handled
+        }
+        switch press.key {
+        case .upArrow: if let i = next(from: index, -1), let k = entries[i].keep { choose(k) }
+        case .downArrow: if let i = next(from: index, 1), let k = entries[i].keep { choose(k) }
+        default: return .ignored
+        }
+        return .handled
+    }
+
+    private var list: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach(Array(entries.enumerated()), id: \.offset) { i, entry in
+                        switch entry {
+                        case .keep(let k):
+                            DropDownRow(text: label(k), chosen: k == shown, highlighted: highlighted == i) {
+                                choose(k)
+                                open = false
+                            }
+                            .id(i)
+                        case .heading(let text):
+                            // A disabled ComboBoxItem: FontSize 10, Cascadia Mono, Margin 0,4,0,0 (in place of the
+                            // item's own 5,2), in Fluent's disabled text colour; not hit by the pointer.
+                            Text(text).font(Ob.mono(10)).foregroundStyle(ob.ink.opacity(0.36)).lineLimit(1)
+                                .padding(EdgeInsets(top: 5, leading: 11, bottom: 7, trailing: 11))
+                                .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+                                .padding(.top, 4)
+                                .allowsHitTesting(false)
+                                .accessibilityAddTraits(.isHeader)
+                                .id(i)
+                        }
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+            .onAppear { if let i = index { proxy.scrollTo(i, anchor: .center) } }
+            .onChange(of: highlighted) { _, h in if let h { proxy.scrollTo(h) } }
+        }
+        .environment(\.ob, ob)
+    }
+    #endif
+}
+
+private extension Array {
+    subscript(safe i: Int) -> Element? { indices.contains(i) ? self[i] : nil }
 }

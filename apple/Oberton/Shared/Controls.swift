@@ -219,7 +219,7 @@ struct ObMenu<Value: Hashable>: View {
 #if os(macOS)
 /// One choice in the open list (Fluent's ComboBoxItem): 14 pt, Margin 5,2 with 4-pt corners, a wash under the pointer
 /// or the keys, and on the chosen one the wash and a 3×16 pill in the accent fill (ink in Oberton's theme).
-private struct DropDownRow: View {
+struct DropDownRow: View {
     var text: String
     var chosen: Bool
     var highlighted: Bool
@@ -248,7 +248,7 @@ private struct DropDownRow: View {
 /// Windows' dropdown: a borderless panel just below its box (above it when the screen has no room below), as wide as
 /// the box, at most `maxHeight` tall (else a third of the screen), on the flyout's fill with 8-pt corners and a shadow.
 /// It never takes the key focus from the window, so the box keeps the keys; a click anywhere else closes it.
-private struct DropDownPanel<Content: View>: NSViewRepresentable {
+struct DropDownPanel<Content: View>: NSViewRepresentable {
     @Binding var isPresented: Bool
     var maxHeight: CGFloat?
     @ViewBuilder var content: Content
@@ -328,7 +328,7 @@ private struct DropDownPanel<Content: View>: NSViewRepresentable {
 
 /// The Fluent ComboBox's face: ControlFillColorDefault (Secondary under the pointer), ControlElevationBorder (the bottom
 /// a shade darker), corner radius 4, and the 2 pt focus ring outside it while it has the keyboard focus.
-private struct FluentComboFace: View {
+struct FluentComboFace: View {
     var hover: Bool
     var focused: Bool
     @Environment(\.ob) private var ob
