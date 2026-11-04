@@ -38,7 +38,9 @@ public struct MarkdownDoc: Sendable, Equatable {
     public let lines: [Line]
     public let spans: [Span]
 
-    private static func re(_ p: String) -> NSRegularExpression { try! NSRegularExpression(pattern: p) }
+    /// Only "\n" ends a line for `.` and `$`, as in .NET: a U+2028 or NEL inside a line (a soft break from Mail or
+    /// TextEdit) stays part of the item or heading.
+    private static func re(_ p: String) -> NSRegularExpression { try! NSRegularExpression(pattern: p, options: .useUnixLineSeparators) }
     private static let fence = re(#"^ {0,3}(```|~~~)"#)
     private static let linkDef = re(#"^ {0,3}\[[^\]\n]+\]:\s*\S+"#)
     private static let rule = re(#"^ {0,3}([-*_])([ \t]*\1){2,}[ \t]*$"#)

@@ -139,7 +139,8 @@ public enum ReadAloudText {
     private static func addIfSpoken(_ text: NSString, _ start: Int, _ end: Int, _ spans: inout [NSRange]) {
         guard end > start else { return }
         let piece = text.substring(with: NSRange(location: start, length: end - start))
-        if piece.unicodeScalars.contains(where: isLetterOrDigit) {
+        // Windows tests UTF-16 units, and half a surrogate pair is never a letter: only the BMP counts.
+        if piece.unicodeScalars.contains(where: { $0.value <= 0xFFFF && isLetterOrDigit($0) }) {
             spans.append(NSRange(location: start, length: end - start))
         }
     }
@@ -154,6 +155,36 @@ public enum ReadAloudText {
 
     static func isSpace(_ c: unichar) -> Bool {
         UnicodeScalar(c).map { CharacterSet.whitespacesAndNewlines.contains($0) } ?? false
+    }
+
+    /// A line ending as .NET's `ReplaceLineEndings` knows them: CR, LF, NEL, form feed, U+2028 and U+2029.
+    static func isLineEnding(_ c: unichar) -> Bool {
+        c == 0x0A || c == 0x0D || c == 0x0C || c == 0x85 || c == 0x2028 || c == 0x2029
+    }
+
+    /// Where the highlighted word ends (Windows' ReaderWindow.ShowLines): a space, or a line ending, which that view
+    /// turns into a space first. A tab or a no-break space stays inside the word.
+    static func isWordBreak(_ c: unichar) -> Bool { c == 0x20 || isLineEnding(c) }
+
+    /// Every line ending a space, one for one, so ranges stay put (the player's sentence line; the plain text has no
+    /// CR LF pairs, so this is ReplaceLineEndings(" ") there).
+    public static func lineEndingsAsSpaces(_ text: String) -> String {
+        let units = text.utf16.map { isLineEnding($0) ? 0x20 : $0 }
+        return String(utf16CodeUnits: units, count: units.count)
+    }
+
+    /// .NET's `string.ReplaceLineEndings(" ")`: every line ending (CR LF as one) becomes `replacement`.
+    public static func replacingLineEndings(_ text: String, with replacement: String = " ") -> String {
+        let ns = text as NSString
+        var out = "", last = 0, i = 0
+        while i < ns.length {
+            let c = ns.character(at: i)
+            guard isLineEnding(c) else { i += 1; continue }
+            out += ns.substring(with: NSRange(location: last, length: i - last)) + replacement
+            i += c == 0x0D && i + 1 < ns.length && ns.character(at: i + 1) == 0x0A ? 2 : 1
+            last = i
+        }
+        return last == 0 ? text : out + ns.substring(from: last)
     }
 }
 
@@ -180,7 +211,8 @@ extension String {
     }
 
     private static func regex(_ pattern: String, lines: Bool, ignoreCase: Bool) -> NSRegularExpression {
-        var options: NSRegularExpression.Options = []
+        // Only "\n" ends a line, as in .NET (ICU would also stop `.`, `^` and `$` at CR, NEL, U+2028 and U+2029).
+        var options: NSRegularExpression.Options = [.useUnixLineSeparators]
         if lines { options.insert(.anchorsMatchLines) }
         if ignoreCase { options.insert(.caseInsensitive) }
         return try! NSRegularExpression(pattern: pattern, options: options)
