@@ -349,7 +349,7 @@ struct ProfilePage: View {
             t.inserted = final.trimmingCharacters(in: .whitespacesAndNewlines)
             trial = t
             if p.readAloudAfterInsert && !t.inserted.isEmpty {
-                model.reader.read(t.inserted, voice: p.voice ?? model.settings.ttsVoice, speed: model.settings.ttsBaseSpeed)
+                model.reader.read(t.inserted, voice: p.voice ?? model.settings.ttsVoice)
             }
         }
     }

@@ -317,11 +317,25 @@ final class AppModel: ObservableObject {
         historyPrune = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.pruneHistory() }
         }
-        reader.onFinishedReading = { [weak self] words, seconds in
+        // A reading counts (and its words) when it starts; the voice's time when it stops (ReaderWindow.StartSession
+        // and StopSession).
+        reader.onStartedReading = { [weak self] words in
             guard let self else { return }
-            self.usage.recordReading(words: words, seconds: seconds)
+            self.usage.recordReading(words: words)
             self.usageFile.save(self.usage)
         }
+        reader.onReadingTime = { [weak self] seconds in
+            guard let self, seconds > 0 else { return }
+            self.usage.recordReadingTime(seconds)
+            self.usageFile.save(self.usage)
+        }
+        // Read aloud's voice (the active profile's, else its own) and base speed, asked when a reading is asked for and
+        // when it starts (App.VoiceFor, TtsBaseSpeed).
+        reader.currentVoice = { [weak self] in
+            guard let self else { return nil }
+            return self.activeProfile.voice ?? self.settings.ttsVoice
+        }
+        reader.baseSpeed = { [weak self] in self?.settings.ttsBaseSpeed ?? 1 }
         if !Self.snapshotMode { unloader.start(self) }
         // Warm both models in the background so the first hotkey press is quick.
         if !Self.snapshotMode { Task { @MainActor [weak self] in self?.warmUp(atLaunch: true) } }
@@ -610,7 +624,7 @@ final class AppModel: ObservableObject {
             self.receipt = !readIt || entry.safetyNet == true || entry.warning != nil ? entry : nil
             phase = .done(entry.warning ?? receipt)
             showAINotice()
-            if readIt { reader.read(text, voice: voice ?? settings.ttsVoice, speed: settings.ttsBaseSpeed) }
+            if readIt { reader.read(text, voice: voice ?? settings.ttsVoice) }
         } catch {
             // The text is on the clipboard now (the platform put it there): a HEADS UP, not a failure; History keeps
             // it as not inserted, and there is no receipt.
@@ -1231,13 +1245,13 @@ final class AppModel: ObservableObject {
     func readSelection() {
         if reader.isShowing { reader.stop(); return }
         Task {
-            let voice = activeProfile.voice ?? settings.ttsVoice
             // Any selection is read, any clipboard text offered (a punctuation-only one then says there's nothing to read).
+            // The voice and speed are the current ones when the reading starts (for the clipboard, at READ CLIPBOARD).
             if let text = await platform?.selectedText(), !text.isEmpty {
-                reader.read(text, voice: voice, speed: settings.ttsBaseSpeed)
+                reader.read(text)
             } else if let clipboard = platform?.clipboardText()?.trimmingCharacters(in: .whitespacesAndNewlines),
                       !clipboard.isEmpty {
-                reader.askToReadClipboard(clipboard, voice: voice, speed: settings.ttsBaseSpeed)
+                reader.askToReadClipboard(clipboard)
             } else {
                 readerNotice("Select some text, then press \(settings.speakHotkey) to hear it read aloud.")
             }

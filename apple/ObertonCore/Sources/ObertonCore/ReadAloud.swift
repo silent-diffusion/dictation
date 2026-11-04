@@ -42,8 +42,17 @@ public final class ReadAloudPlayer: ObservableObject {
     @Published public private(set) var speed: Double = 1.0
     /// A voice download (from here, the Read aloud page or Models): which voice, and how it is going.
     @Published public private(set) var install: (voice: String, progress: VoiceProgress)?
-    /// Called when a reading is closed with how many words it had and how long the voice spoke (pauses excluded).
-    public var onFinishedReading: ((Int, Double) -> Void)?
+    /// Called when a reading starts, with how many words it has (UsageStore.RecordReading at StartSession: it counts
+    /// at once, and stays counted if Oberton quits mid-reading).
+    public var onStartedReading: ((Int) -> Void)?
+    /// Called when a reading is closed, with how long the voice spoke (pauses excluded; RecordReadingTime at StopSession).
+    public var onReadingTime: ((Double) -> Void)?
+    /// The voice a reading uses when none is given (the active profile's, else Read aloud's own), asked when the
+    /// reading is asked for: for the clipboard question, when READ CLIPBOARD is clicked (App.VoiceFor in Read).
+    public var currentVoice: () -> String? = { nil }
+    /// The speed every reading starts at (Read aloud's base speed), read as the reading starts, after any download
+    /// (TtsBaseSpeed in StartSession).
+    public var baseSpeed: () -> Double = { 1 }
     /// The voice being read with, for the dashboard ("Heart", "Samantha").
     public private(set) var voiceName = ""
 
@@ -73,15 +82,18 @@ public final class ReadAloudPlayer: ObservableObject {
     // MARK: Starting and stopping
 
     /// Read `raw` aloud (Markdown is read as the plain text it stands for), downloading the voice first if needed,
-    /// after asking. A text with nothing to read shows an error.
-    public func read(_ raw: String, voice: String?, speed: Double) {
-        let voice = voice?.isEmpty == false ? voice! : VoiceCatalog.defaultVoice
+    /// after asking. A text with nothing to read shows an error. `voice` nil = `currentVoice()`, now; `speed` nil =
+    /// `baseSpeed()` when the reading starts (as Windows' ReaderWindow.Read and StartSession).
+    public func read(_ raw: String, voice: String? = nil, speed: Double? = nil) {
+        let asked = voice?.isEmpty == false ? voice : currentVoice()
+        let voice = asked?.isEmpty == false ? asked! : VoiceCatalog.defaultVoice
         guard VoiceCatalog.isInstalled(voice) else { askToDownload(raw, voice: voice, speed: speed); return }
         start(raw, voice: voice, speed: speed)
     }
 
-    private func start(_ raw: String, voice: String, speed: Double) {
+    private func start(_ raw: String, voice: String, speed: Double?) {
         stop()
+        let speed = speed ?? baseSpeed()
         let parsed = MarkdownDoc.parse(raw)
         let plain = parsed.plain
         let s = ReadAloudSession(text: plain, voice: voice, speed: speed)
@@ -90,7 +102,8 @@ public final class ReadAloudPlayer: ObservableObject {
         text = plain
         sentences = s.sentences
         voiceName = VoiceCatalog.shortName(voice)
-        self.speed = ReadAloudSession.clamp(speed)
+        self.speed = s.currentSpeed
+        onStartedReading?(ReadAloudText.words(plain))
         s.onFinished = { [weak self] in self?.refresh() }
         s.onFailed = { [weak self] message in self?.showError(message) }
         do {
@@ -106,20 +119,24 @@ public final class ReadAloudPlayer: ObservableObject {
         spokenRange = nil
         status = .preparing
         tick = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refresh() }
+            MainActor.assumeIsolated {
+                self?.session?.checkOutput() // the output went away: play on through another, or say so
+                self?.refresh()
+            }
         }
     }
 
-    /// Nothing was selected: offer to read the clipboard instead, with a preview, its length and about how long it takes.
-    public func askToReadClipboard(_ clipboard: String, voice: String?, speed: Double) {
+    /// Nothing was selected: offer to read the clipboard instead, with a preview, its length and about how long it
+    /// takes. The voice and speed are those current when READ CLIPBOARD is clicked, unless given here.
+    public func askToReadClipboard(_ clipboard: String, voice: String? = nil, speed: Double? = nil) {
         stop()
         let plain = MarkdownText.forReading(clipboard) // so the preview, word count and estimate match what is read
         let words = ReadAloudText.words(plain)
         let units = plain.utf16.count
-        let minutes = Double(units) * ReadAloudText.defaultSecondsPerChar / 60 / max(speed, Self.minSpeed)
+        let minutes = Double(units) * ReadAloudText.defaultSecondsPerChar / 60 / max(speed ?? baseSpeed(), Self.minSpeed)
         var preview = units > 200 ? String(utf16CodeUnits: Array(plain.utf16.prefix(200)), count: 200) : plain
         if units > 200 { preview = preview.replacingOccurrences(of: #"\s+$"#, with: "", options: .regularExpression) + "…" }
-        preview = preview.replacingOccurrences(of: #"\r\n|[\r\n\u{2028}\u{2029}\u{85}]"#, with: " ", options: .regularExpression)
+        preview = ReadAloudText.replacingLineEndings(preview)
         let about = max(1, Int(minutes.rounded(.toNearestOrEven)))
         question = ReaderQuestion(title: "Nothing is selected. Read your clipboard?",
                                   body: "“\(preview)”\n\(words.formatted()) words · about \(about) min",
@@ -127,7 +144,7 @@ public final class ReadAloudPlayer: ObservableObject {
     }
 
     /// The voice isn't here: say why, or offer its one-time download (ReaderWindow.Read).
-    private func askToDownload(_ raw: String, voice: String, speed: Double) {
+    private func askToDownload(_ raw: String, voice: String, speed: Double?) {
         let noun = VoiceCatalog.deviceNoun
         switch VoiceCatalog.modelOf(voice) {
         case VoiceCatalog.system:
@@ -149,9 +166,9 @@ public final class ReadAloudPlayer: ObservableObject {
         }
     }
 
-    private func downloadThenRead(_ raw: String, voice: String, speed: Double) {
+    private func downloadThenRead(_ raw: String, voice: String, speed: Double?) {
         installFromPlayer = true
-        showDownload(VoiceProgress(step: 1, totalSteps: 1, title: "", fraction: nil, detail: ""))
+        showDownload(VoiceProgress(step: 1, totalSteps: 1, title: "", fraction: 0, detail: ""))
         installVoice(voice) { [weak self] result in
             guard let self else { return }
             self.installFromPlayer = false
@@ -166,15 +183,17 @@ public final class ReadAloudPlayer: ObservableObject {
         }
     }
 
+    /// Until the installer's first report the body keeps the offer's text, over an empty bar (DownloadThenReadAsync).
     private func showDownload(_ p: VoiceProgress) {
-        let detail = p.title + (p.detail.isEmpty ? "" : " · " + p.detail)
+        let detail = p.title.isEmpty ? question?.body ?? "" : p.title + (p.detail.isEmpty ? "" : " · " + p.detail)
         question = ReaderQuestion(title: "Downloading the voice…", body: detail, primary: "", action: {}, progress: .some(p.fraction))
     }
 
     /// Download a voice's model (Kokoro, or one Piper voice) and report back on the main thread. One at a time.
     public func installVoice(_ voice: String, done: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }) {
         guard install == nil else { done(.failure(UserFacingError("Another voice is downloading. Wait for it to finish, and try again."))); return }
-        install = (voice, VoiceProgress(step: 1, totalSteps: 1, title: "Starting the download", fraction: nil, detail: ""))
+        // No title until the installer's first report: the page keeps its status, over an empty bar.
+        install = (voice, VoiceProgress(step: 1, totalSteps: 1, title: "", fraction: 0, detail: ""))
         // The player lives as long as the app, so the download may hold on to it.
         installTask = Task { [self] in
             let report: @Sendable (VoiceProgress) -> Void = { p in
@@ -220,7 +239,7 @@ public final class ReadAloudPlayer: ObservableObject {
         tick = nil
         if let s = session {
             s.stop()
-            onFinishedReading?(ReadAloudText.words(text), s.spokenSeconds)
+            onReadingTime?(s.spokenSeconds)
         }
         session = nil
         isOpen = false
@@ -287,9 +306,10 @@ public final class ReadAloudPlayer: ObservableObject {
     }
 
     /// Read from a character of `text` (a word clicked in the player), forwards or backwards, also from the end.
-    /// Only a click inside a sentence counts. A click means "read this", so a paused reading plays.
+    /// Only a character of a sentence counts: the space between two sentences is outside both, as on Windows. A click
+    /// means "read this", so a paused reading plays.
     public func jump(to location: Int) {
-        guard let s = session, let i = sentences.firstIndex(where: { $0.location <= location && location <= NSMaxRange($0) }) else { return }
+        guard let s = session, let i = sentences.firstIndex(where: { NSLocationInRange(location, $0) }) else { return }
         let span = sentences[i]
         let ns = text as NSString
         var at = min(location, NSMaxRange(span))
@@ -343,16 +363,16 @@ public final class ReadAloudPlayer: ObservableObject {
     }
 
     /// The word as far into the sentence as the audio is: from the space before that point to the next one
-    /// (ReaderWindow.ShowLines).
+    /// (ReaderWindow.ShowLines, which splits only at spaces and line endings: "10 km" with a no-break space is one word).
     private func estimatedWord(_ i: Int, _ fraction: Double) -> NSRange? {
         guard sentences.indices.contains(i) else { return nil }
         let span = sentences[i]
         let ns = text as NSString
         let upto = Int((fraction * Double(span.length)).rounded())
         var start = span.location + min(upto, span.length)
-        while start > span.location, !ReadAloudText.isSpace(ns.character(at: start - 1)) { start -= 1 }
+        while start > span.location, !ReadAloudText.isWordBreak(ns.character(at: start - 1)) { start -= 1 }
         var end = span.location + min(upto, span.length)
-        while end < NSMaxRange(span), !ReadAloudText.isSpace(ns.character(at: end)) { end += 1 }
+        while end < NSMaxRange(span), !ReadAloudText.isWordBreak(ns.character(at: end)) { end += 1 }
         return NSRange(location: start, length: end - start)
     }
 }
