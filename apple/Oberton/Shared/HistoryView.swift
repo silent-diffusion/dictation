@@ -13,7 +13,8 @@ struct HistoryView: View {
     @State private var folded: Set<String> = []
     /// RUN AGAIN is running (for the whole page, as on Windows).
     @State private var rerunning = false
-    /// The line under the dictation (Info), and which dictation it was said for: showing another one clears it.
+    /// The line under the dictation (Windows' one Info TextBlock), and which dictation was on screen when it was set:
+    /// showing another one clears it (ShowDetailNow), so it never comes back on an earlier one.
     @State private var info = HistoryInfo()
     /// Counts HistoryPage.Rebuild: each one shows the selected dictation afresh (its player stopped, the line cleared).
     @State private var rebuilds = 0
@@ -30,6 +31,8 @@ struct HistoryView: View {
     /// When the page was opened, for Windows' "History page: built in N ms" (logged when slow).
     @State private var opened = ContinuousClock.now
     @FocusState private var listFocused: Bool
+    /// The app header under the pointer (by app).
+    @State private var hoveredHeader: String?
 
     /// A row of the list: an app's header (by app), or a dictation.
     enum Row: Identifiable {
@@ -133,7 +136,10 @@ struct HistoryView: View {
 
     private func detail(_ entry: HistoryEntry) -> some View {
         HistoryDetail(entry: entry, rerunning: rerunning,
-                      info: Binding(get: { info.id == entry.id ? info.text : "" }, set: { info = HistoryInfo(id: entry.id, text: $0) }),
+                      // Set after an await (INSERT … INTO THE LAST APP), it goes under the dictation shown by then, as
+                      // Windows' Info.Text does, not under the one it was started on.
+                      info: Binding(get: { info.id == entry.id ? info.text : "" },
+                                    set: { info = HistoryInfo(id: selected?.id ?? entry.id, text: $0) }),
                       double: $double, runAgain: { runAgain(entry.id) },
                       swap: {
                           let message = model.swapHistoryEarlier(entry.id)
@@ -194,7 +200,8 @@ struct HistoryView: View {
 
     private var list: some View {
         let rows = rows
-        // The card's Padding 6 sits outside the list: its rows and scroll bar stay 6 inside the hairline.
+        // The card's Padding 6 sits outside the list, inside its 1-px line (a Card's BorderThickness 1): the rows and
+        // scroll bar stay 6 clear of the hairline, 7 from the card's edge.
         return ScrollViewReader { proxy in
             PageScroll {
                 LazyVStack(spacing: 0) {
@@ -212,8 +219,8 @@ struct HistoryView: View {
             }
             .coordinateSpace(.named(ListGeometry.space))
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { geometry.viewport = $0 }
-            .padding(6)
-            .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
+            .padding(6 + Ob.border)
+            .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: Ob.border))
             .overlay(alignment: .topLeading) {
                 if model.history.isEmpty {
                     Caption("Nothing here yet. Your dictations appear here, with their recordings.").padding(16)
@@ -263,7 +270,8 @@ struct HistoryView: View {
     }
 
     /// An app's header (by app): its name, how many, + or − to fold it (HistoryPage's HistoryAppHeader). A name too
-    /// long for the row is cut off hard and takes the count with it, as Windows' StackPanel does.
+    /// long for the row is cut off hard and takes the count with it, as Windows' StackPanel does; the sign stays docked
+    /// at the right. Under the pointer it darkens: the RowItem's own Ob.Hover under the button's (two 10 % washes).
     private func header(_ name: String, key: String, count: Int, open: Bool) -> some View {
         Button {
             if folded.contains(key) { folded.remove(key) } else { folded.insert(key) }
@@ -273,7 +281,8 @@ struct HistoryView: View {
                     Text(name).font(Ob.sans(12, .bold)).foregroundStyle(ob.ink).fixedSize()
                     Readout("\(count)").fixedSize().padding(.leading, 10)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                // minWidth 0: a frame with only maxWidth never gets narrower than its content, and would push the sign out.
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
                 .clipped()
                 Text(open ? "−" : "+").font(Ob.mono(12)).foregroundStyle(ob.muted)
             }
@@ -282,6 +291,7 @@ struct HistoryView: View {
             .background {
                 // The row's focus mark shows through the header's wash (Ob.Hover is the same colour as Ob.Subtle).
                 ZStack(alignment: .leading) {
+                    if hoveredHeader == key { Rectangle().fill(ob.subtle) }
                     if listFocused && cursor == "app:" + key { Rectangle().fill(ob.accent).frame(width: 3) }
                     Rectangle().fill(ob.subtle)
                 }
@@ -291,6 +301,9 @@ struct HistoryView: View {
         }
         .buttonStyle(BareButtonStyle())
         .handCursor()
+        .onHover { inside in
+            if inside { hoveredHeader = key } else if hoveredHeader == key { hoveredHeader = nil }
+        }
         .accessibilityLabel(name)
     }
 
@@ -477,11 +490,12 @@ struct HistoryDetail: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 0) {
                 VStack(alignment: .leading, spacing: 0) {
-                    // No wrapping and no "…": a title too long for the space beside the buttons is cut off.
+                    // No wrapping and no "…": a title too long for the space beside the buttons is cut off. minWidth 0
+                    // lets the frame be narrower than the text (with only maxWidth it never is, and the row overflows).
                     Text(DateText.weekdayDayMonth(entry.date) + ", " + DateText.time(entry.date))
                         .font(Ob.mono(16, .bold)).foregroundStyle(ob.ink)
                         .lineLimit(1).fixedSize()
-                        .frame(maxWidth: .infinity, alignment: .leading).clipped()
+                        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading).clipped()
                     Caption(where_ + "\nProfile: \(entry.profileName) · \(HistoryEntry.duration(entry.seconds)) of speech", bottom: 0)
                         .padding(.top, 2)
                     if let at = entry.runAgainAt, entry.earlier != nil {
@@ -490,13 +504,20 @@ struct HistoryDetail: View {
                             Caption("Run again \(DateText.dayMonth(at)), \(DateText.time(at))"
                                     + (showingEarlier ? "; showing the result from before" : ""), bottom: 0)
                                 .padding(.trailing, 10)
-                            Button(showingEarlier ? "USE THE RERUN" : "PUT BACK THE EARLIER RESULT") { swap() }
-                                .buttonStyle(BareButtonStyle()).font(Ob.mono(11)).foregroundStyle(ob.accent).handCursor()
+                            // A string in a bare ContentPresenter: one line that never wraps (cut off with the
+                            // column when it is wider).
+                            Button { swap() } label: {
+                                Text(showingEarlier ? "USE THE RERUN" : "PUT BACK THE EARLIER RESULT").lineLimit(1).fixedSize()
+                            }
+                            .buttonStyle(BareButtonStyle()).font(Ob.mono(11)).foregroundStyle(ob.accent).handCursor()
                         }
                         .padding(.top, 4)
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                // What is left beside the buttons (DockPanel's last child), however long the title; WPF clips the
+                // StackPanel to that slot, so nothing in it runs under the buttons.
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                .clipped()
                 // Docked at the right: they keep their size whatever the title needs.
                 if entry.hasAudio {
                     Button(rerunning ? "Running…" : "Run again") { runAgain() }
@@ -637,7 +658,13 @@ final class HistoryPlayer: ObservableObject {
     enum State { case none, ready, broken }
     @Published private(set) var state = State.none
 
-    var fraction: Double { duration > 0 ? min(1, max(0, position / duration)) : 0 }
+    var fraction: Double {
+        if state == .broken { return dragged ?? 0 }
+        return duration > 0 ? min(1, max(0, position / duration)) : 0
+    }
+    /// A recording that won't play: where its thumb was dragged to (Seek_ValueChanged ignores it, so it stays there
+    /// until the next UpdateTime puts it back at 0).
+    @Published private var dragged: Double?
 
     /// `seconds`: the dictation's length, shown when the file won't play.
     func load(_ url: URL?, seconds: Double = 0) {
@@ -666,6 +693,13 @@ final class HistoryPlayer: ObservableObject {
     }
 
     func toggle() {
+        if state == .broken {
+            // Windows' Play_Click still "plays" a file MediaPlayer couldn't open: the glyph turns to Pause (and back),
+            // and while it is on, the 200-ms tick's UpdateTime keeps the time at 0 and the thumb back at the start.
+            playing.toggle()
+            tick = playing ? Timer.publish(every: 0.2, on: .main, in: .common).autoconnect().sink { [weak self] _ in self?.update() } : nil
+            return
+        }
         guard let p = player else { return }
         if playing {
             p.pause()
@@ -691,6 +725,7 @@ final class HistoryPlayer: ObservableObject {
     }
 
     func seek(to fraction: Double) {
+        if state == .broken { dragged = fraction; return }
         guard let p = player else { return }
         p.currentTime = fraction * p.duration
         position = p.currentTime
@@ -704,9 +739,11 @@ final class HistoryPlayer: ObservableObject {
         wordTick = nil
         lit = []
         position = 0
+        dragged = nil
     }
 
     private func update() {
+        if state == .broken { dragged = nil; return }
         guard let p = player else { return }
         if !p.isPlaying { stop(); return } // came to the end
         position = p.currentTime
