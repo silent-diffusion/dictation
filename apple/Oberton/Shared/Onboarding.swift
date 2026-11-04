@@ -18,8 +18,11 @@ struct OnboardingView: View {
 
     /// Where earlier versions kept "the setup is done": the app's preferences, now moved into the data folder.
     static let doneKey = "setupDone"
-    /// A setup was started and not finished (Windows finds the runtimes it left): it opens on CONTINUE SETUP.
+    /// Where earlier versions kept "a setup was started" (removed; see `leftovers`).
     static let startedKey = "setupStarted"
+    /// What an unfinished run leaves in the data folder once it starts downloading (Windows finds the python.exe or
+    /// ollama.exe it left): the setup then opens on CONTINUE SETUP. Gone with the data folder, and when setup is done.
+    static var leftovers: URL { AppPaths.dataDir.appending(path: "setup-started") }
 
     /// The setup's mark in the data folder (Windows' runtime.json): once it is there the setup is done, and when the data
     /// folder is deleted the setup runs again, as on Windows (RuntimeInstaller.IsInstalled).
@@ -43,6 +46,7 @@ struct OnboardingView: View {
                     try? data.write(to: marker, options: .atomic)
                 }
                 UserDefaults.standard.removeObject(forKey: startedKey)
+                try? FileManager.default.removeItem(at: leftovers)
             } else {
                 try? FileManager.default.removeItem(at: marker)
             }
@@ -59,7 +63,7 @@ struct OnboardingView: View {
     /// A run stopped (cancelled or failed): the progress panel stays.
     @State private var stopped = false
     /// A run was started before, here or at an earlier start: the button says CONTINUE SETUP (also while it runs).
-    @State private var resume = UserDefaults.standard.bool(forKey: OnboardingView.startedKey)
+    @State private var resume = FileManager.default.fileExists(atPath: OnboardingView.leftovers.path)
     @State private var runTask: Task<Void, Never>?
     @State private var mic = OnboardingView.micState
     #if os(macOS)
@@ -117,18 +121,18 @@ struct OnboardingView: View {
                 .fixedSize(horizontal: false, vertical: true).padding(.top, 22)
             Rule().padding(.top, 10)
             Text("One download and you can talk into any app. After this, Oberton works offline: no accounts, no cloud, no telemetry.")
-                .font(Ob.sans(15)).foregroundStyle(ob.muted).lineSpacing(Ob.lineSpacing(15, lineHeight: 22))
+                .font(Ob.sans(15)).foregroundStyle(ob.muted).wpfLineHeight(22, size: 15) // LineHeight 22, the last line too
                 .fixedSize(horizontal: false, vertical: true).padding(.top, 8)
 
             VStack(spacing: 0) {
                 row(done: mic == .granted, warn: mic == .denied, name: "Microphone",
                     what: mic == .granted ? "Allowed" : mic == .denied ? "Not allowed: turn it on in \(settingsApp) › Privacy & Security › Microphone"
-                        : "Oberton listens only while you dictate") {
+                        : "Oberton listens only while you dictate", permission: true) {
                     if mic == .denied { openPrivacy("Privacy_Microphone") }
                 }
                 #if os(macOS)
                 Hairline()
-                row(done: accessibility, warn: false, name: "Accessibility", what: accessibility ? "Allowed" : Self.accessibilityWhy) {
+                row(done: accessibility, warn: false, name: "Accessibility", what: accessibility ? "Allowed" : Self.accessibilityWhy, permission: true) {
                     if !accessibility { openPrivacy("Privacy_Accessibility") }
                 }
                 #endif
@@ -224,23 +228,33 @@ struct OnboardingView: View {
     @State private var aiFromSetup = false
     #endif
 
-    /// One plan row: a check once it's done, an "i" note while not (Windows' hardware row), the name and what it is.
-    private func row(done: Bool, warn: Bool, name: String, what: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(alignment: .top, spacing: 12) {
-                // Not OK is muted, as Windows' setup draws it: red only ever means recording.
-                StepMark(done: done, color: done ? ob.ink : ob.muted).frame(width: 18, height: 18).padding(.top, 1)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(name).font(Ob.sans(14))
-                    Text(what).font(Ob.mono(12)).foregroundStyle(ob.muted).fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(EdgeInsets(top: 11, leading: 18, bottom: 11, trailing: 18))
-            .contentShape(Rectangle())
+    /// One row of the card. A permission (`permission: true`) is like Windows' hardware row: a check once it's done,
+    /// an "i" note while not, and a click opens its pane in System Settings. Anything else is a plan row (PlanList, an
+    /// ItemsControl that isn't focusable): the name and what it is, no mark, no click, no Tab stop.
+    @ViewBuilder
+    private func row(done: Bool, warn: Bool, name: String, what: String, permission: Bool = false, action: @escaping () -> Void = {}) -> some View {
+        let text = VStack(alignment: .leading, spacing: 2) {
+            Text(name).font(Ob.sans(14))
+            Text(what).font(Ob.mono(12)).foregroundStyle(ob.muted).fixedSize(horizontal: false, vertical: true)
         }
-        .buttonStyle(.plain)
-        .keyTabStop(radius: 0, action: action)
+        if permission {
+            Button(action: action) {
+                HStack(alignment: .top, spacing: 12) {
+                    // Not OK is muted, as Windows' setup draws it: red only ever means recording.
+                    StepMark(done: done, color: done ? ob.ink : ob.muted).frame(width: 18, height: 18).padding(.top, 1)
+                    text
+                    Spacer(minLength: 0)
+                }
+                .padding(EdgeInsets(top: 11, leading: 18, bottom: 11, trailing: 18))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .keyTabStop(radius: 0, action: action)
+        } else {
+            text
+                .padding(EdgeInsets(top: 11, leading: 18, bottom: 11, trailing: 18))
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     // MARK: Running
@@ -272,7 +286,7 @@ struct OnboardingView: View {
         phase = .running
         error = nil
         stopped = false
-        UserDefaults.standard.set(true, forKey: Self.startedKey)
+        UserDefaults.standard.removeObject(forKey: Self.startedKey)
         do {
             try await runSteps()
         } catch is CancellationError {
@@ -296,11 +310,14 @@ struct OnboardingView: View {
     }
 
     private func runSteps() async throws {
-        Log.info("Runtime setup starting (speech model \(whisperToGet ?? model.settings.whisperModel ?? "Apple Speech"), AI model \(model.settings.defaultModel.shortName))")
+        // Windows starts with the hardware its picks rest on ("NVIDIA GPU: True"); the Mac's picks rest on the chip and
+        // the memory (SpeechModelChoice).
+        Log.info("Runtime setup starting (\(Self.hardwareBasis), speech model \(whisperToGet ?? model.settings.whisperModel ?? "Apple Speech"), AI model \(model.settings.defaultModel.shortName))")
         var n = 0
         n += 1
         begin(n, "Microphone", "Allow the microphone when asked.")
-        await Self.requestMic()
+        // CANCEL works while macOS's question is up (the answer is still taken when it comes).
+        try await Self.requestMicCancellable()
         mic = Self.micState
         try Task.checkCancellation()
         #if os(macOS)
@@ -314,6 +331,9 @@ struct OnboardingView: View {
         let whisper = whisperToGet
         do {
             begin(n, "Speech model", "Checking \(languageName)…")
+            // From here on the run leaves something behind (Windows' first download writes into its runtime folder).
+            try? FileManager.default.createDirectory(at: AppPaths.dataDir, withIntermediateDirectories: true)
+            FileManager.default.createFile(atPath: Self.leftovers.path, contents: Data())
             do {
                 let downloaded = try await LiveTranscriber.download(locale: model.settings.speechLocale) { f in
                     fraction = f
@@ -403,8 +423,19 @@ struct OnboardingView: View {
         detail = ""
     }
 
+    /// "Apple silicon: True, memory: 16 GB" for the setup's log line (.NET prints a bool as True/False).
+    static var hardwareBasis: String {
+        #if arch(arm64)
+        let silicon = "True"
+        #else
+        let silicon = "False"
+        #endif
+        let gb = Int((Double(ProcessInfo.processInfo.physicalMemory) / 1_073_741_824).rounded())
+        return "Apple silicon: \(silicon), memory: \(gb) GB"
+    }
+
     /// "  (42%)", rounded as Windows' {g:P0}.
-    private static func percent(_ f: Double) -> String { "  (\(f.formatted(.percent.precision(.fractionLength(0)))))" }
+    private static func percent(_ f: Double) -> String { "  (\(NetNumber.percent(f)))" }
 
     /// Windows' WhisperModelMb: the rough download of a speech model, in MB, for "About 1,550 MB".
     static func whisperMB(_ id: String) -> Int {
@@ -450,6 +481,45 @@ struct OnboardingView: View {
         #endif
     }
 
+    /// `requestMic`, but a cancelled setup stops at once instead of waiting for the answer.
+    static func requestMicCancellable() async throws {
+        let gate = OneShot()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
+                gate.arm(c)
+                Task { await requestMic(); gate.finish(nil) }
+            }
+        } onCancel: {
+            gate.finish(CancellationError())
+        }
+    }
+
+    /// Resumes a continuation once, whichever comes first: the answer or the cancel (which may come before it waits).
+    private final class OneShot: @unchecked Sendable {
+        private let lock = NSLock()
+        private var waiting: CheckedContinuation<Void, Error>?
+        private var outcome: Result<Void, Error>?
+        private var done = false
+
+        func arm(_ c: CheckedContinuation<Void, Error>) {
+            lock.lock()
+            if let outcome, !done { done = true; lock.unlock(); c.resume(with: outcome); return }
+            waiting = c
+            lock.unlock()
+        }
+
+        func finish(_ error: Error?) {
+            lock.lock()
+            guard !done else { lock.unlock(); return }
+            let result: Result<Void, Error> = error.map { .failure($0) } ?? .success(())
+            guard let c = waiting else { outcome = result; lock.unlock(); return }
+            done = true
+            waiting = nil
+            lock.unlock()
+            c.resume(with: result)
+        }
+    }
+
     static func requestMic() async {
         #if os(macOS)
         if AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined { _ = await AVCaptureDevice.requestAccess(for: .audio) }
@@ -488,25 +558,44 @@ private struct StepMark: View {
     }
 }
 
-/// A flat bar: ink fill on a hairline track; nil = still waiting (a short slice that slides).
-/// A thin bar: the fraction done, or a sliding piece while it is unknown (setup, model downloads).
+/// WPF's Fluent ProgressBar, which the Windows app leaves as it is (setup, model downloads): the track a square bar 1 in
+/// from each edge in ControlStrongStrokeColorDefault, the part done a rounded bar on it in the system accent
+/// (SystemAccentColorDark1 in light, Light2 in dark: not the ink, the app doesn't restyle it). Unknown (nil): no track,
+/// and a block a quarter as wide sweeping across from left to right every 0.9 s, linearly.
 struct ProgressBar: View {
     var fraction: Double?
     @Environment(\.ob) private var ob
+
+    private var accent: Color {
+        #if os(macOS)
+        let base = NSColor.controlAccentColor.usingColorSpace(.sRGB) ?? .controlAccentColor
+        return Color(nsColor: (ob.dark ? base.blended(withFraction: 0.4, of: .white) : base.blended(withFraction: 0.2, of: .black)) ?? base)
+        #else
+        return Color(uiColor: .tintColor)
+        #endif
+    }
+
     var body: some View {
         GeometryReader { g in
-            // Rounded track and indicator, as the Fluent ProgressBar (its accent is the ink here).
-            ZStack(alignment: .leading) {
-                Capsule().fill(ob.subtle)
-                if let fraction {
-                    Capsule().fill(ob.ink).frame(width: g.size.width * min(1, max(0, fraction)))
-                } else {
-                    TimelineView(.animation) { t in
-                        let x = t.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.4) / 1.4
-                        Capsule().fill(ob.ink).frame(width: g.size.width * 0.25).offset(x: g.size.width * (x * 1.25 - 0.25))
-                    }
-                    .clipShape(Capsule())
+            let inner = CGRect(x: 1, y: 1, width: max(0, g.size.width - 2), height: max(0, g.size.height - 2))
+            if let fraction {
+                ZStack(alignment: .topLeading) {
+                    Rectangle().fill(ob.dark ? Color.white.opacity(0x8B / 255) : Color.black.opacity(0x72 / 255))
+                        .frame(width: inner.width, height: inner.height).offset(x: 1, y: 1)
+                    Capsule().fill(accent)
+                        .frame(width: inner.width * min(1, max(0, fraction)), height: inner.height).offset(x: 1, y: 1)
                 }
+            } else {
+                TimelineView(.animation) { t in
+                    // RenderTransformOrigin -0.5 → 1.5 under ScaleX 0.25: the block starts at 0.75 × origin × width.
+                    let phase = t.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 0.9) / 0.9
+                    let origin = -0.5 + 2 * phase
+                    Capsule().fill(accent)
+                        .frame(width: inner.width * 0.25, height: inner.height)
+                        .offset(x: 1 + 0.75 * origin * inner.width, y: 1)
+                }
+                .frame(width: g.size.width, height: g.size.height, alignment: .topLeading)
+                .clipped()
             }
         }
     }
