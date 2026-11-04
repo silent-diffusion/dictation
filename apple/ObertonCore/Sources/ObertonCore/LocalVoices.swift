@@ -29,8 +29,13 @@ final class KokoroSpeech: @unchecked Sendable {
             inputNames = Set(try s.inputNames())
             voicesFile = try Data(contentsOf: VoiceInstaller.kokoroVoices, options: .alwaysMapped)
             session = s
+            // Warm-up, and a check that the model really works ("Ready.", as the Windows voice server does at start).
+            _ = try run(Self.tokens("ɹˈɛdi."), voice: VoiceCatalog.defaultVoice, speed: 1)
             CoreLog.info("Kokoro loaded (inputs: \(inputNames.sorted().joined(separator: ", ")))")
         } catch {
+            session = nil
+            styles = [:]
+            voicesFile = nil
             CoreLog.error("Kokoro failed to load: \(error.localizedDescription)")
             throw UserFacingError("The voice model could not be loaded. Try downloading the voice again under Read aloud.")
         }
@@ -47,16 +52,72 @@ final class KokoroSpeech: @unchecked Sendable {
         return s
     }
 
-    /// Speak `text` with a Kokoro voice ("af_heart"; "b…" voices are British).
+    /// Speak `text` with a Kokoro voice ("af_heart"; "b…" voices are British). A voice the file doesn't have reads as
+    /// Heart, in American English (the Windows server swaps the voice before choosing the language). As kokoro-onnx
+    /// does: the phonemes in batches split at punctuation, each batch's audio trimmed of its silence at both ends.
     func synthesize(_ text: String, voice: String, speed: Double) throws -> [Float] {
         try load()
+        _ = try style(voice)
+        let voice = styles[voice] != nil ? voice : VoiceCatalog.defaultVoice
         let british = voice.hasPrefix("b")
         let phonemes = try Phonemizer.shared(british: british).kokoro(text)
         var audio: [Float] = []
-        for chunk in Self.chunks(Self.tokens(phonemes)) where !chunk.isEmpty {
-            audio += try run(chunk, voice: voice, speed: speed)
+        for batch in Self.batches(phonemes) {
+            var part: [Float] = []
+            for chunk in Self.chunks(Self.tokens(batch)) where !chunk.isEmpty {
+                part += try run(chunk, voice: voice, speed: speed)
+            }
+            audio += Self.trimSilence(part)
         }
         return audio
+    }
+
+    /// kokoro-onnx's _split_phonemes: parts between . , ! ? ; joined back (the mark kept on the part before it) into
+    /// batches shorter than 510 phonemes.
+    static func batches(_ phonemes: String) -> [String] {
+        var out: [String] = []
+        var current = ""
+        var part = ""
+        func add(_ raw: String) {
+            let p = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !p.isEmpty else { return }
+            if current.unicodeScalars.count + p.unicodeScalars.count + 1 >= maxTokens {
+                out.append(current.trimmingCharacters(in: .whitespacesAndNewlines))
+                current = p
+            } else if p.count == 1, ".,!?;".contains(p) {
+                current += p
+            } else {
+                if !current.isEmpty { current += " " }
+                current += p
+            }
+        }
+        for c in phonemes {
+            if ".,!?;".contains(c) { add(part); add(String(c)); part = "" } else { part.append(c) }
+        }
+        add(part)
+        if !current.isEmpty { out.append(current.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        return out
+    }
+
+    /// kokoro-onnx's trim (librosa.effects.trim): drop the start and end whose loudness (RMS of 2048-sample frames,
+    /// every 512, centred) is more than 60 dB below the loudest frame.
+    static func trimSilence(_ y: [Float], topDb: Float = 60, frame: Int = 2048, hop: Int = 512) -> [Float] {
+        guard !y.isEmpty else { return y }
+        let frames = 1 + y.count / hop
+        var rms = [Float](repeating: 0, count: frames)
+        y.withUnsafeBufferPointer { p in
+            for i in 0..<frames {
+                let from = i * hop - frame / 2
+                var sum: Float = 0
+                for j in max(0, from)..<min(p.count, from + frame) { sum += p[j] * p[j] }
+                rms[i] = (sum / Float(frame)).squareRoot()
+            }
+        }
+        guard let loudest = rms.max(), loudest > 0 else { return [] }
+        let threshold = loudest * pow(10, -topDb / 20)
+        guard let first = rms.firstIndex(where: { $0 > threshold }), let last = rms.lastIndex(where: { $0 > threshold }) else { return [] }
+        let start = min(first * hop, y.count), end = min(y.count, (last + 1) * hop)
+        return start < end ? Array(y[start..<end]) : []
     }
 
     private func run(_ tokens: [Int64], voice: String, speed: Double) throws -> [Float] {
@@ -140,8 +201,10 @@ final class PiperSpeech: @unchecked Sendable {
                                      sessionOptions: OnnxEnvironment.options())
             inputNames = Set(try session.inputNames())
         } catch {
+            // The Windows server loads a Piper voice when it is first asked to speak, so its error comes back as a
+            // reading error.
             CoreLog.error("Piper voice \(name) failed to load: \(error.localizedDescription)")
-            throw UserFacingError("The voice model could not be loaded. Try downloading the voice again under Read aloud.")
+            throw UserFacingError("The voice engine couldn't read that: \(error.localizedDescription)")
         }
     }
 
@@ -190,8 +253,7 @@ enum OnnxEnvironment {
     static func options() throws -> ORTSessionOptions {
         let o = try ORTSessionOptions()
         try o.setGraphOptimizationLevel(.all)
-        // Leave a core or two for the rest of the system: readings run alongside whatever the user does.
-        try o.setIntraOpNumThreads(Int32(max(1, min(4, ProcessInfo.processInfo.activeProcessorCount - 2))))
+        // Threads: ONNX Runtime's own choice, as the Windows server leaves it.
         return o
     }
 

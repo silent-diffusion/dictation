@@ -133,14 +133,14 @@ public enum VoiceCatalog {
     // MARK: System voices
 
     /// The system's voices in the user's language (Windows lists all its installed voices; the Mac has dozens per
-    /// language, so only those that can read the user's language are offered), best quality first:
-    /// "Samantha (English (United States), female)".
+    /// language, so only those that can read the user's language are offered), sorted by label as Windows sorts its
+    /// voices: "Samantha (English (United States), female)". A name the Mac has in several qualities says which.
     public static func systemVoices() -> [VoiceOption] {
         let language = Locale.current.language.languageCode?.identifier ?? "en"
         return AVSpeechSynthesisVoice.speechVoices()
             .filter { $0.language.hasPrefix(language) && !$0.voiceTraits.contains(.isNoveltyVoice) }
-            .sorted { ($0.quality.rawValue, $1.name) > ($1.quality.rawValue, $0.name) }
             .map { VoiceOption(id: $0.identifier, name: systemLabel($0), model: system) }
+            .sorted { $0.name.compare($1.name, options: [.caseInsensitive, .numeric]) == .orderedAscending }
     }
 
     static func systemLabel(_ v: AVSpeechSynthesisVoice) -> String {

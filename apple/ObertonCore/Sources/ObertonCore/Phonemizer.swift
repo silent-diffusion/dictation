@@ -44,7 +44,9 @@ public final class Phonemizer: @unchecked Sendable {
     private static func load(_ url: URL) throws -> [String: String] {
         guard let data = try? Data(contentsOf: url),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw UserFacingError("The pronunciation dictionary could not be loaded. Try downloading the voice again under Read aloud.")
+            // The dictionary is part of the voice download here (Windows' phonemizer comes with its engine): its
+            // load-failure text.
+            throw UserFacingError("The voice model could not be loaded. Try downloading the voice again under Read aloud.")
         }
         var out: [String: String] = [:]
         out.reserveCapacity(json.count)

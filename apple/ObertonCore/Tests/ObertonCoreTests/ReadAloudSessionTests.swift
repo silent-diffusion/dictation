@@ -99,6 +99,23 @@ import Testing
         s.stop()
     }
 
+    /// TimeStretchTests.Keeps_the_pitch: the 220 Hz hum is still 220 Hz at the far speeds.
+    @Test(arguments: [0.25, 4.0])
+    func stretchingKeepsThePitch(speed: Double) async throws {
+        let s = try await session(speed: speed)
+        let speech = Double(Self.text.utf16.count - 1) * 0.05
+        let out = try s.renderOffline(seconds: speech / speed + 1.5)
+        guard let start = out.firstIndex(where: { abs($0) > 0.05 }), let end = out.lastIndex(where: { abs($0) > 0.05 }) else {
+            Issue.record("no voice"); return
+        }
+        let middle = out[(start + (end - start) / 4)..<(end - (end - start) / 4)]
+        var ups = 0
+        for i in middle.indices.dropFirst() where middle[i - 1] < 0 && middle[i] >= 0 { ups += 1 }
+        let hz = Double(ups) / (Double(middle.count) / Double(SpeechAudio.sampleRate))
+        #expect(abs(hz - 220) < 12, "×\(speed): \(hz) Hz")
+        s.stop()
+    }
+
     @Test func endedIgnoresSpeedChanges() async throws {
         let s = try await session(speed: 1)
         _ = try s.renderOffline(seconds: 4)

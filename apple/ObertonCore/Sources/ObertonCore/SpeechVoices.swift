@@ -81,9 +81,12 @@ public final class SpeechVoices: @unchecked Sendable {
             return try SystemSpeech.synthesize(text, voice: voice)
         case VoiceCatalog.piper:
             let name = String(voice.dropFirst(VoiceCatalog.piperPrefix.count))
-            guard VoiceInstaller.piperInstalled(name) else { throw UserFacingError("Read aloud isn't installed yet.") }
+            // A voice in memory reads on even if its files went meanwhile (as the Windows server).
             let piper = try lock.withLock { () throws -> PiperSpeech in
                 if let p = pipers[name] { return p }
+                guard VoiceInstaller.piperInstalled(name) else {
+                    throw UserFacingError("The voice engine couldn't read that: the Piper voice \(name) isn't downloaded")
+                }
                 let p = try PiperSpeech(name: name)
                 pipers[name] = p
                 return p
@@ -92,7 +95,7 @@ public final class SpeechVoices: @unchecked Sendable {
             catch let e as UserFacingError { throw e }
             catch { throw UserFacingError("The voice engine couldn't read that: \(error.localizedDescription)") }
         default:
-            guard VoiceInstaller.kokoroInstalled else { throw UserFacingError("Read aloud isn't installed yet.") }
+            guard kokoro.isLoaded || VoiceInstaller.kokoroInstalled else { throw UserFacingError("Read aloud isn't installed yet.") }
             do { return SpeechAudio(samples: try kokoro.synthesize(text, voice: voice.isEmpty ? VoiceCatalog.defaultVoice : voice, speed: speed)) }
             catch let e as UserFacingError { throw e }
             catch { throw UserFacingError("The voice engine couldn't read that: \(error.localizedDescription)") }
@@ -103,8 +106,11 @@ public final class SpeechVoices: @unchecked Sendable {
 /// The system's voices, rendered to audio with their word positions (AVSpeechSynthesizer.write).
 enum SystemSpeech {
     static func synthesize(_ text: String, voice: String) throws -> SpeechAudio {
-        guard let v = AVSpeechSynthesisVoice(identifier: voice) else {
-            throw UserFacingError("The \(VoiceCatalog.deviceNoun) voice \"\(VoiceCatalog.shortName(voice))\" isn't installed on this \(VoiceCatalog.deviceNoun) any more. Pick another voice under Read aloud.")
+        // Gone since the reading started (the player checks before it starts): the default voice reads on, as SAPI's.
+        var v = AVSpeechSynthesisVoice(identifier: voice)
+        if v == nil {
+            CoreLog.warn("\(VoiceCatalog.deviceNoun) voice \"\(voice)\" isn't installed; using the default one")
+            v = AVSpeechSynthesisVoice(language: AVSpeechSynthesisVoice.currentLanguageCode())
         }
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = v

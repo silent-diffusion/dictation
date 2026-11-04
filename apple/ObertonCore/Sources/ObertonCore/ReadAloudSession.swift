@@ -63,6 +63,8 @@ final class ReadAloudSession: @unchecked Sendable {
     private let wakeUp: AsyncStream<Void>.Continuation
     /// Tests render the output themselves (`renderOffline`) instead of playing it.
     private let offline: Bool
+    private var observers: [NSObjectProtocol] = []
+    private var closed = false, outputLost = false, interrupted = false
 
     init(text: String, voice: String, speed: Double, offline: Bool = false,
          synthesize: @escaping @Sendable (String, String, Double) async throws -> SpeechAudio = { try await SpeechVoices.shared.synthesize($0, voice: $1, speed: $2) }) {
@@ -70,7 +72,8 @@ final class ReadAloudSession: @unchecked Sendable {
         self.voice = voice
         self.synthesize = synthesize
         self.offline = offline
-        let s = Self.clamp(speed)
+        // The starting speed is clamped, not rounded (only a change of speed rounds), as Windows' constructor.
+        let s = min(ReadAloudPlayer.maxSpeed, max(ReadAloudPlayer.minSpeed, speed))
         self.speed = s
         native = SpeechVoices.nativeSpeed(voice: voice, speed: s)
         sentences = ReadAloudText.split(text)
@@ -87,8 +90,9 @@ final class ReadAloudSession: @unchecked Sendable {
         leadIn = leadInSamples
     }
 
+    /// A new speed: within 0.25–4, to two decimals (.NET's Math.Round, half to even).
     static func clamp(_ s: Double) -> Double {
-        (min(ReadAloudPlayer.maxSpeed, max(ReadAloudPlayer.minSpeed, s)) * 100).rounded() / 100
+        (min(ReadAloudPlayer.maxSpeed, max(ReadAloudPlayer.minSpeed, s)) * 100).rounded(.toNearestOrEven) / 100
     }
 
     // MARK: State for the player
@@ -170,6 +174,7 @@ final class ReadAloudSession: @unchecked Sendable {
         if offline { try engine.enableManualRenderingMode(.offline, format: format, maximumFrameCount: 4096) }
         engine.prepare()
         try engine.start()
+        if !offline { watchOutput() }
         let wake = wake
         loop = Task.detached(priority: .userInitiated) { [weak self] in
             var it = wake.makeAsyncIterator()
@@ -285,8 +290,80 @@ final class ReadAloudSession: @unchecked Sendable {
         }
         loop?.cancel()
         wakeUp.finish()
+        observers.forEach(NotificationCenter.default.removeObserver)
+        observers = []
+        closed = true
         engine.stop()
     }
+
+    // MARK: The audio output
+
+    /// The output changed or went away (headphones unplugged, AirPods gone, another output picked): AVAudioEngine stops
+    /// then. Windows' audio follows the default output and stops with an error only when it can't play.
+    private func watchOutput() {
+        observers.append(NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
+            self?.checkOutput()
+        })
+        #if os(iOS)
+        // A call or another app's audio: hold the place, as paused, and carry on once it is over.
+        observers.append(NotificationCenter.default.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
+            guard let self, let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+                  let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+            if type == .began {
+                interrupted = true
+                if !isPaused { togglePause() }
+            } else {
+                interrupted = false
+                try? AVAudioSession.sharedInstance().setActive(true)
+                checkOutput()
+            }
+        })
+        #endif
+    }
+
+    /// Called on a change of output and ten times a second by the player: if the engine has stopped, play on through
+    /// whatever output there is now; if none can play, the reading ends with "Playback failed: …" (NAudio's
+    /// PlaybackStopped), never a player frozen on LEFT.
+    func checkOutput() {
+        guard !offline, !interrupted else { return }
+        recoverOutput(isRunning: engine.isRunning) {
+            engine.prepare()
+            try engine.start()
+        }
+    }
+
+    func recoverOutput(isRunning: Bool, restart: () throws -> Void) {
+        guard !closed, !isRunning else { return }
+        do {
+            try restart()
+            if outputLost { CoreLog.info("Read aloud: playing again") }
+            outputLost = false
+        } catch {
+            if !outputLost { CoreLog.error("Read aloud playback stopped: \(error.localizedDescription)") }
+            outputLost = true
+            // After the end (DONE) there is nothing to stop yet; ▶ tries again.
+            let failing: Bool = lock.withLock {
+                guard !ended else { return false }
+                ended = true
+                return true
+            }
+            guard failing, let failed = onFailed else { return }
+            let message = "Playback failed: " + error.localizedDescription
+            Task { @MainActor in failed(message) }
+        }
+    }
+
+    /// Tests: what the source gives the time-stretch for `count` samples (Windows' tests read the session directly).
+    func renderRaw(_ count: Int) -> [Float] {
+        var out = [Float](repeating: .nan, count: count)
+        out.withUnsafeMutableBufferPointer { render(into: $0.baseAddress!, count: count) }
+        return out
+    }
+
+    /// Tests: the voice's pace generation (audio made for an older one is dropped).
+    var currentGeneration: Int { lock.withLock { generation } }
+    var currentNative: Double { lock.withLock { native } }
+    static var leadInAtOne: Int { rate / 4 }
 
     /// Tests: pull `seconds` of output through the time-stretch, as the speakers would.
     func renderOffline(seconds: Double) throws -> [Float] {
@@ -370,7 +447,8 @@ final class ReadAloudSession: @unchecked Sendable {
         lock.withLock {
             guard g == generation, audio.indices.contains(i) else { return }
             audio[i] = a
-            if seconds > 0.05, !a.samples.isEmpty { realTime = 0.7 * realTime + 0.3 * (a.seconds / n / seconds) }
+            // Seconds of output (at the reading's speed) made per second, as Windows learns it.
+            if seconds > 0.05, !a.samples.isEmpty { realTime = 0.7 * realTime + 0.3 * (a.seconds * n / speed / seconds) }
             let chars = speakable[i].utf16.count
             if chars > 20 { secondsPerChar = 0.7 * secondsPerChar + 0.3 * (a.seconds * n / Double(chars)) }
         }
