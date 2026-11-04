@@ -45,6 +45,11 @@ final class OverlayController {
         panel.becomesKeyOnlyIfNeeded = true
         panel.hidesOnDeactivate = false
         panel.isMovableByWindowBackground = true
+        // Tooltips while another app is in front, as Windows shows them on its never-activated overlay; and a name for
+        // VoiceOver (Windows' window Title).
+        panel.allowsToolTipsWhenApplicationIsInactive = true
+        panel.title = "Oberton overlay"
+        panel.setAccessibilityTitle("Oberton overlay")
         host = NSHostingView(rootView: AnyView(EmptyView()))
         host.sizingOptions = []
         panel.contentView = host
@@ -56,7 +61,12 @@ final class OverlayController {
             .store(in: &bag)
         // Settings › Layout moved the overlay (or the player, which can follow it): forget the dragged spot and flash
         // the pill at the new one (App.PreviewOverlay).
-        model.$settings.map { [$0.overlayPosition.rawValue, String(describing: $0.readerPosition)] }.removeDuplicates().dropFirst()
+        // A player position picked on the Read aloud page flashes too; the Layout page's "Same place as the dictation
+        // overlay" switch (the player's own position set or cleared) doesn't (LayoutPage.SamePlace_Changed).
+        model.$settings.map { PositionPair(overlay: $0.overlayPosition, reader: $0.readerPosition) }
+            .removeDuplicates()
+            .scan([PositionPair]()) { last, new in Array((last + [new]).suffix(2)) }
+            .filter { pairs in pairs.count == 2 && Self.flashes(from: pairs[0], to: pairs[1]) }
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.previewPosition() }
             .store(in: &bag)
@@ -66,6 +76,18 @@ final class OverlayController {
         NotificationCenter.default.publisher(for: NSWindow.didMoveNotification, object: panel)
             .sink { [weak self] _ in self?.moved() }
             .store(in: &bag)
+    }
+
+    struct PositionPair: Equatable {
+        var overlay: OverlayPosition
+        var reader: ReaderPosition
+    }
+
+    /// The overlay moved, or the player was given another spot of its own (not following the overlay or stopping to).
+    static func flashes(from old: PositionPair, to new: PositionPair) -> Bool {
+        if old.overlay != new.overlay { return true }
+        if case .at = old.reader, case .at = new.reader { return old.reader != new.reader }
+        return false
     }
 
     /// The screen it is on, or the one it was dragged to, or the primary one (the menu bar's), as Windows places it on

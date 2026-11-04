@@ -23,11 +23,22 @@ public enum SpeechGuard {
 
     /// True when nothing should be inserted. `recorded`: seconds the user recorded; `peakLevel`: the loudest level seen.
     public static func shouldDiscard(_ text: String, recorded: Double, peakLevel: Float) -> Bool {
-        if !text.contains(where: { $0.isLetter || $0.isNumber }) { return true }
+        if !hasLetterOrDigit(text) { return true }
         let heardSpeech = peakLevel >= speechLevel
         if recorded < shortRecording && !heardSpeech { return true }
         if isStockPhrase(text) && (recorded < phraseRecording || !heardSpeech) { return true }
         return false
+    }
+
+    /// .NET's `char.IsLetterOrDigit` over the text: a letter (any L category) or a decimal digit (Nd); "²", "½" or "Ⅻ"
+    /// alone don't count.
+    static func hasLetterOrDigit(_ text: String) -> Bool {
+        text.unicodeScalars.contains {
+            switch $0.properties.generalCategory {
+            case .uppercaseLetter, .lowercaseLetter, .titlecaseLetter, .modifierLetter, .otherLetter, .decimalNumber: true
+            default: false
+            }
+        }
     }
 
     public static func isStockPhrase(_ text: String) -> Bool {

@@ -132,6 +132,8 @@ final class AppModel: ObservableObject {
     /// Settings › Model unloading: unloads idle models (`ModelUnloading.swift`).
     let unloader = ModelUnloader()
     @Published private(set) var liveText = ""
+    /// The recognizer's latest words after the stop, shown only when a piece is committed.
+    private var latestHeard: String?
     @Published private(set) var level: Float = 0
     /// The overlay's level meter, running while recording (its own object, so its 20 redraws a second don't redraw
     /// everything that watches the model).
@@ -302,7 +304,12 @@ final class AppModel: ObservableObject {
         notes.settingsSource = { [weak self] in self.map { $0.settings.dictating(with: $0.activeProfile) } ?? loadedSettings }
         notesChange = notes.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         WhisperEngine.onChange = { [weak self] in Task { @MainActor in self?.whisperChanged() } }
-        transcriber.onText = { [weak self] in self?.liveText = $0 }
+        // The words so far: while recording as they come; after the stop only when a piece is committed (Windows
+        // RaiseTranscript), not the final pass's text or the recognizer's late guesses.
+        transcriber.onText = { [weak self] text in
+            guard let self else { return }
+            if phase == .recording { liveText = text } else { latestHeard = text }
+        }
         transcriber.onLevel = { [weak self] level in
             guard let self else { return }
             self.level = level
@@ -320,6 +327,7 @@ final class AppModel: ObservableObject {
         // Type as you speak: finished pieces are typed in order; the running guess too, for a profile without AI.
         transcriber.onPiece = { [weak self] piece in
             guard let self, self.phase == .recording || self.phase == .transcribing else { return }
+            if self.phase == .transcribing, let heard = self.latestHeard { self.liveText = heard }
             self.live?.add(piece)
         }
         transcriber.onGuess = { [weak self] guess in
@@ -421,6 +429,7 @@ final class AppModel: ObservableObject {
         insertionContext = nil
         finalPass = false
         liveText = ""
+        latestHeard = nil
         pending = nil
         receipt = nil
         historyAudio.begin()
@@ -765,7 +774,9 @@ final class AppModel: ObservableObject {
     /// Where the log is, as the notice says it (Windows: data\logs\dictation.log).
     static var logPath: String {
         let path = Log.file.path
-        let home = NSHomeDirectory()
+        // The user's own home, not the App Store build's container (whose NSHomeDirectory is inside the container), so
+        // the path shown is where the file really is.
+        let home = getpwuid(getuid()).flatMap { $0.pointee.pw_dir.map { String(cString: $0) } } ?? NSHomeDirectory()
         return path.hasPrefix(home) ? "~" + path.dropFirst(home.count) : path
     }
 
@@ -1565,30 +1576,30 @@ extension AppModel.Phase {
     }
 }
 
-/// The overlay's level meter: 22 columns of √level, oldest first, as OverlayWindow draws them. It moves on a steady
-/// 20 Hz tick while recording rather than on audio events, so it never freezes: each tick takes the loudest level heard
-/// since the last one; when nothing new came for a moment (or the microphone sends nothing), the level falls away
-/// towards a flat, calm baseline and keeps scrolling.
+/// The overlay's level meter: 22 columns of √level, oldest first, as OverlayWindow draws them: each level heard (one per
+/// 50 ms of audio) becomes one column. The levels come in bursts with each audio buffer, so they queue and a steady 20 Hz
+/// tick moves them in one at a time; when none came for a moment (the microphone sends nothing), the meter falls away
+/// towards a flat, calm baseline and keeps scrolling rather than freezing.
 @MainActor
 final class LevelMeter: ObservableObject {
     static let count = 22
     @Published private(set) var columns = [Double](repeating: 0, count: LevelMeter.count)
-    private var pending: Double?
-    private var held = 0.0
+    private var queue: [Double] = []
+    private var last = 0.0
     private var heardAt = Date.distantPast
     private var timer: Timer?
 
     /// A level from the microphone (0…1, Windows' scale).
     func hear(_ level: Float) {
-        let v = Double(min(max(level, 0), 1)).squareRoot() // perceptual: quiet speech still moves the dots
-        pending = max(pending ?? 0, v)
+        queue.append(Double(min(max(level, 0), 1)).squareRoot()) // perceptual: quiet speech still moves the dots
+        if queue.count > 4 { queue.removeFirst(queue.count - 4) } // never lag behind the voice
     }
 
     func start() {
         guard timer == nil else { return }
         columns = [Double](repeating: 0, count: Self.count)
-        pending = nil
-        held = 0
+        queue = []
+        last = 0
         let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
@@ -1599,18 +1610,19 @@ final class LevelMeter: ObservableObject {
     func stop() {
         timer?.invalidate()
         timer = nil
-        pending = nil
+        queue = []
     }
 
     func tick(now: Date = .now) {
-        if let pending {
-            held = pending
+        if !queue.isEmpty {
+            last = queue.removeFirst()
             heardAt = now
-            self.pending = nil
         } else if now.timeIntervalSince(heardAt) > 0.15 {
-            held = held * 0.6 < 0.02 ? 0 : held * 0.6 // nothing heard: settle towards flat
+            last = last * 0.6 < 0.02 ? 0 : last * 0.6 // nothing heard: settle towards flat
+        } else {
+            return // the next buffer is on its way: wait for its level rather than repeat this one
         }
         columns.removeFirst()
-        columns.append(held)
+        columns.append(last)
     }
 }

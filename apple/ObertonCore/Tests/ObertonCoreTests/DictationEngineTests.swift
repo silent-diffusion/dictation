@@ -21,6 +21,11 @@ import Testing
         #expect(!SpeechGuard.shouldDiscard("Thank you for the update, I'll reply tomorrow.", recorded: Self.long, peakLevel: 0.4))
     }
     @Test func punctuationOnlyIsDropped() { #expect(SpeechGuard.shouldDiscard("...", recorded: Self.long, peakLevel: 0.6)) }
+    /// .NET's char.IsLetterOrDigit: letters and decimal digits count; "½", "²" and Roman numerals alone don't.
+    @Test(arguments: ["½", "²", "Ⅻ", "① …"])
+    func numberSignsAloneAreDropped(_ text: String) { #expect(SpeechGuard.shouldDiscard(text, recorded: Self.long, peakLevel: 0.6)) }
+    @Test(arguments: ["7", "é", "日本", "ǅ"])
+    func lettersAndDigitsAreKept(_ text: String) { #expect(!SpeechGuard.shouldDiscard(text, recorded: Self.long, peakLevel: 0.6)) }
     @Test func subtitleCreditsAreStockPhrases() {
         #expect(SpeechGuard.isStockPhrase("Subtitles by the Amara.org community"))
         #expect(!SpeechGuard.isStockPhrase("Subtitles are on the left"))

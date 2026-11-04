@@ -79,6 +79,7 @@ struct OverlayPill: View {
             NoticePill(text: notice.text, kind: notice.kind, opacity: opacity)
         } else if phase == .preview, let pending = model.pending {
             PreviewPill(entry: pending, profile: profile.name, hotkey: hotkey, opacity: opacity, context: model.insertionContext,
+                        usesAI: !profile.isRaw,
                         onInsert: { model.confirmPreview() }, onOriginal: { model.confirmPreview(useOriginal: true) },
                         onDiscard: { model.cancel() })
         } else if phase == .placing {
@@ -389,7 +390,7 @@ private struct PillButtonBody: View {
             .font(Ob.mono(11.5, accent ? .semibold : .regular))
             .foregroundStyle(accent ? darkInk : style.kind == .ghost ? lightText.opacity(0xC8 / 255) : lightText)
             .lineLimit(1)
-            .padding(.horizontal, style.padding)
+            .padding(.horizontal, style.padding + 1) // WPF lays the padding inside the 1 pt border
             .frame(minWidth: style.height, minHeight: style.height, maxHeight: style.height)
             // Windows' PillButton template sets the faint hover fill for every style, the filled Insert one included.
             .background(shape.fill(hovering ? lightText.opacity(0x1A / 255) : accent ? lightText : .clear))
@@ -419,6 +420,7 @@ private struct PillBodyText: View {
         Text(LiveWords.tail(text, 260))
             .font(Ob.sans(15)).lineSpacing(4).foregroundStyle(color)
             .fixedSize(horizontal: false, vertical: true)
+            .padding(.vertical, 2) // WPF's LineHeight 22 holds the first and last line too
             .frame(maxWidth: .infinity, maxHeight: 112, alignment: .topLeading).clipped()
             .padding(EdgeInsets(top: 4, leading: 0, bottom: 6, trailing: 10))
     }
@@ -557,8 +559,8 @@ struct LiveWords: View {
     private static let fontHeight = UIFont.systemFont(ofSize: 14).lineHeight
     #endif
     private static let spacing = max(0, lineHeight - fontHeight)
-    /// Three lines (spacing goes between lines only), plus half a gap so rounding never cuts the last line.
-    private static let maxHeight = 3 * lineHeight - spacing / 2
+    /// Three lines (spacing goes between lines only; the half gaps above and below are padding), and a little for rounding.
+    private static let maxHeight = 3 * lineHeight - spacing + 0.5
 
     var body: some View {
         WidthCap(width: min(430, room.width)) {
@@ -570,6 +572,7 @@ struct LiveWords: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxHeight: Self.maxHeight, alignment: .bottomLeading)
                 .clipped()
+                .padding(.vertical, Self.spacing / 2) // WPF's LineHeight 21 holds the first and last line too: n × 21
         }
         .padding(EdgeInsets(top: 6, leading: 0, bottom: 4, trailing: 10))
     }
@@ -597,6 +600,8 @@ struct PreviewPill: View {
     var opacity: Double
     /// The text around the cursor, shown either side of the AI edit (none for a profile's Try it).
     var context: InsertionContext?
+    /// The profile active when the preview showed uses AI (Windows' `usesAi = Active.AutoProcess`); nil: as the entry says.
+    var usesAI: Bool?
     var onInsert: () -> Void = {}
     var onOriginal: () -> Void = {}
     var onDiscard: () -> Void = {}
@@ -610,7 +615,7 @@ struct PreviewPill: View {
             PillRow(indicator: .check, chip: profile) { Text("READY TO INSERT") }
             // The diff is between what was heard and what goes in; a profile without AI has none. One with AI shows it
             // even when the AI failed or changed nothing (an unchanged diff), as on Windows (`usesAi`).
-            CompareBoxes(raw: entry.transcription, edit: entry.model == nil ? nil : entry.inserted, inserted: entry.inserted,
+            CompareBoxes(raw: entry.transcription, edit: (usesAI ?? (entry.model != nil)) ? entry.inserted : nil, inserted: entry.inserted,
                          noEdit: "No AI edit: this profile doesn't use AI.", context: context, stacked: stacked, focus: true, width: inner - 10)
                 .padding(EdgeInsets(top: 6, leading: 0, bottom: 8, trailing: 10))
             HStack(spacing: 8) {
@@ -762,7 +767,7 @@ struct ReceiptPill: View {
                 Text(title)
             } middle: {
                 if !noted {
-                    Text("\(entry.words) \(entry.words == 1 ? "WORD" : "WORDS") // \(String(format: "%.1f", entry.turnaroundSeconds)) S")
+                    Text("\(entry.words) \(entry.words == 1 ? "WORD" : "WORDS") // \(Self.seconds(entry.turnaroundSeconds)) S")
                         .font(Ob.mono(11.5)).foregroundStyle(mutedText).lineLimit(1).truncationMode(.tail)
                 }
             }
@@ -795,8 +800,13 @@ struct ReceiptPill: View {
         #endif
     }
 
-    /// The AI's edit is shown as a diff unless there was none: no AI, or the AI's words were not used at all.
-    private var hasEdit: Bool { entry.aiEdit != nil && !(entry.warning != nil && !edited) }
+    /// "1.2" or "1,2" as the region writes it (.NET's {0:0.0} in the current culture: half away from zero).
+    static func seconds(_ s: Double) -> String {
+        s.formatted(.number.precision(.fractionLength(1)).rounded(rule: .awayFromZero).grouping(.never))
+    }
+
+    /// The AI's edit is shown as a diff whenever there is one (Windows: `AiEdit != null`, set when the AI changed the text).
+    private var hasEdit: Bool { entry.aiEdit != nil }
 }
 
 // MARK: The three boxes
@@ -867,7 +877,9 @@ struct CompareBoxes: View {
                 OverlayText(text: .diff(raw, trimmed, accent: Color(hex: ob.accentChoice.hex.dark), context: context), maxHeight: maxHeight,
                             selection: selections[1])
             } else {
-                Text(noEdit).font(Ob.sans(14)).foregroundStyle(mutedText).fixedSize(horizontal: false, vertical: true)
+                // In the same selectable box, on its 21 pt lines (Windows' paragraph, muted).
+                OverlayText(text: OverlayRichText(runs: [(noEdit, .plain)], color: mutedText, isDiff: true), maxHeight: maxHeight,
+                            selection: selections[1])
             }
         }
         .frame(width: width, alignment: .topLeading)
@@ -880,7 +892,8 @@ struct CompareBoxes: View {
         return box("03 // INSERTED", name: "Copy Inserted", label: focus ? lightText : dimText, copy: { selections[2].selected() ?? text }) {
             OverlayText(text: .plain(text, color: lightText, size: focus ? 15.5 : 14), maxHeight: maxHeight, selection: selections[2])
         }
-        .padding(focus ? EdgeInsets(top: 10, leading: 14, bottom: 12, trailing: 14) : EdgeInsets())
+        // Inside the frame's 1 pt border, which is there (transparent) even when it isn't focused, as WPF lays it out.
+        .padding(focus ? EdgeInsets(top: 11, leading: 15, bottom: 13, trailing: 15) : EdgeInsets(top: 1, leading: 1, bottom: 1, trailing: 1))
         .background(shape.fill(focus ? lightText.opacity(0x1F / 255) : .clear))
         .overlay(shape.strokeBorder(focus ? lightText.opacity(0x66 / 255) : .clear, lineWidth: 1))
         .frame(width: width, alignment: .topLeading)
@@ -921,7 +934,7 @@ private struct CopyLink: View {
             Task { try? await Task.sleep(for: .seconds(1.4)); copied = false }
         } label: {
             Text(copied ? "COPIED ✓" : "COPY").font(Ob.mono(10.5)).foregroundStyle(lightText.opacity(0.8))
-                .padding(.horizontal, 8).padding(.vertical, 1)
+                .padding(.horizontal, 9).padding(.vertical, 2) // 8,1 inside the 1 pt border
                 .background(Capsule().fill(hovering ? Color.white.opacity(0x1A / 255) : .clear))
                 .overlay(Capsule().strokeBorder(darkLine, lineWidth: 1))
                 .contentShape(Capsule())
@@ -1066,9 +1079,10 @@ struct OverlayText: NSViewRepresentable {
         let scroll = NSScrollView()
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
+        // Windows' box shows its light scrollbar for as long as the text overflows (VerticalScrollBarVisibility Auto).
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
-        scroll.scrollerStyle = .overlay
+        scroll.scrollerStyle = .legacy
         scroll.scrollerKnobStyle = .light
         let view = OverlayTextView(usingTextLayoutManager: false)
         view.isEditable = false
@@ -1116,6 +1130,20 @@ struct OverlayText: NSViewRepresentable {
 private final class OverlayTextView: NSTextView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override var mouseDownCanMoveWindow: Bool { false }
+
+    /// A read-only WPF box's menu: Cut, Copy, Paste, with only Copy enabled (and only with a selection).
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        for (title, action, on) in [("Cut", #selector(cut(_:)), false), ("Copy", #selector(copy(_:)), selectedRange().length > 0),
+                                    ("Paste", #selector(paste(_:)), false)] {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self
+            item.isEnabled = on
+            menu.addItem(item)
+        }
+        return menu
+    }
 }
 #else
 /// A box's text on iPhone: selectable, scrolling past `maxHeight`. COPY copies the whole box.
@@ -1161,6 +1189,8 @@ private struct OverlayHandCursor: ViewModifier {
                 if inside, on, !pushed { NSCursor.pointingHand.push(); pushed = true }
                 else if !inside, pushed { NSCursor.pop(); pushed = false }
             }
+            // Turned off under the pointer (the receipt opened): the arrow is back at once (Windows' Card.Cursor = null).
+            .onChange(of: on) { _, on in if !on, pushed { NSCursor.pop(); pushed = false } }
             .onDisappear { if pushed { NSCursor.pop(); pushed = false } }
     }
 }

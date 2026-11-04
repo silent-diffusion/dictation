@@ -609,20 +609,32 @@ final class WhisperDictation: @unchecked Sendable {
         if live, !pieces.isEmpty {
             let rest = Array(all[min(start, all.count)...])
             var tail = ""
+            var tailFailed = false
             if rest.count >= 16_000 * 3 / 10 {
                 let committedText = pieces.joined(separator: " ")
-                let heard = try? await WhisperEngine.shared.transcribeTimed(rest, model: model, language: language,
-                                                                            prompt: WhisperText.prompt(vocabulary: prompt, committed: committedText),
-                                                                            final: true, dropPhantoms: true, even: even)
+                let heard: (text: String, words: [SpokenWord])?
+                do {
+                    heard = try await WhisperEngine.shared.transcribeTimed(rest, model: model, language: language,
+                                                                           prompt: WhisperText.prompt(vocabulary: prompt, committed: committedText),
+                                                                           final: true, dropPhantoms: true, even: even)
+                } catch {
+                    heard = nil
+                    tailFailed = true
+                }
                 tail = WhisperText.newText(heard?.text ?? "", after: committedText)
                 // Only the tail was decoded at the end (the pieces had no word times): its words, timed from the
                 // recording's start.
                 let offset = Double(start) / 16_000
                 lock.withLock { finalWords = (heard?.words ?? []).map { SpokenWord(text: $0.text, start: $0.start + offset, end: $0.end + offset) } }
             }
-            let text = FragmentStitcher.join(pieces + [tail])
-            onText(text)
-            return (text, tail)
+            // The speech after the last piece couldn't be decoded: rather than lose it, the whole recording is decoded
+            // at once below (Windows falls back to the whole when the pieces don't match the final text).
+            if !tailFailed {
+                let text = FragmentStitcher.join(pieces + [tail])
+                onText(text)
+                return (text, tail)
+            }
+            NSLog("Whisper: the live tail failed; decoding the whole recording")
         }
         do {
             let heard = try await WhisperEngine.shared.transcribeTimed(all, model: model, language: language, prompt: prompt, final: true,
