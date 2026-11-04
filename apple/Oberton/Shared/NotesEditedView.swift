@@ -16,6 +16,9 @@ struct EditedTextView {
     var session: NoteSession
     var revision: Int
     var live: Bool
+    /// Whether the Edited tab shows. The view lives on while another tab shows, so it keeps its scroll position; it is
+    /// built only while shown, and again at once when it shows (NotesPage builds it on the tab's switch).
+    var shown = true
     /// The right-click item for the moment of a run (nil: no moment there).
     var jump: (Double?) -> MarkdownJump
 
@@ -23,7 +26,8 @@ struct EditedTextView {
 
     fileprivate func update(_ c: EditedTextController, palette: Palette) {
         c.jump = jump
-        c.show(session, revision: revision, live: live, palette: palette)
+        c.setShown(shown)
+        if shown { c.show(session, revision: revision, live: live, palette: palette) }
     }
 }
 
@@ -47,10 +51,28 @@ final class EditedTextController: NSObject {
     static func userInk(_ ob: Palette) -> PlatformColor { PlatformColor(EditedText.userInk(ob)) }
     static func userWash(_ ob: Palette) -> PlatformColor { PlatformColor(EditedText.userWash(ob)) }
 
+    private var isShown = true
+    /// It has just shown again: built at once, however recently it was built.
+    private var justShown = false
+
+    func setShown(_ shown: Bool) {
+        guard shown != isShown else { return }
+        isShown = shown
+        if shown { justShown = true } else { pending?.cancel(); pending = nil }
+        #if os(macOS)
+        if !shown, let tv = textView, tv.window?.firstResponder === tv { tv.window?.makeFirstResponder(nil) }
+        textView?.enclosingScrollView?.isHidden = !shown
+        #else
+        textView?.isHidden = !shown
+        #endif
+    }
+
     func show(_ s: NoteSession, revision: Int, live: Bool, palette: Palette) {
         let key = (ObjectIdentifier(s), revision, palette.dark, palette.accentChoice)
+        let now = justShown
+        justShown = false
         if let b = built, b.session == key.0, b.revision == key.1, b.dark == key.2, b.accent == key.3 { return }
-        let lookChanged = built.map { $0.dark != palette.dark || $0.accent != palette.accentChoice || $0.session != key.0 } ?? true
+        let lookChanged = now || (built.map { $0.dark != palette.dark || $0.accent != palette.accentChoice || $0.session != key.0 } ?? true)
         // While the session records, at most every 4 s (an hour of notes stays quick to show).
         let wait = live && !lookChanged ? 4 - Date().timeIntervalSince(builtAt) : 0
         pending?.cancel()
@@ -86,7 +108,8 @@ final class EditedTextController: NSObject {
         let para = look.paragraph(lineHeight: 24, after: 12)
         let base: [NSAttributedString.Key: Any] = [.font: look.sans(14.5), .foregroundColor: look.ink, .paragraphStyle: para]
         let out = NSMutableAttributedString()
-        if pieces.isEmpty {
+        // Nothing but plain paragraph breaks makes no paragraph either (NotesPage: `doc.Blocks.Count == 0`).
+        if pieces.allSatisfy({ $0.mark == .paragraph }) {
             out.append(NSAttributedString(string: "Nothing yet: changes show here once the AI has formatted some text or you have edited it.",
                                           attributes: base.merging([.foregroundColor: look.muted]) { $1 }))
             return out

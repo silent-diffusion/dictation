@@ -25,6 +25,9 @@ struct MarkdownEditor {
     var size: CGFloat
     var label: String
     var inset = CGSize(width: 14, height: 12)
+    /// Whether its tab is showing. A view hidden keeps its scroll position and cursor for when it shows again; its open
+    /// line is rendered again and it gives up the keyboard (MarkdownPresenter.Shown).
+    var shown = true
     var onEdit: (String) -> Void
     /// Where the cursor is (UTF-16), for the Play button and the Summary's match.
     var onCaret: ((Int) -> Void)? = nil
@@ -41,6 +44,7 @@ struct MarkdownEditor {
         c.jump = jump
         c.setLook(MarkdownLook(size: size, palette: palette))
         c.setText(text)
+        c.setShown(shown)
         c.setPlayback(playback)
     }
 }
@@ -221,6 +225,24 @@ final class MarkdownEditorController: NSObject {
         closed = true
         setOpen(nil)
         refreshCaret()
+    }
+
+    private var isShown = true
+
+    /// Its tab shows or hides.
+    func setShown(_ shown: Bool) {
+        guard shown != isShown else { return }
+        isShown = shown
+        #if os(macOS)
+        guard let tv = textView, let scroll = tv.enclosingScrollView else { return }
+        if !shown, tv.window?.firstResponder === tv { tv.window?.makeFirstResponder(nil) }
+        scroll.isHidden = !shown
+        #else
+        guard let tv = textView else { return }
+        if !shown, tv.isFirstResponder { _ = tv.resignFirstResponder() }
+        tv.isHidden = !shown
+        #endif
+        if !shown { escape() }
     }
 
     /// Typing while nothing is open: it goes on at the end of the text.

@@ -12,12 +12,16 @@ import AppKit
 struct NotesView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var nav: Navigator
+    /// The search and the tab chosen live as long as the page (Windows' NotesPage keeps its SearchBox and tab pills):
+    /// back from a session the list is still filtered, and the next session opens on the same tab.
+    @State private var search = ""
+    @State private var tab = NoteSessionView.snapshotTab
 
     var body: some View {
         if let id = nav.place.noteSessionID, let s = model.notes.store.sessions.first(where: { $0.id == id }) {
-            NoteSessionView(session: s).id(id)
+            NoteSessionView(session: s, tab: $tab).id(id)
         } else {
-            NotesLanding()
+            NotesLanding(search: $search)
         }
     }
 }
@@ -28,7 +32,7 @@ struct NotesLanding: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var nav: Navigator
     @Environment(\.ob) private var ob
-    @State private var search = ""
+    @Binding var search: String
     @State private var starting = false
     @State private var problem: String?
     @State private var deleting: NoteSession?
@@ -36,7 +40,36 @@ struct NotesLanding: View {
     private var notes: NotesRecorder { model.notes }
 
     var body: some View {
-        PageScroll {
+        landing
+        .task { await notes.keepIdleModel() }
+        .alert(NotesDialog.title, isPresented: Binding(get: { problem != nil }, set: { if !$0 { problem = nil } })) {
+            Button("OK") { problem = nil }
+        } message: { Text(problem ?? "") }
+        .alert(NotesDialog.title, isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
+            Button("Yes") { if let d = deleting { notes.store.delete(d); model.objectWillChange.send() }; deleting = nil }
+            Button("No", role: .cancel) { deleting = nil }
+        } message: { Text("Delete \"\(deleting?.title ?? "")\" with its recording? This can't be undone.") }
+    }
+
+    /// Windows docks everything above the list at the top and scrolls only the list, so the start button, the model
+    /// and the search box stay on screen however long the list grows. (The snapshots and the iPhone scroll it all.)
+    @ViewBuilder private var landing: some View {
+        let margins = EdgeInsets(top: 20, leading: 28, bottom: 16, trailing: 28)
+        #if os(macOS)
+        if !PageScroll<EmptyView>.flat {
+            VStack(alignment: .leading, spacing: 0) {
+                top.padding(EdgeInsets(top: margins.top, leading: margins.leading, bottom: 0, trailing: margins.trailing))
+                ScrollView { list.padding(EdgeInsets(top: 0, leading: margins.leading, bottom: margins.bottom, trailing: margins.trailing)) }
+            }
+        } else {
+            PageScroll { VStack(alignment: .leading, spacing: 0) { top; list }.padding(margins) }
+        }
+        #else
+        PageScroll { VStack(alignment: .leading, spacing: 0) { top; list }.padding(margins) }
+        #endif
+    }
+
+    private var top: some View {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(alignment: .bottom, spacing: 12) {
                     Text("EXTENDED NOTES").font(Ob.mono(30, .bold))
@@ -44,7 +77,6 @@ struct NotesLanding: View {
                 }
                 Rule().padding(.vertical, 6)
                 Caption("Leave it on through a lecture or a meeting. It transcribes as it goes, tidies the text with the AI about every minute, keeps a running summary and the recording, and you can type your own notes straight into the text. Everything stays on this \(Device.noun).")
-                    .padding(.bottom, 12)
                 // LISTEN opens the microphone's page; the speech and AI steps open Models, as on Windows.
                 NotesPipelineView(steps: NotesSteps.live(model, chosen: chosenSource),
                                   open: [{ nav.goSettings(.microphone) }, { nav.goSettings(.models) }, { nav.goSettings(.models) }, { nav.goSettings(.models) }])
@@ -60,18 +92,7 @@ struct NotesLanding: View {
                         .accessibilityLabel("Search the sessions")
                 }
                 .padding(.top, 22).padding(.bottom, 8)
-                list
             }
-            .padding(EdgeInsets(top: 20, leading: 28, bottom: 16, trailing: 28))
-        }
-        .task { await notes.keepIdleModel() }
-        .alert(NotesDialog.title, isPresented: Binding(get: { problem != nil }, set: { if !$0 { problem = nil } })) {
-            Button("OK") { problem = nil }
-        } message: { Text(problem ?? "") }
-        .alert(NotesDialog.title, isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
-            Button("Yes") { if let d = deleting { notes.store.delete(d); model.objectWillChange.send() }; deleting = nil }
-            Button("No", role: .cancel) { deleting = nil }
-        } message: { Text("Delete \"\(deleting?.title ?? "")\" with its recording? This can't be undone.") }
     }
 
     private var chosenSource: NotesSource {
@@ -92,12 +113,14 @@ struct NotesLanding: View {
                         Task {
                             do {
                                 try await notes.start(source: chosenSource)
-                                if let s = notes.current { nav.goNotes(s.id) }
+                                // Opened only if Extended Notes is still the page showing (Windows opens it on its own
+                                // page, so moving to History meanwhile leaves you there).
+                                if let s = notes.current, nav.place.section == .notes { nav.goNotes(s.id) }
                             } catch let e as UserFacingError {
-                                problem = e.localizedDescription
+                                NotesDialog.warn(e.localizedDescription) { problem = $0 }
                             } catch {
                                 Log.error("Starting extended notes failed: \(error)")
-                                problem = "Extended notes couldn't start. See the log for details."
+                                NotesDialog.warn("Extended notes couldn't start. See the log for details.") { problem = $0 }
                             }
                             starting = false
                         }
@@ -178,7 +201,8 @@ struct NotesLanding: View {
         let q = search.trimmed
         let sessions = notes.store.sessions.filter { q.isEmpty || [$0.title, $0.transcript, $0.summary].contains { $0.range(of: q, options: .caseInsensitive) != nil } }
         if sessions.isEmpty {
-            Caption(q.isEmpty ? "No sessions yet. Start one above and it appears here." : "No session matches.").padding(.top, 6).padding(.leading, 2)
+            // Margin 2,6,0,0 replaces the Caption style's bottom 12 (NotesPage.xaml.cs:168).
+            Caption(q.isEmpty ? "No sessions yet. Start one above and it appears here." : "No session matches.", bottom: 0).padding(.top, 6).padding(.leading, 2)
         } else {
             VStack(spacing: 0) { ForEach(sessions) { row($0) } }
         }
@@ -250,17 +274,19 @@ struct NoteRow: View {
 
 struct NoteSessionView: View {
     let session: NoteSession
+    /// The tab showing; it stays chosen for the next session opened (NotesView keeps it).
+    @Binding var tab: Tab
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var nav: Navigator
     @Environment(\.ob) private var ob
     @StateObject private var player = NotesPlayer()
-    @State private var tab = Self.snapshotTab
-    /// The tab a session opens on (the debug snapshots set it).
+    /// The tab the page first opens on (the debug snapshots set it).
     static var snapshotTab = Tab.transcript
     @State private var renaming = false
     @State private var title = ""
-    /// Where the cursor is in the tab's text (UTF-16), for the Play button.
-    @State private var caretOffset: Int?
+    /// Where the cursor is in each tab's text (UTF-16), for the Play button: each tab keeps its own, as each of
+    /// Windows' text boxes does.
+    @State private var carets: [Tab: Int] = [:]
     @State private var copied: String?
     @State private var copiedTurn = 0
     @State private var problem: String?
@@ -288,7 +314,7 @@ struct NoteSessionView: View {
                               open: [.transcribe, .transcribe, .format, .summary].map { step in { ask(step) } })
                 .padding(.bottom, 8)
             HStack(spacing: 0) {
-                ForEach(Tab.allCases, id: \.self) { t in Pill(t.rawValue, on: tab == t) { tab = t; caretOffset = nil }.padding(.trailing, 4) }
+                ForEach(Tab.allCases, id: \.self) { t in Pill(t.rawValue, on: tab == t) { tab = t }.padding(.trailing, 4) }
                 Spacer()
                 Readout(hint, size: 10).lineLimit(1)
             }
@@ -425,32 +451,49 @@ struct NoteSessionView: View {
     }
 
     @ViewBuilder private var content: some View {
-        if tab == .edited {
-            VStack(alignment: .leading, spacing: 8) {
-                if PageScroll<EmptyView>.flat {
+        if PageScroll<EmptyView>.flat {
+            if tab == .edited {
+                VStack(alignment: .leading, spacing: 8) {
                     // The snapshot renderer can't draw a text view: the same text in SwiftUI.
                     EditedText(session: session, revision: notes.revision).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                         .padding(.horizontal, 10).padding(.vertical, 8).clipped()
                         .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
-                } else {
-                    EditedTextView(session: session, revision: notes.revision, live: live) { seconds in jumpItem(seconds: seconds) }
-                        .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
+                    EditedLegend()
                 }
-                EditedLegend()
+            } else {
+                // The snapshot renderer can't draw a text view: the text as it reads.
+                MarkdownReadingView(text: text, size: 14.5).padding(EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).clipped()
+                    .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
             }
-        } else if PageScroll<EmptyView>.flat {
-            // The snapshot renderer can't draw a text view: the text as it reads.
-            MarkdownReadingView(text: text, size: 14.5).padding(EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14))
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).clipped()
-                .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
         } else {
-            // Read as Markdown; a click opens that line as plain text to edit (typing goes on at the end).
-            MarkdownEditor(text: text, size: 14.5, label: tab.rawValue, onEdit: edit, onCaret: { caretOffset = $0 }, jump: jumpItem,
-                           playback: playback)
-                .id(tab)
-                .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
+            // Read as Markdown; a click opens that line as plain text to edit (typing goes on at the end). One view per
+            // text, and the Edited view, all kept while another tab shows, so each keeps its own scroll position and
+            // cursor (only the tab showing takes clicks and the keyboard; a tab hidden renders its open line again, as
+            // MarkdownPresenter.Shown does).
+            ZStack(alignment: .topLeading) {
+                ZStack {
+                    ForEach([Tab.transcript, .formatted, .summary], id: \.self) { t in
+                        let doc = Self.doc(t)
+                        MarkdownEditor(text: text(doc), size: 14.5, label: t.rawValue, shown: tab == t,
+                                       onEdit: { edit($0, doc) }, onCaret: { carets[t] = $0 }, jump: { jumpItem($0, doc) },
+                                       playback: tab == t ? playback : nil)
+                    }
+                }
+                .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1).opacity(tab == .edited ? 0 : 1))
+                VStack(alignment: .leading, spacing: 8) {
+                    EditedTextView(session: session, revision: notes.revision, live: live, shown: tab == .edited) { seconds in jumpItem(seconds: seconds) }
+                        .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
+                    EditedLegend()
+                }
+                .opacity(tab == .edited ? 1 : 0)
+                .allowsHitTesting(tab == .edited)
+                .accessibilityHidden(tab != .edited)
+            }
         }
     }
+
+    static func doc(_ t: Tab) -> NoteDoc { t == .formatted ? .formatted : t == .summary ? .summary : .transcript }
 
     /// While the recording plays, the word being said is lit: in the transcript and the formatted text, and in the
     /// summary where a phrase of it was said. Sessions from before word times were kept play unlit.
@@ -461,13 +504,15 @@ struct NoteSessionView: View {
     }
 
     /// The tab's text, as the session has it now.
-    private var text: String {
+    private var text: String { text(doc) }
+
+    private func text(_ doc: NoteDoc) -> String {
         _ = notes.revision
         return session.get(doc)
     }
 
     /// Typing edits the session (anchors and formatting marks move with it) and saves a moment later.
-    private func edit(_ new: String) {
+    private func edit(_ new: String, _ doc: NoteDoc) {
         session.set(doc, new, source: nil)
         model.objectWillChange.send()
         // The recorder saves its own session; the user's edits of a finished one are saved here, after a pause.
@@ -479,18 +524,17 @@ struct NoteSessionView: View {
     // MARK: Jump to this moment
 
     /// The right-click item: the moment the text there was said (the Summary leads to its section by its words).
-    private func jumpItem(_ at: Int) -> MarkdownJump? {
-        let seconds = doc == .summary ? session.summaryMoment(session.summary, caret: at) : session.secondsAt(doc, at)
-        // Play (▶) then goes on from here rather than from the cursor's own moment (the Summary has no cursor moment).
-        return jumpItem(seconds: seconds, caretSeconds: doc == .summary ? nil : session.secondsAt(doc, at))
+    private func jumpItem(_ at: Int, _ doc: NoteDoc) -> MarkdownJump? {
+        jumpItem(seconds: doc == .summary ? session.summaryMoment(session.summary, caret: at) : session.secondsAt(doc, at))
     }
 
-    /// The Jump item for a moment (the Edited tab's runs, or a place in a text).
-    private func jumpItem(seconds: Double?, caretSeconds: Double? = nil) -> MarkdownJump {
+    /// The Jump item for a moment (the Edited tab's runs, or a place in a text). Play (▶) then goes on from there,
+    /// until the cursor moves again (NotesPage.PlayFrom notes the cursor as it is).
+    private func jumpItem(seconds: Double?) -> MarkdownJump {
         let title = live ? "Jump to this moment in the recording (once the session has stopped)"
             : seconds.map { "Jump to this moment in the recording  ·  \(Self.length($0))" } ?? "Jump to this moment in the recording"
         return MarkdownJump(title: title, enabled: seconds != nil && !live && hasRecording) {
-            if let seconds { player.play(at: seconds, session, caretSeconds: caretSeconds) }
+            if let seconds { player.play(at: seconds, session, caret: caret) }
         }
     }
 
@@ -499,8 +543,11 @@ struct NoteSessionView: View {
         saveSoon?.cancel()
     }
 
-    /// Where the cursor is in the tab's text, in UTF-16 units.
-    private var caret: Int? { caretOffset.map { min($0, session.get(doc).utf16.count) } }
+    /// Where the cursor is in the tab's text, in UTF-16 units; none on the Summary and Edited tabs (Windows' ActiveBox).
+    private var caret: Int? {
+        guard tab == .transcript || tab == .formatted else { return nil }
+        return carets[tab].map { min($0, session.get(doc).utf16.count) }
+    }
 
     // MARK: Export
 
@@ -621,10 +668,10 @@ struct NoteSessionView: View {
             do { try await notes.redo(session, step) } catch is CancellationError {
                 Log.info("Extended notes: redo stopped")
             } catch let e as UserFacingError {
-                problem = e.localizedDescription
+                NotesDialog.warn(e.localizedDescription) { problem = $0 }
             } catch {
                 Log.error("Extended notes: redoing a step failed: \(error)")
-                problem = "Redoing that step failed. See the log for details."
+                NotesDialog.warn("Redoing that step failed. See the log for details.") { problem = $0 }
             }
         }
     }
@@ -635,7 +682,7 @@ struct NoteSessionView: View {
         HStack(spacing: 12) {
             Button {
                 // The Summary and Edited tabs have no cursor moment: Play goes on from where it is.
-                if player.playing { player.pause() } else { player.play(from: tab == .summary ? nil : caret.map { session.secondsAt(doc, $0) }, session) }
+                if player.playing { player.pause() } else { let doc = doc; player.play(caret: caret, at: { session.secondsAt(doc, $0) }, session) }
             } label: {
                 PlayFace(playing: player.playing)
             }
@@ -695,7 +742,31 @@ struct ExportFile: FileDocument {
 }
 
 /// Windows' MessageBox title (AppInfo.Name) on every message of this page.
-enum NotesDialog { static let title = "Oberton" }
+@MainActor
+enum NotesDialog {
+    static let title = "Oberton"
+
+    /// A warning that may come after the page was left (a start or a redo finishing later): Windows' MessageBox shows
+    /// it whatever page is open, so on the Mac it goes up on the main window as an alert of its own, with the warning
+    /// badge. `fallback` shows it in the page instead (iPhone and iPad).
+    static func warn(_ message: String, fallback: (String) -> Void) {
+        #if os(macOS)
+        guard !PageScroll<EmptyView>.flat else { fallback(message); return }
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "OK")
+        if let window = NSApp.mainWindow ?? NSApp.windows.first(where: { $0.isVisible && $0.canBecomeMain }) {
+            alert.beginSheetModal(for: window)
+        } else {
+            alert.runModal()
+        }
+        #else
+        fallback(message)
+        #endif
+    }
+}
 
 /// The Play button: a 36×36 ink circle with the play or pause glyph (PrimaryButton, Width 36, Height 36).
 private struct PlayFace: View {
@@ -745,7 +816,7 @@ struct EditedText: View {
 
     var body: some View {
         let pieces = NotesEdits.build(session)
-        if pieces.isEmpty {
+        if pieces.allSatisfy({ $0.mark == .paragraph }) {
             Text("Nothing yet: changes show here once the AI has formatted some text or you have edited it.").font(Ob.sans(14.5)).foregroundStyle(ob.muted)
         } else {
             // Paragraphs 12 apart, lines about 24 pt (the app shows `EditedTextView`; this is the snapshots' stand-in).
@@ -809,16 +880,27 @@ struct EditedText: View {
 struct EditedLegend: View {
     @Environment(\.ob) private var ob
 
+    /// A WrapPanel of items with Margin 0,0,18,4: an item wraps when it and its 18 after it don't fit, and the last
+    /// row keeps its 4 below.
     var body: some View {
-        FlowRow(spacing: 18, lineSpacing: 4, top: true) {
+        FlowRow(spacing: 18, lineSpacing: 4, top: true, marginWraps: true) {
             ForEach([("Removed by AI", EditMark.aiRemoved), ("Added by AI", .aiAdded)], id: \.0) { item($0.0, $0.1) }
             Text("¶ PARAGRAPH BREAK BY AI").font(Ob.mono(10.5)).foregroundStyle(ob.muted)
             ForEach([("Removed by you", EditMark.userRemoved), ("Changed by you", .userChanged), ("Note typed by you", .userNote)], id: \.0) { item($0.0, $0.1) }
         }
+        .padding(.bottom, 4)
     }
 
-    private func item(_ label: String, _ mark: EditMark) -> some View {
-        Text(EditedText.styled(label.uppercased(), mark, ob: ob)).font(Ob.mono(10.5))
+    private static func unstruck(_ a: AttributedString) -> AttributedString { var a = a; a.strikethroughStyle = nil; return a }
+
+    @ViewBuilder private func item(_ label: String, _ mark: EditMark) -> some View {
+        if mark == .userRemoved {
+            // The same 2-px line through the middle as in the text (SwiftUI's strikethrough has one weight).
+            Text(Self.unstruck(EditedText.styled(label.uppercased(), mark, ob: ob))).font(Ob.mono(10.5))
+                .overlay { Rectangle().fill(EditedText.userInk(ob)).frame(height: 2) }
+        } else {
+            Text(EditedText.styled(label.uppercased(), mark, ob: ob)).font(Ob.mono(10.5))
+        }
     }
 }
 
@@ -1072,13 +1154,16 @@ struct FlowRow: Layout {
     var lineSpacing: CGFloat = 6
     /// Items at the top of their line (WPF's WrapPanel), not centred in it.
     var top = false
+    /// The spacing is each item's own right margin (WPF Margin): an item goes to the next line when it and its margin
+    /// don't fit.
+    var marginWraps = false
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let width = proposal.width ?? .infinity
         var x: CGFloat = 0, y: CGFloat = 0, line: CGFloat = 0, widest: CGFloat = 0
         for v in subviews {
             let s = v.sizeThatFits(.unspecified)
-            if x > 0 && x + s.width > width { y += line + lineSpacing; x = 0; line = 0 }
+            if x > 0 && x + s.width + (marginWraps ? spacing : 0) > width { y += line + lineSpacing; x = 0; line = 0 }
             x += s.width + spacing
             line = max(line, s.height)
             widest = max(widest, x - spacing)
@@ -1095,7 +1180,7 @@ struct FlowRow: Layout {
         }
         for v in subviews {
             let s = v.sizeThatFits(.unspecified)
-            if x > bounds.minX && x + s.width > bounds.maxX { flush(); y += line + lineSpacing; x = bounds.minX; line = 0 }
+            if x > bounds.minX && x + s.width + (marginWraps ? spacing : 0) > bounds.maxX { flush(); y += line + lineSpacing; x = bounds.minX; line = 0 }
             row.append((v, s, x))
             x += s.width + spacing
             line = max(line, s.height)
@@ -1189,7 +1274,9 @@ final class NotesPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     /// The readout and the slider (400 ms, as Windows' page tick) and Skip silences (120 ms).
     private var tick: Timer?
     private var skipTick: Timer?
-    private var lastCaret: Double?
+    /// The cursor (UTF-16, in the tab's text) Play last started from: Play seeks only once it has moved
+    /// (NotesPage's `_lastPlayCaret`, an index, so a click elsewhere in the same piece seeks again).
+    private var lastCaret: Int?
     private var failed = false
     /// A moment to start from once the recording is ready (a seek or jump before then).
     private var pendingSeek: Double?
@@ -1225,18 +1312,18 @@ final class NotesPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
     /// Play; from the moment the text at the cursor was said, if the cursor moved since the last play. Not ready yet:
     /// made ready, then played.
-    func play(from caretSeconds: Double?, _ s: NoteSession) {
+    func play(caret: Int?, at seconds: (Int) -> Double, _ s: NoteSession) {
         guard let player else { autoPlay = true; prepare(s); return }
-        if let caretSeconds, caretSeconds != lastCaret {
-            lastCaret = caretSeconds
-            player.currentTime = caretSeconds
+        if let caret, caret != lastCaret {
+            lastCaret = caret
+            player.currentTime = seconds(caret)
         }
         start()
     }
 
     /// Jump to a moment and play from there (the right-click menu); the recording is made ready first if need be.
-    func play(at seconds: Double, _ s: NoteSession, caretSeconds: Double? = nil) {
-        lastCaret = caretSeconds ?? lastCaret
+    func play(at seconds: Double, _ s: NoteSession, caret: Int?) {
+        lastCaret = caret
         guard let player else {
             pendingSeek = seconds
             position = seconds
