@@ -111,7 +111,11 @@ final class Navigator: ObservableObject {
     /// When the page now opening was asked for, for "Page X took N ms to show" (MainWindow.ShowPage).
     var pageAskedAt: Date?
 
-    init(place: Place = Place()) { self.place = place }
+    /// The first page is timed too: Windows' constructor selects the Dashboard entry, which builds and times it.
+    init(place: Place = Place()) {
+        self.place = place
+        pageAskedAt = .now
+    }
 
     /// A page from the sidebar, opened fresh as Windows builds a new page: Settings on GENERAL, Extended Notes on its
     /// landing page. The page already shown stays as it is (its sidebar entry is already selected).
@@ -255,6 +259,7 @@ struct RootView: View {
         .background(ob.paper.ignoresSafeArea())
         .environmentObject(nav)
         .onChange(of: nav.place.section) { _, section in logPageTime(section) }
+        .onAppear { logPageTime(nav.place.section) }
         // About a quarter second, cubic ease-out, as Windows moves it frame by frame.
         .animation(.timingCurve(0.33, 1, 0.68, 1, duration: 0.26), value: sidebarOpen)
         // ⌘, and the menu bar's "Check for updates…" open a Settings section (also when they opened this window).
@@ -432,8 +437,9 @@ struct Sidebar: View {
             // MainWindow's ListBox "Sections": one Tab stop (the chosen entry), ↑/↓ move the choice and open the page.
             VStack(spacing: 2) {
                 ForEach(Section.allCases, id: \.self) { s in
+                    // A click chooses the entry and gives it the focus, as a ListBoxItem takes it on a click.
                     NavCapsule(title: s.title, japanese: s.japanese, icon: s, selected: nav.place.section == s,
-                               tabStop: nav.place.section == s, claimFocus: arrowMoved && nav.place.section == s) { nav.open(s) }
+                               tabStop: nav.place.section == s, claimFocus: arrowMoved && nav.place.section == s) { choose(s) }
                 }
             }
             #if os(macOS)
@@ -441,12 +447,14 @@ struct Sidebar: View {
                 let all = Section.allCases
                 guard let i = all.firstIndex(of: nav.place.section) else { return }
                 let next = direction == .down ? i + 1 : direction == .up ? i - 1 : i
-                if next != i, all.indices.contains(next) {
-                    // The focus follows the choice, as in a ListBox.
-                    arrowMoved = true
-                    nav.open(all[next])
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { arrowMoved = false }
-                }
+                if next != i, all.indices.contains(next) { choose(all[next]) }
+            }
+            // A ListBox's other keys: Home / End, and PageUp / PageDown (the whole list shows, so a page is its end).
+            .onKeyPress(keys: [.home, .end, .pageUp, .pageDown]) { press in
+                let all = Section.allCases
+                let to = press.key == .home || press.key == .pageUp ? all.first! : all.last!
+                if to != nav.place.section { choose(to) }
+                return .handled
             }
             #endif
             .accessibilityElement(children: .contain)
@@ -460,6 +468,13 @@ struct Sidebar: View {
         .background(ob.paper.ignoresSafeArea())
         // Below the title bar, as Windows' border stops under its own.
         .overlay(alignment: .trailing) { Rectangle().fill(ob.ink).frame(width: 1).ignoresSafeArea(edges: .bottom) }
+    }
+
+    /// Choose a section; the focus follows the choice, as in a ListBox.
+    private func choose(_ s: Section) {
+        arrowMoved = true
+        nav.open(s)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { arrowMoved = false }
     }
 
     private var engineStatus: some View {

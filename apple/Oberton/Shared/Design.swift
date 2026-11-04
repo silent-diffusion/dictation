@@ -92,7 +92,16 @@ enum Ob {
     static func lineSpacing(_ size: CGFloat, lineHeight: CGFloat, mono: Bool = false) -> CGFloat {
         max(0, lineHeight - size * (mono && hasCascadia ? 1.162 : 1.2))
     }
-    static func jp(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font { .custom("Hiragino Sans", size: size).weight(weight) }
+    /// Windows' "Yu Gothic UI, Yu Gothic, Meiryo": Yu Gothic when this Mac has it (macOS offers it as a download in Font
+    /// Book; Oberton doesn't fetch it, so it makes no request Windows doesn't), else Hiragino Sans, the system's own.
+    static func jp(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font { .custom(jpFamily, size: size).weight(weight) }
+    static let jpFamily: String = {
+        #if os(macOS)
+        NSFont(name: "YuGothic-Medium", size: 12) != nil ? "YuGothic" : "Hiragino Sans"
+        #else
+        UIFont(name: "YuGothic-Medium", size: 12) != nil ? "YuGothic" : "Hiragino Sans"
+        #endif
+    }()
     /// A WPF Border's 1 px line. WPF lays a Border's Padding out INSIDE its BorderThickness, so content sits padding + 1
     /// from the outer edge, where SwiftUI's overlaid stroke would sit on the padding: the shared boxes add it.
     static let border: CGFloat = 1
@@ -578,7 +587,9 @@ private struct Pressable<Content: View>: View {
 /// Windows' keyboard focus for a control the Mac would skip (SYS-007): with macOS's Keyboard navigation off (the
 /// default), SwiftUI buttons are no Tab stops and clicking doesn't focus them. This makes the control a Tab stop, gives
 /// it the focus when clicked, and lets Space or Return press it, as a WPF Button / CheckBox / RadioButton. With Keyboard
-/// navigation on, the control's own focus is left as it is. `focused` mirrors the focus for the control's look.
+/// navigation on, the control keeps macOS's own focus (Tab stop, Space), but a control that is no Tab stop (`isStop:
+/// false`, a ListBox entry that isn't chosen) leaves the Tab order as on Windows, and `claim` still moves the focus to it.
+/// `focused` mirrors the focus for the control's look.
 private struct TabStop: ViewModifier {
     var isStop: Bool
     /// Take the focus now (a ListBox entry the arrow keys just chose).
@@ -592,8 +603,16 @@ private struct TabStop: ViewModifier {
 
     func body(content: Content) -> some View {
         #if os(macOS)
-        if NSApp?.isFullKeyboardAccessEnabled == true || !isStop {
-            content.onAppear { if !isStop { focused = false } }
+        if !isStop {
+            // Out of the Tab order whichever way macOS's Keyboard navigation is set (with it on, a Button is a stop).
+            content.modifier(NotAStop())
+                .onAppear { focused = false }
+        } else if NSApp?.isFullKeyboardAccessEnabled == true {
+            content
+                .focused($own)
+                .onChange(of: own) { _, now in focused = now }
+                .onAppear { if claim { own = true } }
+                .onChange(of: claim) { _, now in if now { own = true } }
         } else {
             content
                 .focusable(enabled)
@@ -613,6 +632,15 @@ private struct TabStop: ViewModifier {
         #endif
     }
 }
+
+#if os(macOS)
+/// With Keyboard navigation on, macOS makes every button a Tab stop: this one isn't (a ListBox entry that isn't chosen).
+private struct NotAStop: ViewModifier {
+    func body(content: Content) -> some View {
+        if NSApp?.isFullKeyboardAccessEnabled == true { content.focusable(false) } else { content }
+    }
+}
+#endif
 
 /// `tabStop` for a bare button with no focus look of its own: an accent outline around it while it has the focus.
 private struct KeyTabStop: ViewModifier {
@@ -680,6 +708,8 @@ struct ObSwitch: View {
     var detail: String?
     /// The title's weight (Cloud's "Keep everything offline" is SemiBold).
     var titleWeight: Font.Weight = .regular
+    /// The detail is a Caption on the Windows page (Speech's quiet-speech switch): every line 19 tall.
+    var detailIsCaption = false
     @Binding var isOn: Bool
     @Environment(\.ob) private var ob
     @Environment(\.isEnabled) private var enabled
@@ -687,10 +717,11 @@ struct ObSwitch: View {
     @FocusState private var focused
     @State private var keyFocused = false
 
-    init(_ title: String, detail: String? = nil, titleWeight: Font.Weight = .regular, isOn: Binding<Bool>) {
+    init(_ title: String, detail: String? = nil, titleWeight: Font.Weight = .regular, detailIsCaption: Bool = false, isOn: Binding<Bool>) {
         self.title = title
         self.detail = detail
         self.titleWeight = titleWeight
+        self.detailIsCaption = detailIsCaption
         _isOn = isOn
     }
 
@@ -699,12 +730,18 @@ struct ObSwitch: View {
             HStack(spacing: 16) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title).font(Ob.sans(Ob.body, titleWeight)).fixedSize(horizontal: false, vertical: true)
-                    if let detail { Text(detail).font(Ob.sans(12)).foregroundStyle(ob.muted).fixedSize(horizontal: false, vertical: true) }
+                    if let detail {
+                        Text(detail).font(Ob.sans(12)).foregroundStyle(ob.muted)
+                            .wpfLineHeight(detailIsCaption ? 19 : 0, size: 12)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 ZStack(alignment: isOn ? .trailing : .leading) {
                     Capsule().fill(isOn ? ob.ink : .clear)
-                    Capsule().strokeBorder(focused || keyFocused ? ob.accent : isOn || hover ? ob.ink : ob.muted, lineWidth: 1)
+                    // The Switch template's triggers in order: hover (Ob.Border), keyboard focus (accent), then IsChecked
+                    // (Ob.Strong), which wins: a switch that is on keeps its ink line even with the focus.
+                    Capsule().strokeBorder(isOn ? ob.ink : focused || keyFocused ? ob.accent : hover ? ob.ink : ob.muted, lineWidth: 1)
                     Group {
                         if isOn { Circle().fill(ob.onInk) } else { Circle().strokeBorder(ob.muted, lineWidth: 1) }
                     }
@@ -760,15 +797,17 @@ struct RingMeter: View {
                     if let valueAction {
                         // Only the number itself is the button (a centred TextBlock), not the room beside it.
                         Text(value).font(Ob.mono(21, .bold)).underline().foregroundStyle(accent || valueHover ? ob.accent : ob.ink).lineLimit(1)
-                            .minimumScaleFactor(0.5).fixedSize(horizontal: value.count <= 7, vertical: false)
+                            .fixedSize()
                             .contentShape(Rectangle())
                             .onHover { valueHover = $0 }
                             .onTapGesture { valueAction() }
                             .help(valueTip ?? "")
-                            .frame(maxWidth: 92)
+                            .frame(minWidth: 0, maxWidth: 150).clipped()
                     } else {
-                        Text(value).font(Ob.mono(21, .bold)).foregroundStyle(accent ? ob.accent : ob.ink).lineLimit(1).minimumScaleFactor(0.5)
-                            .frame(maxWidth: 92)
+                        // Full size, centred; a number wider than the 150 canvas is cut by it (never shrunk).
+                        Text(value).font(Ob.mono(21, .bold)).foregroundStyle(accent ? ob.accent : ob.ink).lineLimit(1)
+                            .fixedSize()
+                            .frame(minWidth: 0, maxWidth: 150).clipped()
                     }
                     Readout(label, size: 8.5)
                 }

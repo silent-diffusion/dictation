@@ -27,8 +27,7 @@ struct SpeechSection: View {
             // A bare switch on the page, as Windows' (no card around it).
             ObSwitch("Even out the volume before transcribing",
                      detail: "Brings quiet stretches up to the level of the rest, and finds the words by how far they stand above the room's background noise, so a quiet microphone or turning away from it doesn't lose whole sentences. Silence still gives nothing. On by default; applies to dictation and Extended Notes.",
-                     isOn: $model.settings.evenOutVolume)
-                .frame(maxWidth: 560)
+                     detailIsCaption: true, isOn: $model.settings.evenOutVolume) // the page's width, as the CheckBox
             FieldLabel("Vocabulary hint")
             // Taken when the box is left (Windows' LostFocus binding), not on every keystroke.
             CommitField(value: $model.settings.vocabularyHint).frame(maxWidth: 560).accessibilityLabel("Vocabulary hint")
