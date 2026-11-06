@@ -890,41 +890,58 @@ struct NoteSessionView: View {
     }
 
     private var playBar: some View {
-        HStack(spacing: 12) {
-            Button {
-                playOrPause()
-            } label: {
-                PlayFace(playing: player.playing, keyFocused: playKeyFocused)
+        // One row; where it is too narrow for all of it (iPhone), Skip silences and the speeds go on a second row
+        // rather than being squeezed.
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                playControls
+                playOptions
             }
-            .buttonStyle(PlayButtonStyle())
-            // A WPF Button: a Tab stop, Space or Return presses it, its accent border while it has the keyboard.
-            .focusEffectDisabled()
-            .tabStop(focused: $playKeyFocused) { playOrPause() }
-            .handCursor(!(player.preparing || !hasRecording))
-            .focusTaker()
-            .disabled(player.preparing || !hasRecording)
-            .help(player.prepared.map { $0.gainDb > 0.5 ? "Play from the cursor (level brought up \(Int($0.gainDb.rounded())) dB)" : "Play from the cursor" } ?? "Play from the cursor")
-            .accessibilityLabel("Play the recording from the cursor; right-click the text to jump to a moment")
-            Text(player.preparing ? "PREPARING…" : "\(Self.length(player.position)) / \(Self.length(max(session.seconds, player.duration)))")
-                .font(Ob.mono(11.5)).frame(minWidth: 130, alignment: .leading)
-            // The Fluent slider (SmallChange 0.1 s on the arrow keys).
-            FluentSlider(value: Binding(get: { player.position }, set: { player.seek($0) }), range: 0...max(1, max(session.seconds, player.duration)), step: 0.1)
-                .focusTaker()
-                .accessibilityLabel("Position in the recording")
-            HStack(spacing: 0) {
-                Pill("Skip silences", on: player.skipSilences) { player.skipSilences.toggle(); page.skipSilences = player.skipSilences }
-                    .focusTaker().padding(.trailing, 14)
-                    .help("Jump over the pauses")
-                    .accessibilityLabel("Skip silences")
-                ForEach([1.0, 1.5, 2.0], id: \.self) { r in
-                    // Each pill keeps the style's right margin 4, the last one too.
-                    Pill(r == 1 ? "1×" : r == 1.5 ? "1.5×" : "2×", on: player.rate == r) { player.setRate(r); page.rate = r }.focusTaker().padding(.trailing, 4)
-                }
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 12) { playControls }
+                playOptions
             }
         }
         // Padding 12,8 inside the 1-px border.
         .padding(.horizontal, 13).padding(.vertical, 9)
         .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
+    }
+
+    @ViewBuilder private var playControls: some View {
+        Button {
+            playOrPause()
+        } label: {
+            PlayFace(playing: player.playing, keyFocused: playKeyFocused)
+        }
+        .buttonStyle(PlayButtonStyle())
+        // A WPF Button: a Tab stop, Space or Return presses it, its accent border while it has the keyboard.
+        .focusEffectDisabled()
+        .tabStop(focused: $playKeyFocused) { playOrPause() }
+        .handCursor(!(player.preparing || !hasRecording))
+        .focusTaker()
+        .disabled(player.preparing || !hasRecording)
+        .help(player.prepared.map { $0.gainDb > 0.5 ? "Play from the cursor (level brought up \(Int($0.gainDb.rounded())) dB)" : "Play from the cursor" } ?? "Play from the cursor")
+        .accessibilityLabel("Play the recording from the cursor; right-click the text to jump to a moment")
+        Text(player.preparing ? "PREPARING…" : "\(Self.length(player.position)) / \(Self.length(max(session.seconds, player.duration)))")
+            .font(Ob.mono(11.5)).frame(minWidth: 130, alignment: .leading)
+        // The Fluent slider (SmallChange 0.1 s on the arrow keys).
+        FluentSlider(value: Binding(get: { player.position }, set: { player.seek($0) }), range: 0...max(1, max(session.seconds, player.duration)), step: 0.1)
+            .focusTaker()
+            .accessibilityLabel("Position in the recording")
+    }
+
+    private var playOptions: some View {
+        HStack(spacing: 0) {
+            Pill("Skip silences", on: player.skipSilences) { player.skipSilences.toggle(); page.skipSilences = player.skipSilences }
+                .focusTaker().padding(.trailing, 14)
+                .help("Jump over the pauses")
+                .accessibilityLabel("Skip silences")
+            ForEach([1.0, 1.5, 2.0], id: \.self) { r in
+                // Each pill keeps the style's right margin 4, the last one too.
+                Pill(r == 1 ? "1×" : r == 1.5 ? "1.5×" : "2×", on: player.rate == r) { player.setRate(r); page.rate = r }.focusTaker().padding(.trailing, 4)
+            }
+        }
+        .fixedSize()
     }
 
     /// .NET's ToUpperInvariant: each character's own capital where it has a single one ("ß" stays "ß"), never the
