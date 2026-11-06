@@ -427,6 +427,19 @@ struct Sidebar: View {
     static let width: CGFloat = 216
 
     var body: some View {
+        // A window too short for the whole sidebar (the smallest window with a long engine status) scrolls it, rather
+        // than cutting off its top and foot.
+        ViewThatFits(in: .vertical) {
+            column
+            ScrollView(.vertical, showsIndicators: false) { column }
+        }
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(ob.paper.ignoresSafeArea())
+        // Below the title bar, as Windows' border stops under its own.
+        .overlay(alignment: .trailing) { Rectangle().fill(ob.ink).frame(width: 1).ignoresSafeArea(edges: .bottom) }
+    }
+
+    private var column: some View {
         VStack(alignment: .leading, spacing: 0) {
             // The logo to the right of the menu button, on its row (MainWindow's Header, margin 42,6,0,24).
             Logo(recording: model.phase == .recording)
@@ -464,10 +477,6 @@ struct Sidebar: View {
         }
         // 14 in from the 1 px line, which takes its own room inside the 216 (BorderThickness 0,0,1,0).
         .padding(EdgeInsets(top: 18, leading: 14, bottom: 14, trailing: 15))
-        .frame(maxHeight: .infinity, alignment: .top)
-        .background(ob.paper.ignoresSafeArea())
-        // Below the title bar, as Windows' border stops under its own.
-        .overlay(alignment: .trailing) { Rectangle().fill(ob.ink).frame(width: 1).ignoresSafeArea(edges: .bottom) }
     }
 
     /// Choose a section; the focus follows the choice, as in a ListBox.
@@ -503,10 +512,11 @@ struct Sidebar: View {
     }
 
     private func statusRow(_ state: DotState, _ text: String) -> some View {
-        HStack(spacing: 8) {
-            StatusDot(state: state)
-            // 11.5, cut with "…" at 160 (the full text as the tooltip).
-            Text(text).font(Ob.sans(11.5)).lineLimit(1).truncationMode(.tail).frame(maxWidth: 160, alignment: .leading).help(text)
+        HStack(alignment: .top, spacing: 8) {
+            // Centred on the first line.
+            StatusDot(state: state).frame(height: 15)
+            // 11.5, 160 wide. Windows cuts it with "…"; the Mac wraps it onto another line so the whole status shows.
+            Text(text).font(Ob.sans(11.5)).fixedSize(horizontal: false, vertical: true).frame(maxWidth: 160, alignment: .leading).help(text)
         }
         .padding(.vertical, 2)
     }
