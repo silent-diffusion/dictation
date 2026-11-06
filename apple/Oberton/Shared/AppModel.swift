@@ -1,0 +1,1751 @@
+import Combine
+import Foundation
+import ObertonCore
+import SwiftUI
+
+/// What each platform does differently: where the text goes and where read-aloud text comes from.
+@MainActor
+protocol PlatformServices: AnyObject {
+    /// Remember where the user was when they pressed the hotkey, so the text goes back there.
+    func captureTarget()
+    /// `captureTarget`, and with `readContext` the text around the cursor too ("Fit dictation into the surrounding
+    /// text"; only where Accessibility may read it, the Mac's direct build).
+    func captureTarget(readContext: Bool)
+    /// The text around the cursor, read when the dictation started; nil when unknown.
+    func insertionContext() async -> InsertionContext?
+    /// "Type as you speak": the place this dictation types into while the user speaks; nil where that isn't possible
+    /// (the iPhone) or when there was nowhere to type.
+    func liveTarget() -> LiveTarget?
+    /// Put the text where the user was. Returns a short receipt ("Inserted into Mail", "Copied").
+    func insert(_ text: String) async throws -> String
+    /// History's "insert into the last app" (Windows `InsertIntoLastTargetAsync`): the last dictation's app, no caret
+    /// spot, nothing copied on failure, and the window in front when asked comes back afterwards.
+    func insertIntoLastTarget(_ text: String) async throws -> String
+    /// The app the text is going into, as History keeps it (Windows' InsertionTarget.ProcessName: the program's own
+    /// name, "Microsoft Outlook", "Notes", never translated), if known.
+    var targetAppName: String? { get }
+    /// That app's name for a sentence ("Inserted into Mail"; Windows' DisplayName).
+    var targetDisplayName: String? { get }
+    /// That app's window title when the dictation started (Windows' InsertionTarget.Title), for History and the web
+    /// sites; nil where it can't be read (iPhone, the Mac's App Store build).
+    var targetWindowTitle: String? { get async }
+    /// The text selected in the frontmost app, or nil.
+    func selectedText() async -> String?
+    /// Why no app's selection can be read now (the Mac without Accessibility); nil when it can be asked.
+    var selectionUnavailable: String? { get }
+    func clipboardText() -> String?
+    /// Ask once for the permissions dictation needs (microphone; on the Mac, Accessibility to paste).
+    func requestPermissions() async
+    /// Nothing to type into had the cursor when the dictation started: the text waits for a click (Windows: Placing).
+    var nowhereToPaste: Bool { get async }
+    /// Wait for the user to pick somewhere to type, up to `timeout`; true when there is a target now.
+    func waitForPlace(timeout: Duration) async -> Bool
+    /// Put the text on the clipboard (no restore).
+    func copy(_ text: String)
+}
+
+extension PlatformServices {
+    func captureTarget(readContext: Bool) { captureTarget() }
+    var targetDisplayName: String? { targetAppName }
+    var targetWindowTitle: String? { nil }
+    func insertionContext() async -> InsertionContext? { nil }
+    func liveTarget() -> LiveTarget? { nil }
+    func insertIntoLastTarget(_ text: String) async throws -> String { try await insert(text) }
+    var selectionUnavailable: String? { nil }
+    var nowhereToPaste: Bool { false }
+    /// The text left on the clipboard as a last resort, when it couldn't go in: an ordinary copy, so clipboard managers
+    /// keep it too.
+    func leaveOnClipboard(_ text: String) {
+        #if os(macOS)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        #else
+        UIPasteboard.general.string = text
+        #endif
+    }
+    func waitForPlace(timeout: Duration) async -> Bool { false }
+    func copy(_ text: String) {
+        #if os(macOS)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        #else
+        UIPasteboard.general.string = text
+        #endif
+    }
+}
+
+/// The dictation state machine, shared by the Mac and iPhone apps: Idle → Recording → Transcribing → Processing →
+/// [Preview] → Inserting, as in the Windows `DictationController`.
+@MainActor
+final class AppModel: ObservableObject {
+    enum Phase: Equatable {
+        case idle, starting, recording, transcribing, processing, preview, inserting
+        /// Nothing to type into had the cursor: waiting for a click into another app, or COPY TO CLIPBOARD.
+        case placing
+        case done(String)
+        case failed(String)
+
+        var isBusy: Bool {
+            switch self { case .idle, .done, .failed: false; default: true }
+        }
+    }
+
+    @Published var settings: AppSettings {
+        didSet {
+            scheduleSettingsSave()
+            #if os(macOS)
+            // Type as you speak needs macOS's permission to type into other apps: turning it on asks for it at once, so
+            // the switch never sits on doing nothing unnoticed (Windows needs no permission).
+            if settings.typeWhileSpeaking, !oldValue.typeWhileSpeaking, !CGPreflightPostEventAccess() { CGRequestPostEventAccess() }
+            #endif
+            // A new language or speech model: get it ready now, so the next dictation doesn't wait (as on Windows).
+            if oldValue.language != settings.language || oldValue.speechModel != settings.speechModel {
+                warmUp()
+            } else if oldValue.activeProfileID != settings.activeProfileID {
+                // Another profile (App.xaml.cs ActiveChanged): warm its AI model, and swap to its speech model only if
+                // one is loaded and nothing is dictating (an unloaded engine stays unloaded).
+                warmUpAI(activeProfile)
+                swapSpeechModel()
+            } else if oldValue.defaultModel != settings.defaultModel {
+                warmUpAI(activeProfile) // Settings › Models' USE THIS
+            }
+        }
+    }
+    @Published var profiles: [Profile] {
+        didSet {
+            scheduleProfilesSave()
+            // The active profile's own speech model was changed on its page: load it now if a speech model is in
+            // memory and nothing is dictating, as a profile switch does (an unloaded engine stays unloaded).
+            let id = settings.activeProfileID
+            if settings.speechModel(for: oldValue.first { $0.id == id }) != settings.speechModel(for: activeProfile) {
+                swapSpeechModel()
+                if !phase.isBusy, speechModelLoaded { speechReady() } // the status line names the profile's model
+            }
+        }
+    }
+    private var profilesSaveTask: Task<Void, Never>?
+    private var settingsSaveTask: Task<Void, Never>?
+    @Published private(set) var history: [HistoryEntry]
+    /// A dictation pauses Extended Notes while it runs (both would hear the same voice).
+    @Published private(set) var phase: Phase = .idle {
+        didSet {
+            notes.setDictating(phase.isBusy)
+            // A new dictation state takes the pill from a notice, as on Windows: from any notice when the overlay shows
+            // that state, and from one held by the state before it (`overlayPinned`).
+            if phase != oldValue, (overlayPinned && phase.isBusy) || overlayNotice?.pinned == true { overlayNotice = nil }
+            if phase != oldValue {
+                // When a dictation starts and when it ends, not between its own states, nor when the receipt clears
+                // afterwards (.done → .idle): Windows' LastActivity is stamped by StartAsync and at the end only.
+                if DictationActivity.stamps(wasBusy: oldValue.isBusy, isBusy: phase.isBusy) { lastActivity = .now }
+                stateProfile = activeProfile
+            }
+            if phase == .recording { meter.start() } else { meter.stop() }
+            if phase != .idle { endTrial(nil) } // a real dictation takes over from a Try it preview (TrialPreview.swift)
+        }
+    }
+    /// A profile's Try it waiting in the overlay's preview (TrialPreview.swift). It takes the pill from a notice or a
+    /// receipt, as Windows' PreviewTrialAsync resets the overlay.
+    @Published var trialPreview: TrialPreview? {
+        didSet { if let t = trialPreview, t.id != oldValue?.id { clearOverlay() } }
+    }
+    /// The profile active when the dictation state began: the pill's chip, TIDYING // {profile} and the AI model chip
+    /// keep naming it if the profile is cycled meanwhile (Windows draws them once per state).
+    @Published private(set) var stateProfile: Profile?
+    /// When a dictation last changed state (Windows' `LastActivity`): the model unloading timer counts from here.
+    @Published private(set) var lastActivity = Date()
+    /// Settings › Model unloading: unloads idle models (`ModelUnloading.swift`).
+    let unloader = ModelUnloader()
+    @Published private(set) var liveText = ""
+    /// Type as you speak: the pieces handed out so far (Windows' `_pieces`), for the words shown after the stop and for
+    /// stitching the final text (`LiveStitch`).
+    private var livePieces: [String] = []
+    @Published private(set) var level: Float = 0
+    /// The overlay's level meter, running while recording (its own object, so its 20 redraws a second don't redraw
+    /// everything that watches the model).
+    let meter = LevelMeter()
+    @Published private(set) var startedAt: Date?
+    /// The dictation waiting in the preview (profiles with "preview before inserting").
+    @Published private(set) var pending: HistoryEntry?
+    /// The text waiting for a place to go while `phase == .placing`.
+    @Published private(set) var placingText: String?
+    /// The text around the cursor for the current dictation (read when it started), once known: shown either side of
+    /// the AI edit, so the edit can be judged in place (Windows' `DictationController.Context`).
+    @Published private(set) var insertionContext: InsertionContext?
+    /// Text was typed while speaking, so the cleanup now is the final pass over it (the overlay's FINAL PASS).
+    @Published private(set) var finalPass = false
+    /// "Type as you speak" for the dictation running now, when it is on (Windows' `_live`).
+    private var live: LiveInsertion?
+    /// The overlay has said once since launch that type as you speak can't type yet (no Accessibility).
+    private var typingDeniedSaid = false
+
+    /// Whether a dictation with this profile types while you speak: the General switch on, a profile without a
+    /// preview, and a platform that may type into other apps now (the Mac, with Oberton allowed in Accessibility).
+    /// Windows also leaves it off when there is nowhere to type; that is only known at the hotkey press.
+    func typesWhileSpeaking(_ profile: Profile) -> Bool {
+        #if os(macOS)
+        settings.typeWhileSpeaking && !profile.showPreview && CGPreflightPostEventAccess()
+        #else
+        false
+        #endif
+    }
+    @Published var ollamaModels: [String] = []
+    @Published private(set) var usage: UsageLog
+    /// The Analytics word tally (words.json): counts only, never sentences.
+    @Published private(set) var words: WordTally
+    /// The last dictation that went in, for the overlay's receipt (shown when the pill is clicked).
+    @Published var receipt: HistoryEntry?
+    /// The cycle-profile hotkey was just pressed: the overlay shows which profile is on now, for 1.5 s.
+    @Published private(set) var profileNotice = false
+    /// The message the overlay shows now (Windows' `ShowMessage`): the silent microphone, the length limit, an AI
+    /// problem, a hotkey that couldn't be registered. Set through `notice(_:kind:)`.
+    @Published private(set) var overlayNotice: OverlayNotice?
+    /// The speech model is still loading while recording goes on (it catches up on what was said).
+    @Published private(set) var speechLoading = false
+    /// Settings › Speech recognition's status line ("Speech: Ready · …"), and whether it is a good one.
+    @Published private(set) var speechStatus = "Speech: starting…"
+    @Published private(set) var speechOK = false
+    /// The Whisper model downloading now (Settings › Speech recognition and Models), how far it got (nil while
+    /// unknown), and the last download's problem.
+    @Published private(set) var whisperDownload: (id: String, fraction: Double?)?
+    @Published var whisperDownloadError: String?
+    /// A Whisper model loading or being prepared now (`WhisperEngine.loadingModel`), for the status line and badges.
+    @Published private(set) var whisperLoad: WhisperEngine.Loading?
+    private var whisperDownloadTask: Task<Void, Never>?
+    /// The Whisper model a new install picked for this device (Windows' RuntimeInstaller.ChooseModels), while it
+    /// downloads: until it is in, dictation uses Apple Speech, then it switches over by itself. Kept across launches.
+    /// In the data folder (speech-setup.json), next to the settings it belongs with.
+    @Published private(set) var pendingSpeechModel: String? = nil {
+        didSet { if !Self.snapshotMode { firstRunSpeech.pending = pendingSpeechModel } }
+    }
+    private let firstRunSpeech = FirstRunSpeech()
+    /// The AI status line (Windows' LlmService status: "Starting AI runtime…", "Loading qwen3:8b…", "Ready · …", "AI
+    /// model 'x' not installed"), set by the warm-up; `aiStatusOK` is false while loading or when it failed.
+    @Published private(set) var aiStatus = "AI: starting…"
+    @Published private(set) var aiStatusOK = false
+    /// The AI model being loaded by the warm-up right now ("loading, then editing" on the dashboard).
+    @Published private(set) var aiLoading: String?
+    /// The Ollama models in memory now (`/api/ps`), refreshed every 3 s while someone watches (`watchLoadedAI`).
+    @Published private(set) var loadedAIModels: Set<String> = []
+    private var loadedAIWatchers = 0
+    private var loadedAITimer: Timer?
+    private var aiWarmTask: Task<Void, Never>?
+    /// The speech engine couldn't start at launch: shown once in the main window, as Windows' message box.
+    @Published var startupProblem: String?
+    /// A Settings section to open in the main window (⌘,, the menu bar's "Check for updates…"); the window clears it.
+    @Published var requestedSettings: SettingsSection?
+
+    let reader = ReadAloudPlayer()
+    /// Extended Notes: the sessions on disk (notes/), and the one recording now.
+    let notes: NotesRecorder
+    /// Set when the app's services start (on the Mac after the setup on a first run): then both models are warmed in
+    /// the background, so the first hotkey press is quick (App.OnStartup).
+    weak var platform: PlatformServices? {
+        didSet {
+            guard platform != nil, !launchWarmed, !Self.snapshotMode else { return }
+            launchWarmed = true
+            Task { @MainActor [weak self] in self?.warmUp(atLaunch: true) }
+        }
+    }
+    private var launchWarmed = false
+
+    private let settingsFile = JSONFile<AppSettings>("settings.json")
+    private let profilesFile = JSONFile<[Profile]>("profiles.json")
+    /// History on disk: history/<entry>/entry.json and audio.wav (in a scratch folder for the debug snapshots).
+    private let historyStore: HistoryStore
+    /// The recording of the dictation running now, for History's audio.wav.
+    private let historyAudio = HistoryAudioRecorder()
+    private var historyPrune: Timer?
+    private let usageFile = JSONFile<UsageLog>("usage.json")
+    private let wordsFile = JSONFile<WordTally>("words.json")
+    private let transcriber = LiveTranscriber()
+    private var work: Task<Void, Never>?
+    private var idleTask: Task<Void, Never>?
+    private var noticeTask: Task<Void, Never>?
+    private var placeTask: Task<Void, Never>?
+    private var placingEntry: HistoryEntry?
+    private var overlayNoticeTask: Task<Void, Never>?
+    private var limitTimer: Timer?
+    /// Counts dictations, so a timer of an earlier one can't act on this one.
+    private var dictationNumber = 0
+    /// When the recording stopped (the pill's "N S OF AUDIO").
+    private(set) var stoppedAt: Date?
+    /// Loads the speech model if needed, then hands the recognizer what was recorded so far.
+    private var engineTask: Task<Void, Error>?
+    private var warmTask: Task<Void, Never>?
+    // For the turnaround: which models this dictation used, and whether they were loaded when it started.
+    private var speechModelUsed = "", aiModelUsed = ""
+    /// This dictation goes to a Whisper model (Windows' speech engine), not Apple's recognizer.
+    private var usesWhisper = false
+    private var speechWarm = true
+    /// Whether the AI model was in memory when the dictation started, once that check has answered (nil until then).
+    private var aiWarmKnown: Bool?
+    /// The turnaround clock (Windows' `_finishClock`): runs from the stop press until the text is in place, paused
+    /// while a preview or NO PLACE TO PASTE waits for the user (reading or choosing isn't processing time).
+    private var finishClock = Stopwatch()
+    /// The text waited for a click (nowhere to type): its turnaround isn't a fair one.
+    private var placed = false
+    private var notesChange: AnyCancellable?
+
+    init() {
+        // Each part of starting that takes a while is noted in the log, to find what makes opening slow (AppServices:
+        // "Startup: {what} took N ms", for a step of 40 ms or more).
+        var clock = Date()
+        func step(_ what: @autoclosure () -> String) {
+            let ms = Int(Date().timeIntervalSince(clock) * 1000)
+            if ms >= 40, !Self.snapshotMode { Log.info("Startup: \(what()) took \(ms) ms") }
+            clock = Date()
+        }
+        // Read once: a broken settings.json is logged and kept as .bad once (Infrastructure's JsonStore.Load), and its
+        // absence is a new install.
+        let settingsOnDisk = settingsFile.load()
+        let loadedSettings = settingsOnDisk ?? AppSettings()
+        historyStore = Self.snapshotMode
+            ? HistoryStore(dir: FileManager.default.temporaryDirectory.appending(path: "oberton-snapshot-history-\(UUID().uuidString)"))
+            : HistoryStore(dir: HistoryStore.defaultDir, legacyFile: AppPaths.dataDir.appending(path: "history.json"))
+        historyStore.prune(loadedSettings)
+        let history = historyStore.entries
+        step("History (\(history.count) dictations)")
+        settings = loadedSettings
+        let notesStore = NotesStore(dir: Self.snapshotMode ? nil : NotesStore.defaultDir)
+        step("Extended Notes sessions")
+        // The dashboard notepad became Extended Notes' draft (notes/draft.txt): moved there once.
+        let movesNotepad = !Self.snapshotMode && !loadedSettings.notepad.isEmpty
+        if movesNotepad && notesStore.draft.isEmpty { notesStore.setDraft(loadedSettings.notepad) }
+        notes = NotesRecorder(store: notesStore, settings: { loadedSettings })
+        // A new install is a missing, empty or unreadable profiles.json, as on Windows (ProfileService).
+        let loadedProfiles = profilesFile.load() ?? []
+        let freshProfiles = loadedProfiles.isEmpty
+        profiles = freshProfiles ? BuiltInProfiles.create() : loadedProfiles
+        step("profiles, speech, AI and insertion")
+        self.history = history
+        if var loaded = usageFile.load() {
+            // Sites are new (version 2): filled in once for the dictations History still has (UsageStore).
+            if loaded.fillSites(from: history), !Self.snapshotMode { usageFile.save(loaded) }
+            usage = loaded
+        } else {
+            // The first time: count what History already has, so the dashboard doesn't start from zero.
+            let seeded = UsageLog(seed: history)
+            usage = seeded
+            if !Self.snapshotMode { usageFile.save(seeded) }
+        }
+        step("dashboard counts")
+        // The first time: the tally is seeded from what History already has, so Analytics doesn't start empty.
+        words = WordTally.load(wordsFile, seed: history, enabled: loadedSettings.keepWordTally, persist: !Self.snapshotMode)
+        step("word tally")
+        if settingsOnDisk == nil {
+            // A new install's AI model (`LocalAISetup`): Windows' qwen2.5:3b on Oberton's own runtime in the direct
+            // download, Apple Intelligence in the App Store version.
+            if !Self.snapshotMode { LocalAISetup.newInstall(&settings) }
+        }
+        // The speech model for this device, as Windows' setup picks it: downloaded during setup
+        // (`startDefaultSpeechDownload`); Apple Speech until it is in. Written down at once (property observers don't run
+        // in init), so quitting before the download ends doesn't lose it.
+        if !Self.snapshotMode {
+            let language = settings.language
+            pendingSpeechModel = firstRunSpeech.atLaunch(newInstall: settingsOnDisk == nil) { Self.recommendedSpeechModel(language: language) }
+        }
+        if movesNotepad { settings.notepad = "" }
+        startProfiles(fresh: freshProfiles, mustSave: settingsOnDisk == nil || movesNotepad)
+        // Extended Notes transcribes with the active profile's speech model, as Windows' NotesRecorder (SpeechModels.For).
+        notes.settingsSource = { [weak self] in self.map { $0.settings.dictating(with: $0.activeProfile) } ?? loadedSettings }
+        notesChange = notes.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        WhisperEngine.onChange = { [weak self] in Task { @MainActor in self?.whisperChanged() } }
+        // The words so far: while recording as they come; after the stop only when a piece is committed (Windows
+        // RaiseTranscript), not the final pass's text or the recognizer's late guesses.
+        transcriber.onText = { [weak self] text in
+            guard let self, phase == .recording else { return }
+            liveText = text
+        }
+        transcriber.onLevel = { [weak self] level in
+            guard let self else { return }
+            self.level = level
+            if phase == .recording { meter.hear(level) }
+        }
+        transcriber.onSilence = { [weak self] in
+            guard self?.phase == .recording else { return }
+            #if os(macOS)
+            self?.notify("The microphone is silent. Check System Settings › Privacy & Security › Microphone or pick another mic.", level: .warning)
+            #else
+            self?.notify("The microphone is silent. Check Settings › Privacy & Security › Microphone or pick another mic.", level: .warning)
+            #endif
+        }
+        transcriber.onAudio = { [historyAudio] in historyAudio.append($0) }
+        // Type as you speak: finished pieces are typed in order; the running guess too, for a profile without AI.
+        transcriber.onPiece = { [weak self] piece in
+            guard let self, self.phase == .recording || self.phase == .transcribing else { return }
+            self.livePieces.append(piece)
+            // After the stop: all the pieces, the running guess gone (RaiseTranscript with `_partial` cleared).
+            if self.phase == .transcribing { self.liveText = FragmentStitcher.join(self.livePieces) }
+            self.live?.add(piece)
+        }
+        transcriber.onGuess = { [weak self] guess in
+            guard let self, self.phase == .recording else { return }
+            self.live?.setPartial(guess)
+        }
+        // Kept by age: what has grown too old goes even when nothing new comes in.
+        historyPrune = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.pruneHistory() }
+        }
+        // A reading counts (and its words) when it starts; the voice's time when it stops (ReaderWindow.StartSession
+        // and StopSession).
+        reader.onStartedReading = { [weak self] words in
+            guard let self else { return }
+            self.usage.recordReading(words: words)
+            self.usageFile.save(self.usage)
+        }
+        reader.onReadingTime = { [weak self] seconds in
+            guard let self, seconds > 0 else { return }
+            self.usage.recordReadingTime(seconds)
+            self.usageFile.save(self.usage)
+        }
+        // Read aloud's voice (the active profile's, else its own) and base speed, asked when a reading is asked for and
+        // when it starts (App.VoiceFor, TtsBaseSpeed).
+        reader.currentVoice = { [weak self] in
+            guard let self else { return nil }
+            return self.activeProfile.readVoice(fallback: self.settings.ttsVoice)
+        }
+        reader.baseSpeed = { [weak self] in self?.settings.ttsBaseSpeed ?? 1 }
+        if !Self.snapshotMode { unloader.start(self) }
+        // Both models are warmed once the app's services start (`platform` set), after the setup on a first run, as
+        // Windows warms them only after its setup (App.OnStartup).
+        // The new install's AI model: the direct download fetches its runtime and model once setup is done.
+        if !Self.snapshotMode { LocalAISetup.shared.resume(self) }
+        // A first-run speech model download that didn't finish (Oberton quit meanwhile) carries on once setup is done.
+        if !Self.snapshotMode, OnboardingView.isDone, pendingSpeechModel != nil {
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(5)) // after launch's own work
+                self?.startDefaultSpeechDownload()
+            }
+        }
+    }
+
+    /// At start, as Windows' ProfileService and SettingsService: built-ins added in later versions show up once, the
+    /// default profile (on an update, the profile that was active) is the one active, and the Ollama address must be
+    /// local. Property observers don't run in init, so this saves itself, and only when something must be kept (a new
+    /// install, built-ins added, the notepad moved: `mustSave` for the Mac's own first-run changes). The active profile
+    /// going back to the default and a non-local endpoint reset stay in memory until the next save, as on Windows
+    /// (SYS-019).
+    private func startProfiles(fresh: Bool, mustSave: Bool) {
+        _ = settings.enforceLocalEndpoint() // SettingsService's constructor, before the profiles
+        // A new install starts on Grammar & Clarity, or on Raw where Apple Intelligence is the model and can't run,
+        // rather than failing every dictation (the Mac's addition).
+        let raw = AppleIntelligenceBackend.unavailableReason != nil && settings.defaultModel == .appleOnDevice ? BuiltInProfiles.rawID : nil
+        let changed = BuiltInProfiles.start(&profiles, settings: &settings, fresh: fresh, freshPick: raw)
+        if changed, !Self.snapshotMode { profilesFile.save(profiles) }
+        if changed || mustSave, !Self.snapshotMode { settingsFile.save(settings) }
+    }
+
+    /// Whether the active profile's AI can run right now (for the status dots).
+    var aiReady: Bool {
+        let id = processor.model(for: activeProfile)
+        switch id.provider {
+        case .apple: return AppleIntelligenceBackend.unavailableReason == nil
+        case .ollama: return ollamaModels.contains(id.name)
+        case .anthropic, .openai: return !settings.cloud.keepOffline && KeyStore.get(id.provider) != nil
+        }
+    }
+
+    var activeProfile: Profile {
+        get { profiles.first { $0.id == settings.activeProfileID } ?? profiles.first ?? BuiltInProfiles.create()[0] }
+        set {
+            // Picking the profile that is already active (the menu bar, or the cycle hotkey with one profile) still warms
+            // its models, as Windows' SetActive always raises ActiveChanged.
+            if newValue.id == settings.activeProfileID {
+                warmUpAI(activeProfile)
+                swapSpeechModel()
+            } else {
+                settings.activeProfileID = newValue.id
+            }
+        }
+    }
+
+    var processor: TextProcessor { TextProcessor(settings: settings) }
+
+    // MARK: Dictation
+
+    /// The hotkey: start, or stop and insert. With a preview showing, it inserts the preview.
+    func toggleDictation() {
+        switch phase {
+        case .idle, .done, .failed: start()
+        case .recording: stop()
+        case .preview: confirmPreview()
+        case .placing: copyPlacingToClipboard()
+        default: break // already working on it; Cancel stops it
+        }
+    }
+
+    /// Starting a dictation leaves Read aloud reading, as on Windows (DictationController.StartAsync never touches it).
+    func start() {
+        dictationNumber += 1
+        platform?.captureTarget(readContext: settings.matchSurroundingText)
+        insertionContext = nil
+        finalPass = false
+        liveText = ""
+        livePieces = []
+        pending = nil
+        receipt = nil
+        historyAudio.begin()
+        finishClock = Stopwatch()
+        placed = false
+        let profile = activeProfile
+        // Were the models already loaded? A turnaround that includes loading one isn't a fair turnaround.
+        speechModelUsed = speechModelName
+        speechWarm = speechModelLoaded
+        aiModelUsed = aiModelName(profile)
+        let aiID = processor.model(for: profile), endpoint = settings.ollamaEndpoint
+        aiWarmKnown = nil
+        if !profile.isRaw {
+            let number = dictationNumber
+            Task { [weak self] in
+                let loaded = await Self.aiLoaded(aiID, endpoint: endpoint)
+                if self?.dictationNumber == number { self?.aiWarmKnown = loaded }
+            }
+        }
+        // Type as you speak needs the text to go straight in, so it is off for profiles that preview before inserting,
+        // and when there is nowhere to type (the text then waits for a click at the end).
+        live?.stop()
+        live = nil
+        #if os(macOS)
+        if settings.typeWhileSpeaking, !profile.showPreview, !CGPreflightPostEventAccess() {
+            // The switch is on but macOS doesn't let Oberton type yet: said, not silently skipped (the overlay once a
+            // launch, the log every time; Settings › General says it under the switch).
+            Log.info("Type as you speak is on, but Oberton may not type into other apps yet (Accessibility); the text goes in at the end")
+            if !typingDeniedSaid {
+                typingDeniedSaid = true
+                Task { @MainActor [weak self] in
+                    self?.notice("Type as you speak needs Oberton allowed in System Settings › Privacy & Security › Accessibility. This time the text goes in when you stop.",
+                                 kind: .warning, hold: false)
+                }
+            }
+        }
+        #endif
+        if typesWhileSpeaking(profile), let target = platform?.liveTarget() {
+            let platform = platform, processor = processor
+            live = LiveInsertion(target: target, profile: profile, context: Task { await platform?.insertionContext() },
+                                 holdsClipboard: settings.restoreClipboard) { piece in
+                // An AI failure gives back the words as spoken (TextProcessor), so they are typed raw.
+                await processor.process(piece, profile: profile).text
+            }
+        }
+        let isLive = live != nil
+
+        // Start listening right away. If the speech model isn't loaded (first use, or let go after a while), it loads
+        // meanwhile and catches up on what was said.
+        do { try transcriber.startRecording(microphone: settings.microphoneName, evenOut: settings.evenOutVolume) } catch { fail(error); return }
+        startedAt = Date()
+        phase = .recording
+        speechLoading = !speechWarm
+        let vocabulary = settings.vocabulary, hint = settings.vocabularyHint, locale = settings.speechLocale
+        let speech = speechSettings(for: profile)
+        let whisper = speech.whisperModel, language = speech.whisperLanguage
+        usesWhisper = whisper != nil
+        let engine = Task { [transcriber] in
+            if let whisper {
+                try await transcriber.startWhisper(model: whisper, language: language, prompt: hint, live: isLive)
+            } else {
+                try await transcriber.startRecognizer(locale: locale, vocabulary: vocabulary, live: isLive)
+            }
+        }
+        engineTask = engine
+        Task { [weak self] in
+            // The engine failed to start while the user was still speaking: say so now, not at the end.
+            do { try await engine.value; self?.speechReady() } catch {
+                if let self, self.engineTask == engine, self.phase == .recording { self.transcriber.cancel(); self.fail(error) }
+            }
+            if self?.engineTask == engine { self?.speechLoading = false }
+        }
+        // The AI model too, so the cleanup at the end doesn't wait for it to load.
+        warmUpAI(profile, forDictation: true)
+        // One timer per dictation: an earlier one (a dictation that failed) must not cut this one short.
+        limitTimer?.invalidate()
+        let number = dictationNumber
+        let limit = Timer.scheduledTimer(withTimeInterval: max(10, settings.maxRecordingSeconds), repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.dictationNumber == number, self.phase == .recording else { return }
+                self.notify("Maximum recording length reached; finishing up.", level: .info)
+                self.stop()
+            }
+        }
+        limitTimer = limit
+    }
+
+    func stop() {
+        guard phase == .recording else { return }
+        limitTimer?.invalidate()
+        transcriber.stopRecording()
+        stoppedAt = Date()
+        finishClock.restart()
+        let seconds = (stoppedAt ?? Date()).timeIntervalSince(startedAt ?? Date())
+        phase = .transcribing
+        level = 0
+        let engine = engineTask
+        work = Task {
+            // If the model was still loading, it now catches up on the whole recording.
+            // Cancelled meanwhile: `cancel()` already let the recording go, and a new one may be running. Each wait a
+            // cancel cuts short ends it quietly with a line in the log (StopCancellableAsync: "A cancelled dictation
+            // ended: …", whatever the wait was).
+            do { try await engine?.value } catch {
+                if Task.isCancelled { Self.endedCancelled(error); return }
+                transcriber.cancel()
+                fail(error)
+                return
+            }
+            if Task.isCancelled { Self.endedCancelled(); return }
+            let peak = transcriber.peak
+            let decode = Date()
+            let heard: String
+            do { heard = try await Self.withinFinalTimeout { [transcriber] in await transcriber.stop() } } catch {
+                if Task.isCancelled { Self.endedCancelled(error); return }
+                transcriber.cancel()
+                fail(error)
+                return
+            }
+            if usesWhisper {
+                // SpeechRecognizer's "final" line (its seconds of audio and the decode's own time).
+                Log.info("asr final: \(heard.utf16.count) chars, \(String(format: "%.1f", seconds))s audio, \(Int(Date().timeIntervalSince(decode) * 1000)) ms decode")
+            }
+            if heard.isEmpty, let problem = transcriber.finalFailure {
+                // Whisper's final pass failed with nothing to keep (SpeechRecognizer: "Speech recognition failed: …").
+                fail(UserFacingError("Speech recognition failed: " + problem.localizedDescription))
+                return
+            }
+            var raw = OutputSanitizer.collapseDots(heard)
+            if Task.isCancelled { Self.endedCancelled(); return }
+            insertionContext = await platform?.insertionContext()
+            await live?.drain() // let pieces already on their way finish typing
+            if Task.isCancelled { Self.endedCancelled(); return }
+            // No phantom text: silence, a click or a stock phrase the recognizer made up inserts nothing (unless text
+            // was already typed while speaking).
+            if live?.hasTyped != true, SpeechGuard.shouldDiscard(raw, recorded: seconds, peakLevel: peak) {
+                if OutputSanitizer.hasContent(raw) {
+                    Log.info("Discarded a likely phantom transcript (\(raw.utf16.count) chars, \(String(format: "%.1f", seconds)) s, peak \(String(format: "%.2f", peak)))")
+                }
+                live?.stop()
+                live = nil
+                phase = .idle
+                notice("I didn't catch anything. Try again.")
+                return
+            }
+            // The seams between the pieces typed while speaking fixed (DictationController.Stitch); then the Mac's
+            // repeated-sentence collapse (a Mac-only addition, kept by the user's decision 3).
+            raw = NotesFormat.collapseRepeats(LiveStitch.stitch(raw: raw, pieces: livePieces, tail: transcriber.finalTail))
+            await finish(raw: raw, seconds: seconds, profile: activeProfile)
+        }
+    }
+
+    /// "A cancelled dictation ended: {error type}" (StopCancellableAsync).
+    private static func endedCancelled(_ error: Error = CancellationError()) {
+        Log.info("A cancelled dictation ended: \(type(of: error))")
+    }
+
+    /// The final transcript, or "Speech recognition timed out." after 5 minutes (SpeechRecognizer.StopAsync).
+    private static func withinFinalTimeout(_ body: @escaping @MainActor @Sendable () async -> String) async throws -> String {
+        try await withThrowingTaskGroup(of: String?.self) { group in
+            group.addTask { await body() }
+            group.addTask {
+                try await Task.sleep(for: .seconds(300))
+                return nil
+            }
+            defer { group.cancelAll() }
+            guard let first = try await group.next(), let text = first else {
+                throw UserFacingError("Speech recognition timed out.")
+            }
+            return text
+        }
+    }
+
+    func cancel() {
+        if phase == .placing, var entry = placingEntry {
+            endPlacing()
+            entry.wasInserted = false
+            record(entry) // discarded, but kept in History in case
+        }
+        limitTimer?.invalidate()
+        work?.cancel()
+        engineTask = nil
+        speechLoading = false
+        pending = nil
+        transcriber.cancel() // now, before the next dictation can start
+        if let typed = live {
+            // Take back what was typed while speaking (only if it can be confirmed in place).
+            live = nil
+            if phase != .inserting { Task { await typed.removeTyped() } } else { typed.stop() }
+        }
+        level = 0
+        phase = .idle
+    }
+
+    private func finish(raw: String, seconds: Double, profile: Profile) async {
+        var result = ProcessResult(text: raw, modified: false)
+        aiNotice = nil
+        if !profile.isRaw {
+            liveText = raw // the overlay shows what is being tidied
+            finalPass = live?.hasTyped == true // with live typing, this is the final pass over the whole recording
+            phase = .processing
+            result = await processor.process(raw, profile: profile)
+            if Task.isCancelled { Self.endedCancelled(); return }
+            // A safety-net rejection is reported on the receipt; any other AI problem is a HEADS UP notice of its own,
+            // and the original words go in (DictationController.StopAsync).
+            if let warning = result.warning, !result.safetyNet {
+                aiNotice = Self.aiFailureNotice(warning)
+                Log.warn("LLM step failed: " + aiNotice!.dropLast(Self.aiFailureSuffix.count))
+                result.warning = nil
+            }
+        }
+        // An AI edit only when the AI really changed the text: not when it failed, nor when the safety net kept it all.
+        let windowTitle = await platform?.targetWindowTitle
+        var entry = HistoryEntry(transcription: raw, aiEdit: result.modified ? result.text : nil, inserted: result.text,
+                                 profileName: profile.name, model: profile.isRaw ? nil : processor.model(for: profile).description,
+                                 appName: platform?.targetAppName, windowTitle: windowTitle, seconds: seconds, turnaroundSeconds: 0, warning: result.warning,
+                                 safetyNet: result.safetyNet)
+        entry.date = startedAt ?? entry.date
+        if profile.showPreview, live?.hasTyped != true { // the profile may have been switched mid-dictation
+            finishClock.stop() // time spent reading the preview isn't processing time
+            pending = entry
+            phase = .preview
+            showAINotice(over: true)
+            return
+        }
+        await insert(entry)
+    }
+
+    /// The AI step's problem, said when the text goes in (or the preview shows), so it isn't covered at once by the next
+    /// state.
+    private var aiNotice: String?
+
+    /// Said while the words go in, as on Windows: it takes the INSERTING pill, and the receipt follows it. Over the
+    /// preview or NO PLACE TO PASTE (`over`) it goes after its time and gives the pill back (Windows would leave it
+    /// covering them).
+    private func showAINotice(over: Bool = false) {
+        guard let text = aiNotice else { return }
+        aiNotice = nil
+        notice(text, kind: .warning, hold: !over)
+    }
+
+    private static let aiFailureSuffix = " Inserting your original words."
+
+    /// A failed AI step, as Windows says it while the words go in: "{problem} Inserting your original words."
+    /// (TextProcessor words it so now; older wording is converted, and the sentence is never added twice.)
+    static func aiFailureNotice(_ warning: String) -> String {
+        let windows = aiFailureSuffix
+        if warning.hasSuffix(windows) { return warning }
+        let suffix = " Your original words were inserted."
+        let problem = warning.hasSuffix(suffix) ? String(warning.dropLast(suffix.count)) : warning
+        return problem + windows
+    }
+
+    /// Insert the previewed text (`useOriginal`: the raw transcription instead).
+    func confirmPreview(useOriginal: Bool = false) {
+        guard var entry = pending else { return }
+        if useOriginal {
+            entry.inserted = entry.transcription
+            entry.aiEdit = nil // the original words, not the AI's
+        }
+        pending = nil
+        work = Task { await insert(entry) }
+    }
+
+    private func insert(_ entry: HistoryEntry) async {
+        // Nothing had the cursor when the dictation started: ask where it should go instead of pasting into nowhere.
+        if live?.hasTyped != true, await platform?.nowhereToPaste == true {
+            waitForPlace(entry)
+            return
+        }
+        var entry = entry
+        phase = .inserting
+        showAINotice() // Windows raises it before the paste: on screen while inserting, then the receipt
+        let typed = live
+        live = nil
+        // The user's clipboard, back once the last live paste landed (nothing to do if it was never taken, or left).
+        defer { if let typed { Task { await typed.releaseClipboard() } } }
+        do {
+            let receipt: String
+            if let typed, typed.hasTyped {
+                // Replace what was typed while speaking with the final pass over the whole recording.
+                let (final, note) = try await typed.finish(entry.inserted, tail: transcriber.finalTail)
+                entry.inserted = final
+                if let note { entry.warning = note }
+                receipt = "Inserted into \(platform?.targetDisplayName ?? "the app")"
+            } else {
+                // Fit the text where it goes (capitals, a period, spaces); a rewrite was laid out on purpose, so only
+                // its spacing is fixed.
+                let profile = activeProfile
+                let rewrite = profile.rewriteWhole && profile.autoProcess && entry.inserted != entry.transcription
+                let text = ContextFit.fit(entry.inserted, context: await platform?.insertionContext(), spacingOnly: rewrite)
+                // As it went in, spaces ContextFit added included: the receipt's PARTLY EDITED test compares it with the
+                // transcription (InsertReceipt.Edited). History keeps it trimmed (`record`).
+                entry.inserted = text
+                receipt = try await platform?.insert(text) ?? "Done"
+            }
+            // The turnaround runs from the stop press until the text is in place.
+            entry.turnaroundSeconds = Self.finishSeconds(finishClock.elapsed)
+            await recordTurnaround(entry)
+            record(entry)
+            // A profile can read what went in aloud. The player then takes the receipt's place, unless the receipt has
+            // a warning to show; decided once, here (App.xaml.cs Inserted).
+            let text = entry.inserted.trimmingCharacters(in: .whitespacesAndNewlines)
+            // The profile active now, as Windows reads Profiles.Active when the text is in.
+            let active = activeProfile
+            let readIt = active.readAloudAfterInsert && !text.isEmpty
+            self.receipt = !readIt || entry.safetyNet == true || entry.warning != nil ? entry : nil
+            phase = .done(entry.warning ?? receipt)
+            if readIt { reader.read(text, voice: Profile.readVoice(active.voice, fallback: settings.ttsVoice)) }
+        } catch {
+            // The text is on the clipboard now (the platform put it there): a HEADS UP, not a failure; History keeps
+            // it as not inserted, and there is no receipt.
+            var message = (error as? UserFacingError)?.message ?? error.localizedDescription
+            if let typed {
+                typed.forgetClipboard()
+                if typed.hasTyped, !(error is CancellationError) {
+                    // The final pass couldn't run: last resort so the dictation isn't lost, it goes on the clipboard.
+                    platform?.leaveOnClipboard(entry.inserted)
+                    message += " The text was copied to your clipboard."
+                }
+            }
+            entry.turnaroundSeconds = finishClock.elapsed
+            entry.wasInserted = false
+            record(entry)
+            level = 0
+            phase = .idle
+            // Shown, not logged: Windows' controller raises the notice and writes no log line for it (SYS-011).
+            notice(message, kind: .warning)
+            return
+        }
+        // The receipt stays 3 s, or 6 s when it has a warning to read (as on Windows).
+        scheduleIdle(after: entry.warning == nil ? 3 : 6)
+    }
+
+    // MARK: Nowhere to type: wait for a click, or copy
+
+    private func waitForPlace(_ entry: HistoryEntry) {
+        finishClock.stop() // waiting for the user isn't processing time
+        placed = true
+        live?.stop()
+        live = nil
+        var entry = entry
+        entry.turnaroundSeconds = finishClock.elapsed
+        placingEntry = entry
+        placingText = entry.inserted
+        phase = .placing
+        showAINotice(over: true)
+        placeTask?.cancel()
+        placeTask = Task {
+            // How long the text waits for a click before it is copied to the clipboard instead (as on Windows).
+            let found = await platform?.waitForPlace(timeout: .seconds(120)) ?? false
+            guard !Task.isCancelled, phase == .placing else { return }
+            if found {
+                endPlacing()
+                // Saved and counted with the app (and window) it went into, and the insert after the click is timed.
+                var entry = entry
+                entry.appName = platform?.targetAppName
+                entry.windowTitle = await platform?.targetWindowTitle
+                finishClock.start()
+                await insert(entry)
+            } else {
+                copyPlacingToClipboard(timedOut: true)
+            }
+        }
+    }
+
+    /// Placing: the overlay's Copy button or the hotkey (or the wait ran out): the text goes to the clipboard.
+    func copyPlacingToClipboard(timedOut: Bool = false) {
+        guard phase == .placing, var entry = placingEntry else { return }
+        endPlacing()
+        platform?.copy(entry.inserted.trimmingCharacters(in: .whitespacesAndNewlines))
+        entry.wasInserted = false // copied, not inserted (DictationController.CopyPlacingToClipboard)
+        record(entry)
+        receipt = nil
+        phase = .idle
+        notice(timedOut ? "No place to paste was chosen, so the text was copied to your clipboard."
+                        : "Copied to your clipboard. Paste it wherever you like.")
+    }
+
+    private func endPlacing() {
+        placeTask?.cancel()
+        placeTask = nil
+        placingEntry = nil
+        placingText = nil
+    }
+
+    /// As on Windows: back to idle, and the error as the overlay's SOMETHING WENT WRONG notice. A problem the user can
+    /// act on says so; anything else points to the log (DictationController.Fail).
+    private func fail(_ error: Error) {
+        limitTimer?.invalidate() // as Windows' Fail cancels _maxDuration
+        limitTimer = nil
+        live?.stop() // whatever was typed live stays
+        live = nil
+        level = 0
+        phase = .idle
+        aiNotice = nil
+        if let error = error as? UserFacingError {
+            Log.warn("Dictation failed: " + error.message)
+            notice(error.message, kind: .error)
+        } else {
+            Log.error("Dictation failed: \(error)")
+            notice("Something went wrong during dictation. See \(Self.logPath).", kind: .error)
+        }
+    }
+
+    /// Where the log is, as the notice says it (Windows: data\logs\dictation.log).
+    static var logPath: String {
+        let path = Log.file.path
+        // The user's own home, not the App Store build's container (whose NSHomeDirectory is inside the container), so
+        // the path shown is where the file really is.
+        let home = getpwuid(getuid()).flatMap { $0.pointee.pw_dir.map { String(cString: $0) } } ?? NSHomeDirectory()
+        return path.hasPrefix(home) ? "~" + path.dropFirst(home.count) : path
+    }
+
+    // MARK: Notices
+
+    enum NoticeKind { case info, warning, error }
+
+    struct OverlayNotice: Equatable {
+        var text: String
+        var kind: NoticeKind
+        /// Held by the dictation state it came in (a silent microphone while recording): it stays, with no timer,
+        /// until the state changes (OverlayWindow's hide timer is ignored while pinned).
+        var pinned = false
+        let id = UUID()
+    }
+
+    /// The overlay is showing a dictation state now (Windows' `_pinnedByState`): every state with "Show overlay" on;
+    /// with it off, only the preview and NO PLACE TO PASTE, which show either way.
+    var overlayPinned: Bool {
+        settings.showOverlay ? phase.isBusy : phase == .preview || phase == .placing
+    }
+
+    /// A message on the overlay (Windows' `ShowMessage`): OBERTON (info), HEADS UP (warning) or SOMETHING WENT WRONG
+    /// (error), with `text` as the body. It stays for its length / 15 seconds, between 3 and 9. Info is skipped while
+    /// the overlay shows a dictation (so with "Show overlay" off it shows); a warning or error then takes the pill and
+    /// stays until the next state (`hold: false` gives it its time instead). Shown even with "Show overlay" off.
+    func notice(_ text: String, kind: NoticeKind = .info, hold: Bool = true) {
+        if kind == .info, overlayPinned { return }
+        clearOverlay()
+        let pinned = hold && overlayPinned
+        let notice = OverlayNotice(text: text, kind: kind, pinned: pinned)
+        overlayNotice = notice
+        overlayNoticeTask?.cancel()
+        guard !pinned else { return }
+        overlayNoticeTask = Task {
+            try? await Task.sleep(for: .seconds(Self.noticeSeconds(text)))
+            if !Task.isCancelled, overlayNotice?.id == notice.id { overlayNotice = nil }
+        }
+    }
+
+    static func noticeSeconds(_ text: String) -> Double { min(9, max(3, Double(text.count) / 15)) }
+
+    /// The dictation engine's name for `notice(_:kind:)`.
+    func notify(_ text: String, level: NoticeKind) { notice(text, kind: level) }
+
+    private func scheduleIdle(after seconds: Double = 2.5) {
+        let current = phase
+        idleTask?.cancel()
+        idleTask = Task {
+            try? await Task.sleep(for: .seconds(seconds))
+            if !Task.isCancelled, phase == current { phase = .idle }
+        }
+    }
+
+    /// The pointer is on the receipt: it stays until the pointer leaves, then goes after `seconds`.
+    func holdReceipt(_ hold: Bool, release seconds: Double = 2) {
+        guard case .done = phase else { return }
+        if hold { idleTask?.cancel() } else { scheduleIdle(after: seconds) }
+    }
+
+    /// The receipt's ✕.
+    func dismissReceipt() {
+        guard case .done = phase else { return }
+        idleTask?.cancel()
+        phase = .idle
+    }
+
+    /// Settings › Layout moved the overlay: ● DICTATION APPEARS HERE for 1.5 s at the new spot, unless a dictation is
+    /// showing (OverlayWindow.ShowPositionPreview).
+    @Published private(set) var positionFlash = false
+    private var flashTask: Task<Void, Never>?
+
+    func flashPosition() {
+        guard !overlayPinned else { return }
+        clearOverlay()
+        positionFlash = true
+        flashTask = Task {
+            try? await Task.sleep(for: .seconds(1.5))
+            if !Task.isCancelled { positionFlash = false }
+        }
+    }
+
+    /// A message, the profile pill or the position flash takes the overlay from whatever it showed (Windows'
+    /// `ResetView`): the receipt, an earlier message, the profile pill or the flash is gone and doesn't come back when
+    /// the new one's time is up. A message held by the dictation state stays until the state changes.
+    private func clearOverlay() {
+        if case .done = phase { receipt = nil }
+        if overlayNotice?.pinned != true {
+            overlayNotice = nil
+            overlayNoticeTask?.cancel()
+        }
+        profileNotice = false
+        noticeTask?.cancel()
+        positionFlash = false
+        flashTask?.cancel()
+    }
+
+    func cycleProfile() {
+        guard let i = profiles.firstIndex(where: { $0.id == activeProfile.id }), !profiles.isEmpty else { return }
+        activeProfile = profiles[(i + 1) % profiles.count]
+        // While the overlay shows a dictation, its chip already shows the profile; otherwise the notice takes the
+        // receipt's place (with "Show overlay" off it shows mid-dictation too, as on Windows).
+        guard !overlayPinned else { return }
+        if !phase.isBusy {
+            idleTask?.cancel()
+            phase = .idle
+        }
+        clearOverlay()
+        profileNotice = true
+        noticeTask?.cancel()
+        noticeTask = Task {
+            try? await Task.sleep(for: .seconds(1.5))
+            if !Task.isCancelled { profileNotice = false }
+        }
+    }
+
+    // MARK: Warming up
+
+    /// The speech settings a profile dictates with (Windows' SpeechModels.For): its own speech model, or Settings'.
+    func speechSettings(for profile: Profile) -> AppSettings { settings.dictating(with: profile) }
+
+    /// The active profile's speech settings.
+    var activeSpeech: AppSettings { speechSettings(for: activeProfile) }
+
+    /// The speech model's name for the turnaround samples: Apple's recognizer and the language, or the Whisper model.
+    var speechModelName: String { activeSpeech.whisperModel.map { "whisper:" + $0 } ?? "apple-speech:" + settings.language }
+
+    /// The speech model for display: "Apple Speech" or the Whisper model's name.
+    var speechEngineName: String { activeSpeech.whisperModel.map(WhisperModels.name(of:)) ?? "Apple Speech" }
+
+    /// The speech model in a few characters, as Windows' dashboard shows it: "Apple Speech" or the Whisper id ("base.en").
+    var speechShortName: String { activeSpeech.whisperModel ?? "Apple Speech" }
+
+    /// The AI model a profile uses, or "" without AI.
+    func aiModelName(_ profile: Profile) -> String { profile.isRaw ? "" : processor.model(for: profile).description }
+
+    /// The average of the last three turnarounds with the active profile's models, where neither had to load first.
+    var recentTurnaround: Double? {
+        usage.recentTurnaround(speechModel: speechModelName, aiModel: aiModelName(activeProfile)).seconds
+    }
+
+    /// Get the speech model and the active profile's AI model loaded (at launch, and when the language or the speech
+    /// model changes), as Windows does. A speech model that can't start at launch is reported once (`startupProblem`).
+    /// `restart`: Settings › Speech recognition's APPLY AND RESTART (Windows' Speech.RestartAsync): the speech model
+    /// loads again from scratch, even one that works, and the AI model is left as it is.
+    func warmUp(atLaunch: Bool = false, restart: Bool = false) {
+        guard !Self.snapshotMode else { return }
+        let reload = restart && !phase.isBusy && !notes.needsModels // never under a dictation or Extended Notes
+        let speech = activeSpeech
+        let locale = speech.speechLocale, whisper = speech.whisperModel
+        warmTask?.cancel()
+        warmTask = Task {
+            speechStatus = whisper.map(loadingStatus) ?? "Speech: Loading speech model (Apple Speech, \(languageName))…"
+            speechOK = false
+            do {
+                if reload {
+                    await LiveTranscriber.unloadModel()
+                    await WhisperEngine.shared.unload()
+                }
+                if let whisper {
+                    try await WhisperEngine.shared.load(whisper)
+                } else {
+                    // Back on Apple Speech: a Whisper model left in memory isn't needed any more (unless Extended
+                    // Notes is still transcribing with it; it loads it again by itself).
+                    if WhisperEngine.loadedModel != nil, !notes.needsModels { await WhisperEngine.shared.unload() }
+                    try await LiveTranscriber.warmUp(locale: locale)
+                }
+                if Task.isCancelled { return }
+                speechReady()
+            } catch {
+                if Task.isCancelled { return }
+                speechStatus = "Speech: " + error.localizedDescription
+                // A problem the user can act on opens the window with it; anything else only goes to the log
+                // (App.xaml.cs: UserFacingException → message box, else "Speech init failed").
+                if atLaunch {
+                    if let error = error as? UserFacingError { startupProblem = error.message }
+                    else { Log.error("Speech init failed", error) }
+                }
+            }
+        }
+        if !restart { warmUpAI(activeProfile) }
+    }
+
+    /// The active profile changed to one with another speech model: load it now, while idle, so the next dictation
+    /// doesn't wait. Only when a speech model is in memory already (App.SwapSpeechModelAsync).
+    private func swapSpeechModel() {
+        guard speechLoaded, !phase.isBusy, !speechModelLoaded else { return }
+        warmTask?.cancel()
+        let speech = activeSpeech
+        warmTask = Task {
+            do {
+                if let whisper = speech.whisperModel { try await WhisperEngine.shared.load(whisper) }
+                else { try await LiveTranscriber.warmUp(locale: speech.speechLocale) }
+                if !Task.isCancelled { speechReady() }
+            } catch {
+                Log.warn("Loading the profile's speech model failed: " + error.localizedDescription)
+            }
+        }
+    }
+
+    /// Windows' "Speech: Loading speech model (base.en)…"; the first time on this device CoreML also prepares the model
+    /// for it, which Windows has no counterpart for, so that is said too.
+    private func loadingStatus(_ id: String) -> String {
+        WhisperModels.isPrepared(id)
+            ? "Speech: Loading speech model (\(id))…"
+            : "Speech: Loading speech model (\(id)), preparing it for this \(Device.noun) (first time only; a large model takes a few minutes)…"
+    }
+
+    /// A Whisper load started or ended: the status line and badges follow it.
+    private func whisperChanged() {
+        whisperLoad = WhisperEngine.loadingModel
+        if let load = whisperLoad, load.model == activeSpeech.whisperModel, !phase.isBusy {
+            speechStatus = loadingStatus(load.model)
+            speechOK = false
+        }
+        objectWillChange.send()
+    }
+
+    private var languageName: String {
+        if let whisper = activeSpeech.whisperModel {
+            if WhisperModels.model(whisper)?.englishOnly == true { return "English" }
+            if settings.language.isEmpty { return "auto-detect" }
+        }
+        return Locale.current.localizedString(forIdentifier: settings.speechLocale.identifier) ?? settings.language
+    }
+
+    /// Windows' "Speech: Ready · large-v3-turbo on GPU": the model's id and where it runs (Whisper's encoder on the GPU
+    /// or the Neural Engine, `WhisperModels.device`); Apple's recognizer (a Mac addition) with its language.
+    private func speechReady() {
+        speechStatus = activeSpeech.whisperModel.map { "Speech: Ready · \($0) on \(WhisperModels.device(of: $0))" }
+            ?? "Speech: Ready · Apple Speech (\(languageName)) on this \(Device.noun)"
+        speechOK = true
+        objectWillChange.send() // the dashboard's speech dial
+    }
+
+    /// Load a profile's AI model without generating anything, saying how it goes in `aiStatus` as Windows' WarmUpAsync
+    /// does (`AIStatus.warmUp`): "Starting AI runtime…" (Oberton's own Ollama is started if nothing answers, in the
+    /// direct build), "AI model 'x' not installed", "Loading x…", "Ready · x · GPU". Cloud models have nothing to load.
+    /// A profile without AI warms nothing at dictation time (`forDictation`), but its status still names the default
+    /// model, as on Windows.
+    private func warmUpAI(_ profile: Profile, forDictation: Bool = false) {
+        guard !Self.snapshotMode, !(forDictation && profile.isRaw) else { return }
+        let id = processor.model(for: profile)
+        let settings = settings
+        aiWarmTask?.cancel()
+        aiWarmTask = Task { [weak self] in
+            await AIStatus.warmUp(id, settings: settings) { line, ok in
+                await MainActor.run {
+                    guard let self, !Task.isCancelled else { return }
+                    self.aiStatus = "AI: " + line
+                    self.aiStatusOK = ok
+                    // "Loading x…" until the next line: the dashboard's "loading, then editing".
+                    self.aiLoading = line.hasPrefix("Loading ") ? id.name : nil
+                }
+            }
+            guard let self, !Task.isCancelled, id.provider == .ollama, !id.isOllamaCloud else { return }
+            await self.refreshOllama()
+            await self.refreshLoadedAI()
+        }
+    }
+
+    /// The dashboard is showing (Windows' 3 s refresh of `LoadedModelsAsync`): keep `loadedAIModels` current while at
+    /// least one view watches. Call with true when it appears and false when it goes.
+    func watchLoadedAI(_ on: Bool) {
+        loadedAIWatchers = max(0, loadedAIWatchers + (on ? 1 : -1))
+        if loadedAIWatchers > 0, loadedAITimer == nil {
+            Task { await refreshLoadedAI() }
+            loadedAITimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
+                Task { @MainActor in await self?.refreshLoadedAI() }
+            }
+        } else if loadedAIWatchers == 0 {
+            loadedAITimer?.invalidate()
+            loadedAITimer = nil
+        }
+    }
+
+    func refreshLoadedAI() async {
+        guard let url = try? OllamaBackend.validated(settings.ollamaEndpoint) else { loadedAIModels = []; return }
+        let loaded = Set(await OllamaBackend.loadedModels(endpoint: url))
+        if loaded != loadedAIModels { loadedAIModels = loaded }
+    }
+
+    /// The dashboard's AI node status for a profile, after "{profile} // " (DashboardPage.Build): "editing" or "loading,
+    /// then editing" while it tidies, "blocked offline" / "ready" for a cloud model, "loaded" / "not loaded" for a local
+    /// one (`loadedAIModels`, kept current by `watchLoadedAI`). Apple Intelligence: "ready" or "not ready". Nil without AI.
+    func aiNodeStatus(_ profile: Profile) -> String? {
+        guard !profile.isRaw else { return nil }
+        let id = processor.model(for: profile)
+        let cloud = !id.isLocal || id.isOllamaCloud
+        let loaded = id.provider == .apple ? AppleIntelligenceBackend.unavailableReason == nil : aiInMemory(id)
+        if phase == .processing { return cloud || loaded ? "editing" : "loading, then editing" }
+        if cloud { return settings.cloud.keepOffline ? "blocked offline" : "ready" }
+        if id.provider == .apple { return loaded ? "ready" : "not ready" }
+        return loaded ? "loaded" : "not loaded"
+    }
+
+    /// An Ollama model is in memory now (as `/api/ps` last said).
+    func aiInMemory(_ id: ModelID) -> Bool {
+        loadedAIModels.contains { $0.lowercased().hasPrefix(id.name.lowercased()) }
+    }
+
+    /// Whether the AI model is in memory right now (Apple Intelligence and cloud models: nothing to load, or no way to tell).
+    private static func aiLoaded(_ id: ModelID, endpoint: String) async -> Bool {
+        guard id.provider == .ollama, !id.isOllamaCloud, let url = try? OllamaBackend.validated(endpoint) else { return true }
+        return await OllamaBackend.isLoaded(endpoint: url, model: id.name)
+    }
+
+    // MARK: History
+
+    var lastEntry: HistoryEntry? { history.first }
+
+    /// The dashboard's turnaround: only a dictation that went straight in counts (not one that waited for a click),
+    /// noting whether a model had to load first. Saved with the dictation's counts (`record`).
+    /// Windows' FinishSeconds: to a hundredth, half to even (Math.Round).
+    static func finishSeconds(_ s: Double) -> Double { (s * 100).rounded(.toNearestOrEven) / 100 }
+
+    private func recordTurnaround(_ entry: HistoryEntry) async {
+        guard !placed, entry.turnaroundSeconds > 0 else { return }
+        // A check still running at the end counts as a model that had to load (Windows: `_aiWarm.IsCompletedSuccessfully`).
+        let aiWasWarm = aiModelUsed.isEmpty || aiWarmKnown == true
+        usage.recordTurnaround(TurnaroundSample(speechModel: speechModelUsed, aiModel: aiModelUsed, seconds: entry.turnaroundSeconds,
+                                                modelLoaded: !speechWarm || !aiWasWarm))
+    }
+
+    private func record(_ entry: HistoryEntry) {
+        // As Windows saves it: the final text trimmed, seconds to a tenth, the turnaround to a hundredth.
+        var entry = entry
+        entry.inserted = entry.inserted.trimmingCharacters(in: .whitespacesAndNewlines)
+        entry.seconds = (entry.seconds * 10).rounded(.toNearestOrEven) / 10 // Math.Round: half to even
+        entry.turnaroundSeconds = Self.finishSeconds(entry.turnaroundSeconds)
+        // The daily counts are kept whether or not History is.
+        usage.record(entry)
+        usageFile.save(usage)
+        if settings.keepWordTally {
+            words.record(entry)
+            words.save(to: wordsFile)
+        }
+        let pcm = historyAudio.finish()
+        guard settings.keepHistory else { return }
+        historyStore.add(entry, pcm: settings.saveHistoryAudio ? pcm : nil, words: transcriber.lastWords) // words: playback highlighting
+        pruneHistory()
+    }
+
+    func deleteHistory(_ ids: Set<HistoryEntry.ID>) {
+        historyStore.delete(ids)
+        history = historyStore.entries
+    }
+
+    /// Apply what Settings › History keeps now (also right after it is lowered, and every hour).
+    func pruneHistory() {
+        historyStore.prune(settings)
+        history = historyStore.entries
+    }
+
+    /// How many dictations keeping the newest `limit` or the last `days` days would delete right away.
+    func historyWouldDelete(limit: Int, days: Int) -> Int { historyStore.wouldDelete(limit: limit, days: days) }
+
+    /// Bytes History takes on disk, texts and recordings.
+    var historySizeBytes: Int64 { historyStore.sizeBytes }
+
+    var historyFolder: URL { historyStore.dir ?? HistoryStore.defaultDir }
+
+    /// History › Run again: transcribe the recording afresh and clean it up again; returns what to say (✓ or ⚠).
+    func rerunHistory(_ id: HistoryEntry.ID, progress: @escaping @MainActor (String) -> Void) async -> String {
+        guard let entry = history.first(where: { $0.id == id }) else { return "" }
+        do {
+            // With the speech model of the profile it was dictated with (HistoryRerun.cs: SpeechModels.For).
+            let profile = profiles.first { $0.name.caseInsensitiveCompare(entry.profileName) == .orderedSame } ?? activeProfile
+            let (changed, message) = try await HistoryRerun.run(entry, profiles: profiles, active: activeProfile,
+                                                                settings: speechSettings(for: profile),
+                                                                canSwapSpeechModel: !notes.needsModels && !phase.isBusy, progress: progress)
+            historyStore.save(changed)
+            history = historyStore.entries
+            return "✓ " + message
+        } catch let error as UserFacingError {
+            return "⚠ " + error.message
+        } catch {
+            Log.error("History: running a dictation again failed", error)
+            return "⚠ Running it again failed; the dictation was left as it was. See the log for details."
+        }
+    }
+
+    /// History's USE THE RERUN / PUT BACK THE EARLIER RESULT.
+    func swapHistoryEarlier(_ id: HistoryEntry.ID) -> String {
+        guard let entry = history.first(where: { $0.id == id }) else { return "" }
+        let swapped = HistoryRerun.swapEarlier(entry)
+        historyStore.save(swapped)
+        history = historyStore.entries
+        return swapped.showingEarlier == true ? "Put back the result from before it was run again." : "Back to the rerun's result."
+    }
+
+    /// What History's and the dashboard's insert says: "Inserted into Mail" (or "Copied…"), or the problem.
+    struct InsertNote: Equatable {
+        var ok: Bool
+        var text: String
+        /// History: "✓ Inserted into Mail." or "⚠ {problem}" (HistoryPage).
+        var sentence: String { ok ? "✓ \(text)." : "⚠ \(text)" }
+        /// The dashboard: "✓ INSERTED INTO MAIL" or "⚠ {problem}" (DashboardPage.History).
+        var banner: String { ok ? "✓ " + text.uppercased() : "⚠ \(text)" }
+    }
+
+    /// Put a text into the app the last dictation went to (History's "Insert transcription into the last app").
+    func insertIntoLastApp(_ text: String) async -> InsertNote {
+        do { return InsertNote(ok: true, text: try await platform?.insertIntoLastTarget(text) ?? "Done") } catch {
+            // Logged as Windows logs it; the Mac still says what went wrong rather than nothing.
+            if !(error is UserFacingError) { Log.error("Unhandled UI exception", error) }
+            return InsertNote(ok: false, text: (error as? UserFacingError)?.message ?? error.localizedDescription)
+        }
+    }
+
+    func resetUsage() {
+        usage.clearDays() // the turnaround samples stay, as on Windows
+        usageFile.save(usage)
+    }
+
+    /// Forget the word tally (Settings › History).
+    func resetWordTally() {
+        words = WordTally()
+        words.save(to: wordsFile)
+    }
+
+    /// Whether a word is in the speech vocabulary hint (Settings › Speech recognition).
+    func inVocabulary(_ word: String) -> Bool { Vocabulary.contains(settings.vocabularyHint, word) }
+
+    /// Add a word to the speech vocabulary hint, so the recognizer expects it from the next dictation on (Analytics'
+    /// "Add to vocabulary").
+    func addToVocabulary(_ word: String) {
+        settings.vocabularyHint = Vocabulary.adding(word, to: settings.vocabularyHint)
+    }
+
+    /// The debug snapshots run outside the sandbox: they must never write to the real data folder.
+    static var snapshotMode: Bool { ProcessInfo.processInfo.environment["OBERTON_SNAPSHOT"] != nil }
+
+    #if DEBUG
+    /// Snapshot mode only: made-up counts so the Analytics charts aren't empty. Kept in memory, never saved.
+    func seedSnapshotData() {
+        guard Self.snapshotMode else { return }
+        let cal = Calendar.current, now = Date()
+        var log = UsageLog(), tally = WordTally()
+        let apps = ["Mail", "Slack", "Notes", "Safari", "Xcode"]
+        let profiles = ["Light Cleanup", "Formal", "Raw", "Bullet notes"]
+        let samples: [(String, String)] = [
+            ("um so the overton release goes out on friday", "The Oberton release goes out on Friday."),
+            ("can you go ahead and send the release notes to the team", "Can you go ahead and send the release notes to the team?"),
+            ("i think uh we should move the standup to ten", "I think we should move the standup to ten."),
+            ("make sure that the cooper netties cluster is up", "Make sure that the Kubernetes cluster is up."),
+            ("let's go ahead and merge the pull request you know after review", "Let's go ahead and merge the pull request after review."),
+            ("the quarterly report is basically done", "The quarterly report is done."),
+            ("ping jessica about the design review tomorrow", "Ping Jessica about the design review tomorrow."),
+            ("make sure that the swift ui preview builds", "Make sure that the SwiftUI preview builds."),
+        ]
+        // Browser tabs, for the sites under Safari (the direct build only: the App Store build reads no titles).
+        let tabs = ["Inbox (3) - you@example.com - Gmail", "Pull requests - GitHub", "Quarterly plan - Google Docs", "Trip ideas - Claude",
+                    "Lo-fi beats - YouTube", "Some page - Hacker News", "My letter to the bank", "Feed | LinkedIn"]
+        var rng = SystemRandomNumberGenerator()
+        for back in 0..<120 {
+            let day = cal.date(byAdding: .day, value: -back, to: now)!
+            let weekend = UsageLog.weekdayRow(day) >= 5
+            let n = back == 0 ? 6 : Int.random(in: weekend ? 0...3 : 2...11, using: &rng)
+            for k in 0..<n {
+                let hour = [8, 9, 9, 10, 11, 13, 14, 14, 15, 16, 17, 21][Int.random(in: 0..<12, using: &rng)]
+                let time = cal.date(bySettingHour: hour, minute: k % 60, second: 0, of: day)!
+                let (heard, edit) = samples.randomElement(using: &rng)!
+                let profile = profiles[Int.random(in: 0..<(k % 3 == 0 ? 4 : 2), using: &rng)]
+                let raw = profile == "Raw"
+                let rejected = !raw && Int.random(in: 0..<12, using: &rng) == 0
+                let app = apps[min(Int.random(in: 0..<7, using: &rng), 4)]
+                let tab = tabs[min(Int.random(in: 0..<10, using: &rng), tabs.count - 1)]
+                var e = HistoryEntry(transcription: heard, aiEdit: raw ? nil : rejected ? heard : edit, inserted: raw || rejected ? heard : edit,
+                                     profileName: profile, model: nil, appName: app,
+                                     windowTitle: app == "Safari" && Distribution.isDirect && back < 90 ? tab : nil, seconds: Double.random(in: 3...9, using: &rng), turnaroundSeconds: Double.random(in: 0.6...2.2, using: &rng),
+                                     warning: rejected ? "Safety net" : nil)
+                e.date = time
+                log.recordDictation(words: e.words * 6, seconds: e.seconds * 5, turnaround: e.turnaroundSeconds, usedAI: !raw, keptAI: !raw && !rejected,
+                                    app: e.appName, site: e.site, on: time)
+                tally.record(e, now: now)
+            }
+            if Int.random(in: 0..<3, using: &rng) > 0 {
+                log.recordReading(words: Int.random(in: 80...900, using: &rng), seconds: Double.random(in: 30...300, using: &rng), on: day)
+            }
+        }
+        for t in [1.3, 0.9, 1.1] {
+            log.recordTurnaround(TurnaroundSample(speechModel: speechModelName, aiModel: aiModelName(activeProfile), seconds: t, modelLoaded: false))
+        }
+        usage = log
+        words = tally
+        speechReady() // the Speech recognition page's status line
+        whisperDownload = ("small.en", 0.42) // the speech model lists show a download under way
+        whisperLoad = WhisperEngine.Loading(model: "base.en", since: Date().addingTimeInterval(-42), firstTime: true)
+        speechStatus = loadingStatus("base.en")
+        speechOK = false
+        seedSnapshotNotes()
+        seedSnapshotHistory()
+    }
+
+    /// Snapshot mode only: a few dictations in the scratch history folder, one with a recording and a rerun.
+    private func seedSnapshotHistory() {
+        let now = Date()
+        func entry(_ heard: String, _ edit: String?, app: String?, title: String? = nil, minutesAgo: Double, safetyNet: Bool = false,
+                   inserted: Bool = true) -> HistoryEntry {
+            var e = HistoryEntry(transcription: heard, aiEdit: edit, inserted: safetyNet ? heard : edit ?? heard, profileName: edit == nil ? "Raw" : "Light Cleanup",
+                                 model: nil, appName: app, windowTitle: Distribution.isDirect ? title : nil, seconds: 40, turnaroundSeconds: 1.1,
+                                 warning: safetyNet ? "The AI's edit failed the safety net, so your original words were inserted unchanged." : nil,
+                                 safetyNet: safetyNet, wasInserted: inserted)
+            e.date = now.addingTimeInterval(-minutesAgo * 60)
+            return e
+        }
+        let tone = Data((0..<(16000 * 40)).flatMap { i -> [UInt8] in
+            let v = Int16(3000 * sin(Double(i) * 2 * .pi * 220 / 16000))
+            return [UInt8(truncatingIfNeeded: v), UInt8(truncatingIfNeeded: v >> 8)]
+        })
+        historyStore.add(entry("i think uh we should move the standup to ten", nil, app: "Notes", minutesAgo: 300), pcm: nil)
+        historyStore.add(entry("ping jessica about the design review tomorrow", "Ping Jessica about the design review tomorrow.", app: "Slack",
+                               minutesAgo: 200, safetyNet: true), pcm: tone)
+        historyStore.add(entry("can you go ahead and send the release notes to the team", "Can you go ahead and send the release notes to the team?",
+                               app: "Safari", title: "Team update - you@example.com - Gmail", minutesAgo: 90, inserted: false), pcm: tone)
+        var rerun = entry("um so the overton release goes out on friday", "So the Overton release goes out on Friday.", app: "Mail",
+                          title: "Release notes – Inbox", minutesAgo: 12)
+        rerun.earlier = HistoryVersion(transcription: rerun.transcription, aiEdit: rerun.aiEdit, inserted: rerun.inserted, safetyNet: false,
+                                       warning: nil, profileName: rerun.profileName, wasInserted: true)
+        rerun.transcription = "um so the oberton release goes out on friday"
+        rerun.aiEdit = "The Oberton release goes out on Friday."
+        rerun.inserted = rerun.aiEdit!
+        rerun.wasInserted = false
+        rerun.runAgainAt = now.addingTimeInterval(-60)
+        historyStore.add(rerun, pcm: tone)
+        history = historyStore.entries
+    }
+
+    /// Snapshot mode only: two finished Extended Notes sessions, in memory.
+    private func seedSnapshotNotes() {
+        let cal = Calendar.current, now = Date()
+        let lecture = NoteSession()
+        lecture.title = "Product sync // weekly"
+        lecture.started = cal.date(byAdding: .hour, value: -3, to: now)!
+        lecture.source = .both
+        lecture.folder = FileManager.default.temporaryDirectory.appending(path: "20261102-1015")
+        lecture.set(.transcript, "Agenda: beta dates, budget\n", source: nil)
+        lecture.appendHeard("okay so um let's start with the beta the overton beta goes out to the first ten testers on friday", seconds: 4)
+        lecture.appendHeard("and then we collect feedback for two weeks before the wider release", seconds: 11)
+        lecture.addMarker(19)
+        lecture.appendHeard("on the budget side the numbers are final we have 1550 for the design work", seconds: 22)
+        let first = lecture.beginFormat()!
+        lecture.endFormat(heard: first.heard, sent: first.sent,
+                          ai: "Agenda: beta dates, budget\nLet's start with the beta. The Oberton beta goes out to the first ten testers on Friday, and then we collect feedback for two weeks before the wider release.\n⚑ 0:19\n\nOn the budget side, the numbers are final: we have 1550 for the design work.",
+                          seconds: first.seconds, failed: false)
+        lecture.set(.formatted, lecture.formatted.replacingOccurrences(of: "the numbers are final", with: "the numbers are now final"), source: nil)
+        lecture.appendHeard("next week we look at the onboarding flow again", seconds: 31)
+        lecture.digests = [NoteDigest(level: 0, first: 0, last: 0, start: 0, end: 30, text: "The beta goes to ten testers on Friday; two weeks of feedback follow. The design budget is final at 1550.")]
+        lecture.summary = "Main idea: The Oberton beta ships to ten testers on Friday.\n\n- Two weeks of feedback before the wider release\n- The design budget is final at 1550\n- Onboarding is reviewed next week\n\nThe team agreed the dates and the budget; the onboarding flow comes up again next week."
+        lecture.summaryByAi = lecture.summary
+        lecture.seconds = 2843
+        lecture.finished = true
+        let call = NoteSession()
+        call.title = "Lecture // Signals and systems"
+        call.started = cal.date(byAdding: .day, value: -2, to: now)!
+        call.source = .mic
+        call.folder = FileManager.default.temporaryDirectory.appending(path: "20261031-0900")
+        call.appendHeard("today we look at the fourier transform and why it matters for sampling", seconds: 3)
+        call.seconds = 4920
+        call.finished = true
+        for s in [lecture, call] {
+            notes.store.add(s)
+            notes.store.usage.record(s, formatRequests: 14, summaryRequests: 5)
+        }
+    }
+    #endif
+
+    func clearHistory() {
+        historyStore.clear()
+        history = historyStore.entries
+    }
+
+    // MARK: Read aloud
+
+    /// The read-aloud hotkey: read the selection; with nothing selected, offer the clipboard. Pressed again (while
+    /// reading or asking), it stops.
+    func readSelection() {
+        if reader.isShowing { reader.stop(); return }
+        Task {
+            // Any selection is read, any clipboard text offered (a punctuation-only one then says there's nothing to read).
+            // The voice and speed are the current ones when the reading starts (for the clipboard, at READ CLIPBOARD).
+            // Where the selection can't be read at all (the Mac without Accessibility), the clipboard is still offered, as
+            // Windows offers it whenever the copy brought nothing; only with nothing there either does the overlay say
+            // what is missing, where Windows would say to select some text.
+            if let text = await platform?.selectedText(), !text.isEmpty {
+                reader.read(text)
+            } else if let clipboard = platform?.clipboardText()?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !clipboard.isEmpty {
+                reader.askToReadClipboard(clipboard)
+            } else if let why = platform?.selectionUnavailable {
+                notice(why, kind: .warning)
+            } else {
+                readerNotice("Select some text, then press \(settings.speakHotkey) to hear it read aloud.")
+            }
+        }
+    }
+
+    /// An info notice for Read aloud, on the overlay (App.OnSpeakHotkey).
+    private func readerNotice(_ text: String) {
+        notice(text)
+    }
+
+    // MARK: Models
+
+    /// Every model a profile can pick right now: Apple Intelligence, installed Ollama models, and cloud models.
+    var availableModels: [ModelID] {
+        var list = [ModelID.appleOnDevice]
+        list += ollamaModels.map { ModelID(provider: .ollama, name: $0) }
+        list += CloudCatalog.anthropic.map(\.id)
+        list.append(ModelID(provider: .openai, name: settings.cloud.openAIModel))
+        return list
+    }
+
+    // MARK: Unloading
+
+    /// A speech model is in memory: Apple's, used since it was last let go (the system keeps it a while after each
+    /// use), or a Whisper model.
+    var speechLoaded: Bool { LiveTranscriber.modelRetained || WhisperEngine.loadedModel != nil }
+
+    /// The speech model in Settings is the one in memory (a dictation started now doesn't wait for it to load).
+    var speechModelLoaded: Bool {
+        activeSpeech.whisperModel.map { WhisperEngine.loadedModel == $0 } ?? LiveTranscriber.modelRetained
+    }
+
+    /// Unload models right now, on request (the dashboard's speech dial), as App.UnloadNowAsync does on Windows. Never
+    /// while a dictation or a reading is using them. Returns what happened, for display.
+    func unloadNow(speech: Bool, ai: Bool, voice: Bool) async -> String {
+        var done: [String] = [], skipped: [String] = []
+        if speech {
+            if notes.needsModels { skipped.append("the speech model (Extended Notes is using it)") }
+            else if phase.isBusy { skipped.append("the speech model (dictating)") }
+            else if speechLoaded {
+                await LiveTranscriber.unloadModel()
+                await WhisperEngine.shared.unload()
+                Log.info("Speech model unloaded after being idle") // Windows' wording, on request too
+                done.append("speech model")
+                speechStatus = "Speech: Unloaded · loads again when you dictate"
+                speechOK = false
+            }
+        }
+        if ai {
+            // Apple Intelligence keeps no session between requests here; Ollama keeps its models loaded until told.
+            if notes.needsModels { skipped.append("the AI model (Extended Notes is using it)") }
+            else if phase.isBusy { skipped.append("the AI model (dictating)") }
+            else if let url = try? OllamaBackend.validated(settings.ollamaEndpoint) {
+                let n = await OllamaBackend.unloadAll(endpoint: url)
+                if n > 0 {
+                    Log.info("Unloaded \(n) AI model(s) on request")
+                    done.append("AI model")
+                }
+            }
+        }
+        if voice {
+            // The player on screen counts as reading, also its DONE card (Windows' ReaderWindow.IsBusy = visible).
+            if reader.isShowing { skipped.append("the Read aloud voice (reading)") }
+            else if reader.isLoaded {
+                reader.unload()
+                Log.info("Read aloud voice unloaded after being idle")
+                done.append("Read aloud voice")
+            }
+        }
+        var msg = !done.isEmpty ? "Unloaded: " + done.joined(separator: ", ") + ". They load again when needed."
+            : skipped.isEmpty ? "Nothing was loaded." : ""
+        if !skipped.isEmpty { msg = (msg + " Kept " + skipped.joined(separator: " and ") + ".").trimmingCharacters(in: .whitespaces) }
+        objectWillChange.send() // the speech dial now reads "off"
+        return msg
+    }
+
+    // MARK: Speech models
+
+    /// Make a speech model the one dictation and Extended Notes use ("" = Apple Speech); it loads now (`warmUp`). One
+    /// that isn't downloaded is taken too, as Windows' MODEL box takes any id (the status line then says so).
+    func useSpeechModel(_ id: String) {
+        pendingSpeechModel = nil // the user's own choice wins over the first-run one
+        settings.speechModel = id
+    }
+
+    // MARK: First-run speech model (Windows' RuntimeInstaller: the Whisper model for the hardware, downloaded in setup)
+
+    /// The speech model a new install starts with (`SpeechModelChoice.recommended`, tested in ObertonCore).
+    nonisolated static func recommendedSpeechModel(language: String = "") -> String {
+        SpeechModelChoice.recommended(language: language)
+    }
+
+    /// Setup's speech model step (and a launch after an unfinished one): download the first-run model, then switch
+    /// dictation over to it. Nothing to do when there is none, it is in already, or a download runs.
+    func startDefaultSpeechDownload() {
+        guard let id = pendingSpeechModel, !id.isEmpty else { pendingSpeechModel = nil; return }
+        if WhisperModels.isDownloaded(id) { finishDefaultSpeechModel(id); return }
+        downloadWhisper(id)
+    }
+
+    /// The first-run model is in: dictation uses it from now on (it loads now, `warmUp`).
+    private func finishDefaultSpeechModel(_ id: String) {
+        guard pendingSpeechModel == id else { return }
+        pendingSpeechModel = nil
+        Log.info("Speech model \(id) downloaded at first run: using it from now on")
+        settings.speechModel = id
+    }
+
+    /// Download a Whisper model, showing its progress in the model lists. One download at a time, as on Windows (whose
+    /// Models page runs one `_download` for every row): not while another Whisper model or a Read aloud voice downloads.
+    func downloadWhisper(_ id: String) {
+        guard whisperDownload == nil, reader.install == nil else { return }
+        whisperDownloadError = nil
+        whisperDownload = (id, nil)
+        whisperDownloadTask = Task {
+            do {
+                try await WhisperModels.download(id) { fraction in
+                    Task { @MainActor [weak self] in
+                        if self?.whisperDownload?.id == id { self?.whisperDownload = (id, fraction) }
+                    }
+                }
+                Log.info("Downloaded the speech model \(id)")
+                if pendingSpeechModel == id {
+                    finishDefaultSpeechModel(id) // loads (and prepares) it now
+                } else {
+                    // Prepared for this device now, so choosing it doesn't sit through that.
+                    Task.detached { await WhisperEngine.prepare(id) }
+                }
+            } catch is CancellationError {
+            } catch {
+                // A problem the user can act on is said as it is; anything else was logged where it happened and reads
+                // "The download failed. See the log for details." (ModelsPage.RunDownloadAsync).
+                if let error = error as? UserFacingError { whisperDownloadError = error.message } else {
+                    Log.error("Model download failed", error)
+                    whisperDownloadError = "The download failed. See the log for details."
+                }
+            }
+            whisperDownload = nil
+            whisperDownloadTask = nil
+        }
+    }
+
+    func cancelWhisperDownload() { whisperDownloadTask?.cancel() }
+
+    /// Settings › Models was left: its download stops, as Windows cancels the page's `_download` when the page unloads
+    /// (a speech model or a Read aloud voice). A new install's first speech model, downloading since setup, carries on
+    /// (Windows' setup does its own downloads).
+    func leftModelsPage() {
+        if let id = whisperDownload?.id, id != pendingSpeechModel { cancelWhisperDownload() }
+        reader.cancelInstall()
+    }
+
+    /// Load the active profile's AI model again (after its runtime or model was installed).
+    func rewarmAI() { warmUpAI(activeProfile) }
+
+    /// profiles.json is written 400 ms after the last change, as Windows' AutoSave does (not on every keystroke), and
+    /// at once by `saveProfilesNow` (leaving a profile's page, quitting).
+    private func scheduleProfilesSave() {
+        profilesSaveTask?.cancel()
+        profilesSaveTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            self?.saveProfilesNow()
+        }
+    }
+
+    func saveProfilesNow() {
+        saveSettingsNow() // leaving a page and quitting flush both, as Windows' AutoSave does on Unloaded
+        guard profilesSaveTask != nil else { return }
+        profilesSaveTask?.cancel()
+        profilesSaveTask = nil
+        profilesFile.save(profiles)
+    }
+
+    /// settings.json too is written 400 ms after the last change (MainWindow's AutoSave: a slider dragged or a box
+    /// typed in is saved once, when it settles), and at once by `saveSettingsNow` (leaving a page, quitting).
+    private func scheduleSettingsSave() {
+        settingsSaveTask?.cancel()
+        settingsSaveTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            self?.saveSettingsNow()
+        }
+    }
+
+    func saveSettingsNow() {
+        guard settingsSaveTask != nil else { return }
+        settingsSaveTask?.cancel()
+        settingsSaveTask = nil
+        settingsFile.save(settings)
+    }
+
+    /// The installed Ollama models, after making sure the runtime answers (Windows' EnsureRunningAsync starts its own).
+    func refreshOllama() async {
+        ollamaModels = await OllamaBackend.listModels(settings: settings) // Windows' ListModelsAsync, its failure logged
+    }
+}
+
+/// A stopwatch that can pause, as .NET's: `elapsed` adds up the time it ran.
+struct Stopwatch {
+    private var total: TimeInterval = 0
+    private var since: Date?
+
+    var elapsed: Double { total + (since.map { Date().timeIntervalSince($0) } ?? 0) }
+
+    mutating func restart() { total = 0; since = Date() }
+    mutating func start() { if since == nil { since = Date() } }
+    mutating func stop() {
+        if let since { total += Date().timeIntervalSince(since) }
+        since = nil
+    }
+}
+
+extension AppModel.Phase {
+    var label: String {
+        switch self {
+        case .idle: "Ready"
+        case .starting: "Starting…"
+        case .recording: "Listening"
+        case .transcribing: "Transcribing…"
+        case .processing: "Tidying up…"
+        case .preview: "Preview"
+        case .inserting: "Inserting…"
+        case .placing: "No place to paste"
+        case .done(let s): s
+        case .failed(let s): s
+        }
+    }
+}
+
+/// The overlay's level meter: 22 columns of √level, oldest first, as OverlayWindow.SetLevel draws them (`LevelColumns`):
+/// every level heard (one per 50 ms of audio) becomes one column, none dropped and none made up, and with no levels
+/// coming it holds still. The Mac's microphone hands its levels over a few at a time, so a 20 Hz tick draws them one by
+/// one rather than in jumps.
+@MainActor
+final class LevelMeter: ObservableObject {
+    static let count = LevelColumns.count
+    @Published private(set) var columns = LevelColumns().columns
+    private var state = LevelColumns()
+    private var timer: Timer?
+
+    /// A level from the microphone (0…1, Windows' scale).
+    func hear(_ level: Float) { state.hear(level) }
+
+    func start() {
+        guard timer == nil else { return }
+        state = LevelColumns()
+        columns = state.columns
+        let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.tick() }
+        }
+        RunLoop.main.add(timer, forMode: .common) // also while a menu is open
+        self.timer = timer
+    }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+    }
+
+    func tick() {
+        if state.tick() { columns = state.columns }
+    }
+}
