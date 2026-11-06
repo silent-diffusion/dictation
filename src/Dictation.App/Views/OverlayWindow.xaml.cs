@@ -107,7 +107,7 @@ public partial class OverlayWindow : Window
 
     void Display(double width, bool expanded)
     {
-        Body.Width = width;
+        Body.Width = FitWidth(width);
         Card.CornerRadius = new CornerRadius(expanded ? 20 : 28);
         var opacity = Math.Clamp(App.Services.Settings.Current.OverlayOpacity, 0.3, 1.0);
         Card.Background = new SolidColorBrush(Color.FromArgb((byte)Math.Round(opacity * 255), 0x0D, 0x0D, 0x0C));
@@ -115,6 +115,17 @@ public partial class OverlayWindow : Window
         _hideTimer.Stop();
         if (!IsVisible) Show();
         Reposition();
+    }
+
+    /// <summary>At least <paramref name="width"/>, wider when the top row needs it: a profile name in the chip or the
+    /// title is shown whole (up to about 30 characters; the chip and the title cut only longer ones), and the rest of the
+    /// row keeps its room. Never wider than the screen.</summary>
+    double FitWidth(double width)
+    {
+        TopRow.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        var screen = SystemParameters.WorkArea.Width - 120; // the card's padding and shadow margin, and a little air
+        // A little to spare, since the recording clock grows a digit after ten minutes.
+        return Math.Max(width, Math.Min(Math.Ceiling(TopRow.DesiredSize.Width) + 16, screen));
     }
 
     /// <summary>

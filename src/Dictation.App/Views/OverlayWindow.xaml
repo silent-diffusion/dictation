@@ -122,7 +122,8 @@
             <!-- The transcript so far, while you speak: above the pill's own content -->
             <TextBlock x:Name="LiveText" Foreground="#D9E8E7E3" FontSize="14" LineHeight="21" TextWrapping="Wrap"
                        Margin="0,6,10,4" MaxHeight="63" Visibility="Collapsed"/>
-            <Grid MinHeight="40">
+            <!-- The pill widens to fit this row (a long profile name), see FitWidth; only a huge name is cut short -->
+            <Grid x:Name="TopRow" MinHeight="40">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
@@ -151,7 +152,7 @@
                 </Grid>
 
                 <TextBlock x:Name="TitleText" Grid.Column="1" Foreground="#E8E7E3" FontFamily="Cascadia Mono, Consolas" FontSize="13" FontWeight="SemiBold"
-                           VerticalAlignment="Center"/>
+                           VerticalAlignment="Center" MaxWidth="380" TextTrimming="CharacterEllipsis"/>
 
                 <Grid Grid.Column="2" Margin="12,0" VerticalAlignment="Center">
                     <!-- The level meter: columns of dots, lit from the bottom -->
@@ -167,7 +168,8 @@
                     <local:DecorText x:Name="StateDecor" FontSize="10.5" Foreground="#80E8E7E3" VerticalAlignment="Center" Margin="0,0,10,0"/>
                     <Border x:Name="Chip" CornerRadius="12" BorderBrush="#38E8E7E3" BorderThickness="1"
                             Padding="10,3" VerticalAlignment="Center" Margin="0,0,8,0" Visibility="Collapsed">
-                        <TextBlock x:Name="ChipText" Foreground="#CCE8E7E3" FontFamily="Cascadia Mono, Consolas" FontSize="11"/>
+                        <TextBlock x:Name="ChipText" Foreground="#CCE8E7E3" FontFamily="Cascadia Mono, Consolas" FontSize="11"
+                                   MaxWidth="270" TextTrimming="CharacterEllipsis"/>
                     </Border>
                 </StackPanel>
 
