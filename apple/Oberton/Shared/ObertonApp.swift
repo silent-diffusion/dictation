@@ -66,10 +66,18 @@ struct MainWindowContent: View {
 struct PhoneOverlay: View {
     @EnvironmentObject var model: AppModel
     @State private var showReceipt = false
+    /// The width the pill may take (the screen's, less the margins, before the 92% scale), so it fits rather than
+    /// running off the side.
+    @State private var room = CGSize(width: 10_000, height: 10_000)
 
     var body: some View {
         VStack(spacing: 10) {
             OverlayPill(reader: model.reader, open: $showReceipt)
+        }
+        .environment(\.overlayRoom, room)
+        .frame(maxWidth: .infinity)
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
+            room = CGSize(width: max(80, size.width - 24) / 0.92, height: 10_000)
         }
         .padding(.horizontal, 12)
         .padding(.bottom, 8)
