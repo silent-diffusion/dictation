@@ -228,7 +228,7 @@ struct PillRow<Title: View, Middle: View>: View {
             if let indicator {
                 IndicatorView(kind: indicator).frame(width: 16, height: 16).padding(.trailing, 12)
             }
-            WidthCap(width: PillRowCap.title) {
+            WidthCap(width: PillRowFit.titleCap) {
                 title
                     .font(Ob.mono(13, .semibold))
                     .lineLimit(1)
@@ -259,7 +259,7 @@ struct PillRow<Title: View, Middle: View>: View {
             .layoutValue(key: PillShrink.self, value: 1)
             HStack(spacing: 0) {
                 if let chip, !chip.isEmpty {
-                    WidthCap(width: PillRowCap.chip) {
+                    WidthCap(width: PillRowFit.chipCap) {
                         Text(chip).font(Ob.mono(11)).foregroundStyle(lightText.opacity(0.8))
                             .lineLimit(1)
                             .truncationMode(.tail)
@@ -326,56 +326,38 @@ private struct PillStarNeed: LayoutValueKey {
     static let defaultValue: CGFloat? = nil
 }
 
-/// The longest the title and the chip get before they end in "…": far more than any normal profile or model name
-/// (the chip holds about 48 characters, "PROFILE   " or "TIDYING // " and a name of about 45 fit the title).
-enum PillRowCap {
-    static let title: CGFloat = 440, chip: CGFloat = 320
-}
-
 /// The pill row as Windows' Grid lays it out: every column but the star one at its own size, left to right, centred
 /// vertically; the star column gets the width left over, so what follows it sits at the right. The row asks for its
 /// columns' whole width (the star one's content included), up to `limit`; with less, the title and chip give up width.
 private struct PillGrid: Layout {
     var limit: CGFloat
 
-    private func widths(_ subviews: Subviews, in width: CGFloat) -> (sizes: [CGSize], star: CGFloat) {
-        var sizes = subviews.map { $0[PillStar.self] ? CGSize.zero : $0.sizeThatFits(.unspecified) }
-        var short = sizes.reduce(0) { $0 + $1.width } - width
-        // Too narrow even with an empty star column: the decor and CANCEL words drop out first, then the widest of the
-        // title and chip gives up width, down to 40.
-        for level in [1, 2] where short > 0.5 {
-            var least = sizes.map(\.width)
-            for i in subviews.indices where subviews[i][PillShrink.self] == level {
-                least[i] = max(level == 2 ? min(40, sizes[i].width) : 0, subviews[i].sizeThatFits(ProposedViewSize(width: 0, height: nil)).width)
-            }
-            while short > 0.5 {
-                guard let i = sizes.indices.filter({ subviews[$0][PillShrink.self] == level && sizes[$0].width > least[$0] + 0.5 })
-                    .max(by: { sizes[$0].width < sizes[$1].width }) else { break }
-                // A word that drops out goes whole: its column takes its narrower form's width.
-                let give = level == 1 ? sizes[i].width - least[i] : min(short, sizes[i].width - least[i])
-                sizes[i].width -= give
-                short -= give
-            }
+    /// The columns as PillRowFit sees them (the star column as a column of no width that keeps it).
+    private func columns(_ subviews: Subviews) -> [PillRowFit.Column] {
+        subviews.map { v in
+            if v[PillStar.self] { return PillRowFit.Column(width: 0) }
+            let level = v[PillShrink.self]
+            return PillRowFit.Column(width: v.sizeThatFits(.unspecified).width, shrink: level,
+                                     least: level == 0 ? 0 : v.sizeThatFits(ProposedViewSize(width: 0, height: nil)).width)
         }
-        return (sizes, max(0, width - sizes.reduce(0) { $0 + $1.width }))
     }
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let fixed = subviews.reduce(0) { $0 + ($1[PillStar.self] ? 0 : $1.sizeThatFits(.unspecified).width) }
+        let cols = columns(subviews)
         let star = subviews.first { $0[PillStar.self] }
-        let need = (fixed + (star.map { $0[PillStarNeed.self] ?? $0.sizeThatFits(.unspecified).width } ?? 0)).rounded(.up)
-        let width = min(max(proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? 0, need), limit)
-        let (sizes, starWidth) = widths(subviews, in: width)
+        let starNeed = star.map { $0[PillStarNeed.self] ?? $0.sizeThatFits(.unspecified).width } ?? 0
+        let width = PillRowFit.width(cols, star: starNeed, proposed: proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? 0, limit: limit)
+        let (widths, starWidth) = PillRowFit.widths(cols, in: width)
         let starHeight = star?.sizeThatFits(ProposedViewSize(width: starWidth, height: nil)).height ?? 0
-        let heights = zip(subviews, sizes).map { $0[PillStar.self] ? 0 : $0.sizeThatFits(ProposedViewSize(width: $1.width, height: nil)).height }
+        let heights = zip(subviews, widths).map { $0[PillStar.self] ? 0 : $0.sizeThatFits(ProposedViewSize(width: $1, height: nil)).height }
         return CGSize(width: width, height: max(starHeight, heights.max() ?? 0))
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let (sizes, starWidth) = widths(subviews, in: bounds.width)
+        let (widths, starWidth) = PillRowFit.widths(columns(subviews), in: bounds.width)
         var x = bounds.minX
-        for (subview, size) in zip(subviews, sizes) {
-            let width = subview[PillStar.self] ? starWidth : size.width
+        for (subview, size) in zip(subviews, widths) {
+            let width = subview[PillStar.self] ? starWidth : size
             subview.place(at: CGPoint(x: x, y: bounds.midY), anchor: .leading,
                           proposal: ProposedViewSize(width: width, height: nil))
             x += width
