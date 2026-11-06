@@ -569,7 +569,7 @@ struct LiveWords: View {
 
     var body: some View {
         WidthCap(width: min(430, room.width)) {
-            Text(Self.tail(text, 180))
+            Text(LiveTail.tail(text))
                 .font(Ob.sans(14))
                 .foregroundStyle(color)
                 .lineSpacing(Self.spacing)
@@ -583,14 +583,7 @@ struct LiveWords: View {
     }
 
     /// The last `max` characters, starting at a word when one starts soon enough, with "…" in front if cut.
-    static func tail(_ text: String, _ max: Int) -> String {
-        guard text.count > max else { return text }
-        let tail = text.suffix(max)
-        if let sp = tail.firstIndex(of: " "), (1..<40).contains(tail.distance(from: tail.startIndex, to: sp)) {
-            return "…" + tail[tail.index(after: sp)...]
-        }
-        return "…" + tail
-    }
+    static func tail(_ text: String, _ max: Int) -> String { LiveTail.tail(text, max) }
 }
 
 // MARK: Waiting for a decision

@@ -566,6 +566,8 @@ final class WhisperDictation: @unchecked Sendable {
     /// The final pass failed and there was no running transcript to keep instead.
     var failure: Error? { lock.withLock { failed } }
     private var failed: Error?
+    /// Tests: the running transcript's decode in place of the model's (the last 28 s in, its text out).
+    var partialDecode: (([Float]) async throws -> String)?
 
     init(model: String, language: String?, prompt: String, even: Bool, live: Bool = false, onText: @escaping (String) -> Void) {
         self.model = model; self.language = language; self.prompt = prompt; self.even = even; self.live = live; self.onText = onText
@@ -582,6 +584,8 @@ final class WhisperDictation: @unchecked Sendable {
         if live { partials = Task { [weak self] in await self?.liveLoop() }; return }
         // asr_server.py `_partial_loop`: every quarter second, the last 28 s decoded again once 0.6 s of new audio have
         // come in (and 0.5 s in all). A slow model simply refreshes less often, each decode waiting for the one before.
+        // It never stops refreshing before the end: TestFlight 5.18.1 (2) gave up after one decode over 4 s (and waited
+        // twice the decode's time between refreshes), so with large-v3 turbo the pill kept the first line only.
         partials = Task { [weak self] in
             var last = 0
             while !Task.isCancelled {
@@ -592,8 +596,10 @@ final class WhisperDictation: @unchecked Sendable {
                 last = count
                 let heard: String
                 do {
-                    heard = try await WhisperEngine.shared.transcribe(tail, model: self.model, language: self.language, prompt: self.prompt,
-                                                                     final: false, even: self.even)
+                    if let decode = self.partialDecode { heard = try await decode(tail) } else {
+                        heard = try await WhisperEngine.shared.transcribe(tail, model: self.model, language: self.language, prompt: self.prompt,
+                                                                         final: false, even: self.even)
+                    }
                 } catch {
                     if !Task.isCancelled { CoreLog.error("asr error: partial failed: \(error.localizedDescription)") }
                     continue
