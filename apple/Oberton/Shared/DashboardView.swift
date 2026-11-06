@@ -80,7 +80,8 @@ struct DashboardView: View {
             }
             .overlay(alignment: .top) { Hairline() }
             .overlay(alignment: .leading) { Hairline(vertical: true) }
-            Readout(footer).lineLimit(1).truncationMode(.tail).padding(.top, 8)
+            // Windows cuts the footer with "…"; the Mac wraps it.
+            Readout(footer).fixedSize(horizontal: false, vertical: true).padding(.top, 8)
         }
         .padding(EdgeInsets(top: 20, leading: 28, bottom: 14, trailing: 28))
     }
@@ -132,9 +133,9 @@ struct DashboardView: View {
                 if !phone { Readout(clock(now)).fixedSize().layoutValue(key: HeaderRow.RoleKey.self, value: .trailing) }
             }
             Rule().padding(.top, 6)
+            // One line on Windows, cut with "…"; the Mac wraps it where the window is too narrow.
             Text(summary).font(Ob.sans(12.5)).foregroundStyle(ob.muted)
-                .lineLimit(phone ? nil : 1).truncationMode(.tail)
-                .fixedSize(horizontal: false, vertical: phone)
+                .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 6)
         }
         .padding(.bottom, 14)
@@ -313,11 +314,12 @@ struct SignalPathCell: View {
         let _ = held
         VStack(spacing: 4) {
             HStack {
-                Readout("Signal path", size: 12)
-                Spacer()
+                // The keys and "→ Start" keep their size on one line (F7); "Signal path" wraps if it must.
+                Readout("Signal path", size: 12).fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
                 #if os(macOS)
-                KeyChips(hotkey: model.settings.hotkey)
-                Readout("→ Start", size: 12).padding(.leading, 6)
+                KeyChips(hotkey: model.settings.hotkey).fixedSize()
+                Readout("→ Start", size: 12).fixedSize().padding(.leading, 6)
                 #else
                 Button(model.phase == .recording ? "■ Stop" : "● Dictate") { model.toggleDictation() }
                     .buttonStyle(.primary)
@@ -330,9 +332,9 @@ struct SignalPathCell: View {
                     // busy core's pulse starts again from full each time.
                     .environment(\.pathBeat, "\(now.timeIntervalSinceReferenceDate)|\(model.phase)|\(held)")
             }
-            // The unload note is docked at the right at its full width; the hint takes what is left and is cut off
-            // there, without "…" (a TextBlock without trimming).
-            HStack(spacing: 0) {
+            // The unload note is docked at the right at its full width; the hint takes what is left. Where Windows cuts
+            // it off there, the Mac wraps it.
+            HStack(alignment: .bottom, spacing: 0) {
                 Group {
                     #if os(macOS)
                     Readout("Click a node to open its settings", size: 12)
@@ -340,9 +342,9 @@ struct SignalPathCell: View {
                     Readout("Tap a node", size: 12)
                     #endif
                 }
-                .lineLimit(1).fixedSize()
+                .fixedSize(horizontal: false, vertical: true)
                 .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-                .clipped()
+                .padding(.trailing, 8)
                 // When the models unload ("UNLOAD IN 12:34" in the accent), redrawn with the page every 3 s.
                 let note = unloadNote
                 Text(note.uppercased())
@@ -575,11 +577,12 @@ struct PathStep: View {
             Text(node.label).font(Ob.mono(15 * font, .bold)).foregroundStyle(hover ? ob.accent : ob.ink).lineLimit(1)
                 .padding(.top, 6 - 4 * (font - 1))
             dial.frame(width: 80, height: 80).padding(.top, 30)
+            // Windows cuts a long model name or status with "…"; the Mac gives each two lines.
             VStack(spacing: 2) {
                 Text(node.title.uppercased()).font(Ob.mono(13.5 * font)).foregroundStyle(hover ? ob.accent : ob.ink)
                 Text(node.status.uppercased()).font(Ob.mono(12 * font)).foregroundStyle(node.state == .busy ? ob.accent : ob.muted)
             }
-            .lineLimit(1).truncationMode(.tail)
+            .lineLimit(2).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: width - 8)
             .padding(.top, 108)
         }
@@ -658,7 +661,8 @@ struct VoicePill: View {
                 NodeCore(state: node.state, size: 6)
             }
             .frame(width: 11, height: 11)
-            Text("\(node.label) // \(node.title) // \(node.status)".uppercased()).font(Ob.mono(12.5 * font)).lineLimit(1)
+            Text("\(node.label) // \(node.title) // \(node.status)".uppercased()).font(Ob.mono(12.5 * font))
+                .fixedSize(horizontal: false, vertical: true)
                 .foregroundStyle(hover ? ob.accent : ob.ink)
         }
         // Windows' Padding 14,4 inside its 1-px border.
@@ -699,19 +703,18 @@ struct NotesCell: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 0) {
-                if let s = notes.current { live(s) } else { startButton }
-                Spacer(minLength: 0)
-                Button("⤢ Full screen") {
-                    nav.goNotes(notes.current?.id)
-                    #if os(macOS)
-                    // Always into full screen (MainWindow.ShowNotes(fullScreen: true)), never out of it.
-                    let window = NSApp.keyWindow ?? NSApp.windows.first { $0.isVisible }
-                    if window?.styleMask.contains(.fullScreen) != true { NoteSessionView.toggleFullScreen(model) }
-                    #endif
+            // Windows cuts the buttons' labels where the cell is narrow; the Mac puts Full screen under the first button
+            // instead, so both labels show whole.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 0) {
+                    first.fixedSize()
+                    Spacer(minLength: 0)
+                    fullScreenButton.fixedSize().padding(.leading, 8)
                 }
-                .buttonStyle(.quietSmall)
-                .padding(.leading, 8)
+                VStack(alignment: .leading, spacing: 6) {
+                    first
+                    fullScreenButton.fixedSize()
+                }
             }
             box
         }
@@ -731,6 +734,22 @@ struct NotesCell: View {
     }
 
     private func warn(_ message: String) { NotesDialog.warn(message) { problem = $0 } }
+
+    @ViewBuilder private var first: some View {
+        if let s = notes.current { live(s) } else { startButton.fixedSize() }
+    }
+
+    private var fullScreenButton: some View {
+        Button("⤢ Full screen") {
+            nav.goNotes(notes.current?.id)
+            #if os(macOS)
+            // Always into full screen (MainWindow.ShowNotes(fullScreen: true)), never out of it.
+            let window = NSApp.keyWindow ?? NSApp.windows.first { $0.isVisible }
+            if window?.styleMask.contains(.fullScreen) != true { NoteSessionView.toggleFullScreen(model) }
+            #endif
+        }
+        .buttonStyle(.quietSmall)
+    }
 
     /// A QuietButton with FontSize 11 and Padding 10,4,12,4; off while the session starts, so it can't start twice.
     private var startButton: some View {
@@ -791,7 +810,7 @@ struct NotesCell: View {
             } else {
                 // A button (a Tab stop with Full Keyboard Access; Space starts renaming), named by the title.
                 Button { startRenaming(s) } label: {
-                    Text(s.title.uppercased()).font(Ob.mono(13, .bold)).lineLimit(1).padding(.vertical, 1)
+                    Text(s.title.uppercased()).font(Ob.mono(13, .bold)).fixedSize(horizontal: false, vertical: true).padding(.vertical, 1)
                         .overlay(alignment: .bottom) { Hairline() }
                         .contentShape(Rectangle())
                 }
@@ -940,7 +959,7 @@ struct HistoryCell: View {
             // Where the text went, for 5 s, fading in and out (DashboardPage.History.ShowHistoryDone).
             VStack(alignment: .leading, spacing: 0) {
                 if let done {
-                    Text(done).font(Ob.mono(11)).foregroundStyle(ob.accent).lineLimit(1).truncationMode(.tail).help(done)
+                    Text(done).font(Ob.mono(11)).foregroundStyle(ob.accent).fixedSize(horizontal: false, vertical: true).help(done)
                         .opacity(doneShown ? 1 : 0)
                         .padding(.bottom, 6)
                         .transition(.asymmetric(insertion: .opacity.animation(.linear(duration: 0.15)), removal: .identity))
@@ -989,16 +1008,16 @@ struct HistoryCell: View {
         HStack(alignment: .top, spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
                 Text("HISTORY").font(Ob.mono(13, .bold)).foregroundStyle(hover ? ob.accent : ob.ink)
-                Readout(last == nil || last?.aiOutput?.isEmpty == false ? "Last AI edit" : "Last dictation // No AI edit", size: 10).lineLimit(1).padding(.top, 6)
+                Readout(last == nil || last?.aiOutput?.isEmpty == false ? "Last AI edit" : "Last dictation // No AI edit", size: 10).fixedSize(horizontal: false, vertical: true).padding(.top, 6)
                 // With nothing dictated the line stays, empty, one line tall (an empty TextBlock still measures a line).
-                Text(last.map(meta) ?? " ").font(Ob.mono(11)).foregroundStyle(ob.muted).lineLimit(1).truncationMode(.tail)
+                Text(last.map(meta) ?? " ").font(Ob.mono(11)).foregroundStyle(ob.muted).fixedSize(horizontal: false, vertical: true)
                     .accessibilityHidden(last == nil)
             }
             Spacer(minLength: 0)
             // Docked at the right at its full width, 8 from the titles; only the meta line gives way.
             VStack(alignment: .trailing, spacing: 0) {
                 Text(model.history.count.formatted()).font(Ob.mono(28, .bold)).foregroundStyle(hover ? ob.accent : ob.ink)
-                Readout(kept, size: 10).lineLimit(1)
+                Readout(kept, size: 10)
             }
             .fixedSize()
             .padding(.leading, 8)
