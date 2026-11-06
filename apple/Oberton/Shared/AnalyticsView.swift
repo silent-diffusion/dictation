@@ -91,7 +91,7 @@ struct AnalyticsView: View {
                 Readout(note, size: 9.5).padding(.top, 4).padding(.bottom, 14)
             } else {
                 HStack(spacing: 0) {
-                    Text(summary).font(Ob.sans(12.5)).foregroundStyle(ob.muted).lineLimit(1).truncationMode(.tail)
+                    Text(summary).font(Ob.sans(12.5)).foregroundStyle(ob.muted).fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 16)
                     Readout(note).lineLimit(1).fixedSize()
                 }
@@ -314,9 +314,10 @@ private struct ReadoutCell<Sub: View>: View {
     var body: some View {
         PanelCell {
             VStack(alignment: .leading, spacing: 0) {
-                Readout(label).lineLimit(1).truncationMode(.tail)
+                // Windows cuts these with "…": the Mac wraps the label, and draws a number too wide for the cell smaller.
+                Readout(label).fixedSize(horizontal: false, vertical: true)
                 Text(value).font(Ob.mono(24, .bold)).foregroundStyle(accent ? ob.accent : ob.ink)
-                    .lineLimit(1).truncationMode(.tail).padding(.top, 6).padding(.bottom, 2)
+                    .lineLimit(1).minimumScaleFactor(0.6).padding(.top, 6).padding(.bottom, 2)
                 sub
             }
         }
@@ -550,7 +551,7 @@ private struct AppRow: View {
         let row = WeightedRow(columns: compact ? [.flex(1.2), .flex(2), .fixed(44)] : [.flex(0.8), .flex(2.4), .fixed(52)]) {
             // The name's tooltip covers its whole column (a stretched TextBlock), inside its margins.
             Text((on ? "▸ " : "") + text.uppercased()).font(Ob.mono(site ? 10 : 11, on ? .bold : .regular))
-                .foregroundStyle(color).lineLimit(1).truncationMode(.tail)
+                .foregroundStyle(color).fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle()).help(tip)
                 .padding(.leading, site ? 12 : 0).padding(.trailing, 10)
             BlockBar(fraction: Double(count) / Double(total), blocks: compact ? 20 : 30, color: color, height: site ? 7 : 10,
@@ -686,7 +687,7 @@ private struct CorrectionRow: View {
         var w = AttributedString(written)
         w.foregroundColor = ob.accent
         w.font = Ob.mono(12.5, .bold)
-        return Text(h + AttributedString("  →  ") + w).font(Ob.mono(12.5)).lineLimit(1).truncationMode(.tail)
+        return Text(h + AttributedString("  →  ") + w).font(Ob.mono(12.5)).fixedSize(horizontal: false, vertical: true)
             .help("Heard \"\(heard)\", the AI wrote \"\(written)\" (\(count.formatted()) time\(count == 1 ? "" : "s"))")
     }
 
@@ -728,11 +729,11 @@ private struct TopWordsCell: View {
                     ForEach(Array(top.enumerated()), id: \.offset) { i, w in
                         WeightedRow(columns: [.fixed(24), .flex(1), .flex(1.6), .fixed(48)]) {
                             Text(String(format: "%02d", i + 1)).font(Ob.mono(10)).foregroundStyle(ob.muted)
-                            Text(w.key).font(Ob.mono(12.5)).lineLimit(1).truncationMode(.tail).padding(.trailing, 8).help(w.key)
+                            Text(w.key).font(Ob.mono(12.5)).fixedSize(horizontal: false, vertical: true).padding(.trailing, 8).help(w.key)
                             Meter(fraction: Double(w.count) / max, accent: i == 0)
                             Text(w.count.formatted()).font(Ob.mono(11)).frame(maxWidth: .infinity, alignment: .trailing)
                         }
-                        .frame(height: 24)
+                        .frame(minHeight: 24)
                     }
                 }
             }
@@ -763,7 +764,7 @@ private struct PhrasesCell: View {
                         Ruled {
                             // A DockPanel: ×N docked at the right, the phrase filling the rest right up to it.
                             HStack(spacing: 0) {
-                                Text("“\(p.phrase)”").font(Ob.sans(13)).lineLimit(1).truncationMode(.tail).help(p.phrase)
+                                Text("“\(p.phrase)”").font(Ob.sans(13)).fixedSize(horizontal: false, vertical: true).help(p.phrase)
                                 Spacer(minLength: 0)
                                 Text("×\(p.count.formatted())").font(Ob.mono(11)).foregroundStyle(ob.muted)
                             }
@@ -992,13 +993,13 @@ private struct ProfilesCell: View {
                     WeightedRow(columns: columns) {
                         ForEach(Array((compact ? ["Profile", "Used", "Changed", "Kept", "Turn"] : ["Profile", "Used", "Words changed", "Kept", "Turnaround"]).enumerated()),
                                 id: \.offset) { i, h in
-                            Readout(h, size: 10).lineLimit(1).frame(maxWidth: .infinity, alignment: i == 0 ? .leading : .trailing)
+                            Readout(h, size: 10).fixedSize(horizontal: false, vertical: true).multilineTextAlignment(i == 0 ? .leading : .trailing).frame(maxWidth: .infinity, alignment: i == 0 ? .leading : .trailing)
                         }
                     }
                     .padding(.vertical, 5)
                     ForEach(Array(rows), id: \.profile) { name, p in
                         WeightedRow(columns: columns) {
-                            Text(name).lineLimit(1).truncationMode(.tail).frame(maxWidth: .infinity, alignment: .leading)
+                            Text(name).fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
                             cell(p.dictations.formatted())
                             cell(p.aiEdited == 0 || p.wordsHeard == 0 ? "—" : percent(min(1, Double(p.wordsChanged) / Double(p.wordsHeard))))
                             cell(p.aiEdited == 0 ? "—" : percent(Double(p.aiKept) / Double(p.aiEdited)))
@@ -1048,7 +1049,7 @@ private struct LongestRow: View {
             HStack(spacing: 0) {
                 Text(DateText.dayMonth(session.started).uppercased()).font(Ob.mono(10)).foregroundStyle(ob.muted)
                     .frame(width: 56, alignment: .leading)
-                Text(session.title).font(Ob.sans(13)).foregroundStyle(hover ? ob.accent : ob.ink).lineLimit(1).truncationMode(.tail)
+                Text(session.title).font(Ob.sans(13)).foregroundStyle(hover ? ob.accent : ob.ink).fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 Text("\(NoteSession.words(session.transcript).formatted()) w").font(Ob.mono(11)).foregroundStyle(ob.muted).fixedSize().padding(.leading, 10)
                 Text(duration(session.seconds)).font(Ob.mono(12, .bold)).frame(width: 60, alignment: .trailing).padding(.leading, 10)
@@ -1078,7 +1079,7 @@ private struct NotesSourcesCell: View {
                     ForEach([(NotesSource.mic, "Microphone"), (.computer, "Computer audio"), (.both, "Both")], id: \.0) { source, label in
                         let v = figures.sources[source]
                         WeightedRow(columns: [.flex(1), .flex(1.4), .fixed(96)]) {
-                            Text(label.uppercased()).font(Ob.mono(11)).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                            Text(label.uppercased()).font(Ob.mono(11)).fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
                             Meter(fraction: (v?.seconds ?? 0) / most)
                             Text(v.map { "\(NetNumber.n0($0.sessions)) · \(duration($0.seconds))" } ?? "—").font(Ob.mono(11)).frame(maxWidth: .infinity, alignment: .trailing)
                         }

@@ -94,7 +94,7 @@ struct ReaderCard: View {
                 Spacer(minLength: 8)
                 VStack(alignment: .trailing, spacing: 0) {
                     Text(Self.clock(player.secondsLeft)).font(Ob.mono(15)).foregroundStyle(Self.ink).help("Estimated time left")
-                    Text(statusWord).font(Ob.mono(10)).foregroundStyle(Self.ink.opacity(0.6)).lineLimit(1)
+                    Text(statusWord).font(Ob.mono(10)).foregroundStyle(Self.ink.opacity(0.6)).lineLimit(1).fixedSize()
                 }
                 .padding(.trailing, 12)
                 HStack(spacing: 6) {

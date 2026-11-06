@@ -415,7 +415,8 @@ struct HistoryRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 // MonoLabel keeps the case it is given ("Mail", "40 s"): WPF doesn't change case.
                 HStack(spacing: 0) {
-                    Text(HistoryEntry.when(entry.date) + "  ·  " + entry.appLabel).lineLimit(1).truncationMode(.tail)
+                    // Windows cuts a long app name with "…"; the Mac wraps it.
+                    Text(HistoryEntry.when(entry.date) + "  ·  " + entry.appLabel).fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 0)
                     Text(HistoryEntry.duration(entry.seconds)).fixedSize()
                 }
