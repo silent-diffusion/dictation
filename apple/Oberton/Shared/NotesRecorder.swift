@@ -817,6 +817,21 @@ final class NotesRecorder: ObservableObject {
             throw error
         }
     }
+
+    #if DEBUG
+    /// Snapshots only: shows `session` as the one recording (nil: none), in the state given, without any audio.
+    func snapshotState(_ session: NoteSession?, transcribing: Bool = true, formatting: Bool = false, summarizing: Bool = false,
+                       paused: Bool = false, finishing: Bool = false, model: ModelID? = nil) {
+        current = session
+        self.transcribing = transcribing
+        isFormatting = formatting
+        isSummarizing = summarizing
+        userPaused = paused
+        isFinishing = finishing
+        self.model = model
+        revision += 1
+    }
+    #endif
 }
 
 /// The parts a redo has transcribed so far (one progress report each).

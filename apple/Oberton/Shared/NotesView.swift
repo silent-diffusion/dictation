@@ -281,14 +281,16 @@ struct NoteRow: View {
         // Columns as Windows' star widths 2.4 / 1 / 0.7 / 0.9, then Delete (or ● RECORDING) at its own size.
         StarColumns(weights: [2.4, 1, 0.7, 0.9]) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(s.title).font(Ob.mono(13, .bold)).lineLimit(1)
-                Text(Self.gist(s)).font(Ob.sans(12)).foregroundStyle(ob.muted).lineLimit(1)
+                // Windows cuts these with "…"; the Mac wraps the name, and gives the gist (itself at most 140 characters)
+                // two lines.
+                Text(s.title).font(Ob.mono(13, .bold)).fixedSize(horizontal: false, vertical: true)
+                Text(Self.gist(s)).font(Ob.sans(12)).foregroundStyle(ob.muted).lineLimit(2).fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.trailing, 12)
-            Text(Self.when(s.started)).font(Ob.mono(11.5)).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-            Text(NoteSessionView.length(s.seconds)).font(Ob.mono(11.5)).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-            Text(NoteSessionView.sourceLabel(s.source).uppercased()).font(Ob.mono(10.5)).foregroundStyle(ob.muted).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+            Text(Self.when(s.started)).font(Ob.mono(11.5)).fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
+            Text(NoteSessionView.length(s.seconds)).font(Ob.mono(11.5)).fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
+            Text(NoteSessionView.sourceLabel(s.source).uppercased()).font(Ob.mono(10.5)).foregroundStyle(ob.muted).fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
             if live {
                 Text("● RECORDING").font(Ob.mono(10.5, .bold)).foregroundStyle(ob.record)
             } else {
@@ -375,15 +377,18 @@ struct NoteSessionView: View {
             NotesPipelineView(steps: live ? NotesSteps.live(model, chosen: session.source) : NotesSteps.redo(model, session),
                               open: [.transcribe, .transcribe, .format, .summary].map { step in { ask(step) } })
                 .padding(.bottom, 8)
-            // The hint is docked right first: it stays whole, and the pills give way when the row is too narrow.
-            HStack(spacing: 0) {
+            // The hint is docked right. Where Windows lets the pills give way when the row is too narrow, the Mac moves
+            // the hint under the pills instead, so every tab and the whole hint show.
+            ViewThatFits(in: .horizontal) {
                 HStack(spacing: 0) {
-                    ForEach(Tab.allCases, id: \.self) { t in Pill(t.rawValue, on: tab == t) { tab = t }.focusTaker().padding(.trailing, 4) }
+                    tabPills
+                    Spacer(minLength: 12)
+                    Readout(hint, size: 10).lineLimit(1).fixedSize()
                 }
-                .fixedSize()
-                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-                .clipped()
-                Readout(hint, size: 10).lineLimit(1).fixedSize()
+                VStack(alignment: .leading, spacing: 8) {
+                    tabPills
+                    Readout(hint, size: 10).fixedSize(horizontal: false, vertical: true)
+                }
             }
             .padding(.bottom, 10)
             content
@@ -424,25 +429,40 @@ struct NoteSessionView: View {
         }
     }
 
+    private var tabPills: some View {
+        HStack(spacing: 0) {
+            ForEach(Tab.allCases, id: \.self) { t in Pill(t.rawValue, on: tab == t) { tab = t }.focusTaker().padding(.trailing, 4) }
+        }
+        .fixedSize()
+    }
+
     // MARK: Header
 
-    /// Windows' DockPanel: the buttons docked right keep their size; the dot, the name and the timer (a horizontal
-    /// StackPanel, measured at any width) get what is left and are cut off there, so a long name runs to the buttons
-    /// with no "…" and pushes the timer out of sight.
+    /// Windows' DockPanel: the buttons docked right keep their size; the dot, the name and the timer get what is left
+    /// and are cut off there. The Mac never cuts the name: when the row has no room for it, the buttons move under it,
+    /// and a name longer than the whole width wraps onto more lines.
     private var header: some View {
-        HStack(spacing: 0) {
-            headerLeft
-                .fixedSize()
-                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-                .clipped()
-            headerButtons
-                .padding(.leading, 6) // each button's left margin 6
-                .fixedSize()
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 0) {
+                headerLeft(wrap: false)
+                    .fixedSize()
+                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                headerButtons
+                    .padding(.leading, 6) // each button's left margin 6
+                    .fixedSize()
+            }
+            VStack(alignment: .leading, spacing: 10) {
+                headerLeft(wrap: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                headerButtons
+                    .fixedSize()
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
         }
     }
 
-    private var headerLeft: some View {
-        HStack(spacing: 0) {
+    private func headerLeft(wrap: Bool) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 0) {
             if live {
                 Circle().strokeBorder(ob.record, lineWidth: 1.6)
                     .background(Circle().fill(!notes.isPaused && !notes.isFinishing ? ob.record : .clear))
@@ -467,7 +487,8 @@ struct NoteSessionView: View {
                     DispatchQueue.main.async { titleFocused = true }
                 } label: {
                     // Padding 0,1 above the 1-px underline; upper-cased as ToUpperInvariant ("ß" stays).
-                    Text(Self.invariantUpper(session.title)).font(Ob.mono(24, .bold)).lineLimit(1).fixedSize()
+                    Text(Self.invariantUpper(session.title)).font(Ob.mono(24, .bold))
+                        .lineLimit(wrap ? nil : 1).fixedSize(horizontal: !wrap, vertical: true)
                         .padding(.top, 1).padding(.bottom, 2)
                         .overlay(alignment: .bottom) { Hairline() }
                         .contentShape(Rectangle())
@@ -1060,6 +1081,7 @@ private struct QuietMenuFace: ButtonStyle {
             label
                 .font(Ob.mono(12))
                 .lineLimit(1)
+                .fixedSize()
                 .foregroundStyle(ob.ink)
                 .padding(.horizontal, 16 + Ob.border)
                 .frame(minHeight: 34)
@@ -1347,11 +1369,13 @@ private struct PipeColumn: View {
                 }
             }
             .frame(width: 9, height: 9).padding(.top, y - 4.5)
+            // Windows cuts a long model name or status with "…"; the Mac gives each two lines.
             VStack(spacing: 2) {
                 Text(step.title.uppercased()).font(Ob.mono(12.5))
                 Text(step.status.uppercased()).font(Ob.mono(11.5)).foregroundStyle(step.state == .busy ? ob.accent : ob.muted)
             }
-            .lineLimit(1).truncationMode(.tail).frame(maxWidth: width - 12).padding(.top, y + r + 7)
+            .lineLimit(2).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: width - 12).padding(.top, y + r + 7)
         }
         .foregroundStyle(ob.ink)
         .frame(width: width, height: height, alignment: .top)
@@ -1402,7 +1426,7 @@ struct Pill: View {
     /// keyboard focus, the hand over it.
     var body: some View {
         Button(action: action) {
-            Text(title.uppercased()).font(Ob.mono(11, .semibold)).lineLimit(1)
+            Text(title.uppercased()).font(Ob.mono(11, .semibold)).lineLimit(1).fixedSize()
                 .foregroundStyle(on ? ob.onInk : ob.ink)
                 .padding(.horizontal, 14).padding(.vertical, 7)
                 .background(Capsule().fill(on ? ob.ink : hover ? ob.subtle : .clear))
