@@ -161,8 +161,9 @@ struct ProfileRow: View {
         Button(action: action) {
             HStack(alignment: .top, spacing: 8) {
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(profile.name).font(Ob.sans(13.5, .semibold)).lineLimit(1)
-                    Text(profile.description).font(Ob.sans(12)).foregroundStyle(ob.muted).lineLimit(1)
+                    // Windows cuts these with "…"; the Mac wraps them so the whole name and description show.
+                    Text(profile.name).font(Ob.sans(13.5, .semibold)).fixedSize(horizontal: false, vertical: true)
+                    Text(profile.description).font(Ob.sans(12)).foregroundStyle(ob.muted).fixedSize(horizontal: false, vertical: true)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 if active {
@@ -207,6 +208,10 @@ struct ProfilePage: View {
     @State private var promptFocused = false
     @State private var sampleFocused = false
     @State private var moreHover = false
+    /// The page's width: where it is narrow (the smallest window), Try it's boxes and the Instructions and Behaviour
+    /// columns go one under the other, as on iPhone, rather than squeezing their titles and text.
+    @State private var width: CGFloat = 1000
+    private var stacked: Bool { sizeClass == .compact || width < 600 }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -216,7 +221,7 @@ struct ProfilePage: View {
             modelsCard.padding(.top, 12)
             if profile.autoProcess {
                 Group {
-                    if sizeClass == .compact {
+                    if stacked {
                         VStack(alignment: .leading, spacing: 24) { instructions; behaviour }
                     } else {
                         // Windows' 3* : 24 : 2* grid, the second column at least 260.
@@ -226,6 +231,7 @@ struct ProfilePage: View {
                 .padding(.top, 24)
             }
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .onChange(of: profile.autoProcess) { trial = Trial() }
         // A Try it waiting in the preview stays when the page goes: the preview is the app's (TrialPreview).
         .onDisappear { model.saveProfilesNow() } // Windows' AutoSave flushes when the page goes
@@ -298,7 +304,12 @@ struct ProfilePage: View {
     private var header: some View {
         HStack(alignment: .top, spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
-                TextField("", text: $profile.name).textFieldStyle(.plain).font(Ob.mono(30, .bold)).padding(.vertical, 2)
+                // Wraps onto more lines rather than scrolling a long name out of sight beside the chips.
+                TextField("", text: $profile.name, axis: .vertical).textFieldStyle(.plain).font(Ob.mono(30, .bold)).padding(.vertical, 2)
+                    // Still one line of name: a line break typed into it becomes a space.
+                    .onChange(of: profile.name) { _, name in
+                        if name.contains(where: \.isNewline) { profile.name = name.split(whereSeparator: \.isNewline).joined(separator: " ") }
+                    }
                     .help("Click to rename").accessibilityLabel("Profile name")
                 TextField("", text: $profile.description, axis: .vertical).textFieldStyle(.plain).font(Ob.sans(14))
                     .foregroundStyle(ob.muted).padding(.vertical, 2)
@@ -338,14 +349,14 @@ struct ProfilePage: View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
                 Text("TRY IT").font(Ob.mono(12, .bold))
-                // A NoWrap TextBlock: cut off where the room ends, no "…".
+                // A NoWrap TextBlock, which wraps on the Mac where Windows cuts it off.
                 Text("Edit the sample, then run this profile on it.").font(Ob.sans(12)).foregroundStyle(ob.muted).noWrap()
                 Spacer()
                 Button("Run") { run() }.buttonStyle(CapsuleButtonStyle(kind: .primary, height: 32)).disabled(running)
             }
             .padding(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 12))
             Hairline()
-            let layout = sizeClass == .compact ? AnyLayout(VStackLayout(spacing: 0)) : AnyLayout(HStackLayout(alignment: .top, spacing: 0))
+            let layout = stacked ? AnyLayout(VStackLayout(spacing: 0)) : AnyLayout(HStackLayout(alignment: .top, spacing: 0))
             layout {
                 trialColumn("01 // Transcription", copy: sample.trimmingCharacters(in: .whitespacesAndNewlines), copyName: "Copy Transcription") {
                     PlainTextBox(text: $sample, font: Ob.mono(13), nsFont: .monospacedSystemFont(ofSize: 13, weight: .regular),
@@ -353,11 +364,11 @@ struct ProfilePage: View {
                         .frame(minHeight: 72, alignment: .topLeading)
                         .modifier(BareFluentField(focused: sampleFocused))
                 }
-                Hairline(vertical: sizeClass != .compact)
+                Hairline(vertical: !stacked)
                 trialColumn("02 // AI Edit", copy: trial.aiText, copyName: "Copy AI Edit", meta: trial.meta) {
                     box(trial.edit ?? .placeholder(profile.autoProcess ? "Run the profile to see what it changes." : "No AI edit: this profile doesn't use AI."))
                 }
-                Hairline(vertical: sizeClass != .compact)
+                Hairline(vertical: !stacked)
                 trialColumn("03 // Inserted", copy: trial.inserted, copyName: "Copy Inserted") { box(trial.output) }
             }
         }
@@ -367,7 +378,7 @@ struct ProfilePage: View {
     private func trialColumn<C: View>(_ title: String, copy: String, copyName: String, meta: String = "", @ViewBuilder content: () -> C) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             // Windows' DockPanel, all on one line: COPY and the meta docked right at their own width, the title in what
-            // is left; short of room the title is cut off first, then the meta (NoWrap, no "…").
+            // is left; short of room Windows cuts the title off first, then the meta, where the Mac wraps them.
             HStack(alignment: .firstTextBaseline, spacing: 0) {
                 Readout(title).noWrap()
                 Spacer(minLength: 0)
@@ -510,23 +521,33 @@ struct ProfilePage: View {
             Text("MODELS").font(Ob.mono(12, .bold))
             Text("What this profile listens, edits and reads with. Only models on this \(Device.noun) are listed (download more under Settings › Models); cloud AI models appear once you add a key and turn off \"Keep everything offline\".")
                 .font(Ob.sans(12)).foregroundStyle(ob.muted).fixedSize(horizontal: false, vertical: true).padding(.top, 2).padding(.bottom, 10)
-            Grid(alignment: .leading, horizontalSpacing: 0, verticalSpacing: 8) {
-                GridRow {
-                    Readout("Speech to text").frame(width: 140, alignment: .leading)
-                    ObMenu(options: speechChoices, selection: Binding(get: { profile.speechModel ?? "" }, set: { profile.speechModel = $0.isEmpty ? nil : $0 }))
-                        .frame(maxWidth: 528).accessibilityLabel("Speech-to-text model")
-                }
-                if profile.autoProcess {
+            // Labels at the left of the boxes; where the page is too narrow for a whole model name beside its label, each
+            // label goes above its box (Windows cuts the name instead).
+            ViewThatFits(in: .horizontal) {
+                Grid(alignment: .leading, horizontalSpacing: 0, verticalSpacing: 8) {
                     GridRow {
-                        Readout("AI edit").frame(width: 140, alignment: .leading)
-                        // Matched in any case, as Windows' Select.
-                        ObMenu(options: aiChoices, selection: Binding(get: { Self.match(profile.model ?? "", in: aiChoices) },
-                                                                    set: { profile.model = $0.isEmpty ? nil : $0 }))
-                            .frame(maxWidth: 528).accessibilityLabel("AI model")
+                        Readout("Speech to text").frame(width: 140, alignment: .leading)
+                        speechMenu
+                    }
+                    if profile.autoProcess {
+                        GridRow {
+                            Readout("AI edit").frame(width: 140, alignment: .leading)
+                            aiMenu
+                        }
+                    }
+                    GridRow {
+                        Readout("Read aloud").frame(width: 140, alignment: .leading)
+                        ProfileVoicePicker(voice: $profile.voice)
                     }
                 }
-                GridRow {
-                    Readout("Read aloud").frame(width: 140, alignment: .leading)
+                VStack(alignment: .leading, spacing: 4) {
+                    Readout("Speech to text")
+                    speechMenu
+                    if profile.autoProcess {
+                        Readout("AI edit").padding(.top, 6)
+                        aiMenu
+                    }
+                    Readout("Read aloud").padding(.top, 6)
                     ProfileVoicePicker(voice: $profile.voice)
                 }
             }
@@ -537,6 +558,18 @@ struct ProfilePage: View {
         .padding(EdgeInsets(top: 12, leading: 14 + Ob.border, bottom: 14, trailing: 14 + Ob.border))
         .overlay(Rectangle().strokeBorder(ob.divider, lineWidth: 1))
         .task { await model.refreshOllama() }
+    }
+
+    private var speechMenu: some View {
+        ObMenu(options: speechChoices, selection: Binding(get: { profile.speechModel ?? "" }, set: { profile.speechModel = $0.isEmpty ? nil : $0 }))
+            .frame(maxWidth: 528).accessibilityLabel("Speech-to-text model")
+    }
+
+    private var aiMenu: some View {
+        // Matched in any case, as Windows' Select.
+        ObMenu(options: aiChoices, selection: Binding(get: { Self.match(profile.model ?? "", in: aiChoices) },
+                                                    set: { profile.model = $0.isEmpty ? nil : $0 }))
+            .frame(maxWidth: 528).accessibilityLabel("AI model")
     }
 
     /// ProfilePage.FillSpeechModels: "the one in Settings", then what is on this device (Apple Speech and the downloaded

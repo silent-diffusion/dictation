@@ -107,13 +107,22 @@ struct ProfileVoicePicker: View {
     @State private var picked: String?
 
     var body: some View {
-        HStack(spacing: 8) {
-            ObMenu(options: models, selection: modelBinding, width: 260).accessibilityLabel("Read aloud model")
-            ObMenu(options: voices.isEmpty ? [("", "No voices downloaded")] : voices, selection: voiceBinding, width: 260, maxListHeight: 420)
-                .disabled(currentModel.isEmpty).accessibilityLabel("Read aloud voice")
+        // Side by side; where the page is too narrow for both whole, the voice goes under the model (Windows cuts them).
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) { modelMenu; voiceMenu }
+            VStack(alignment: .leading, spacing: 8) { modelMenu; voiceMenu }
         }
         .onAppear(perform: writeBack)
         .onChange(of: own) { writeBack() }
+    }
+
+    private var modelMenu: some View {
+        ObMenu(options: models, selection: modelBinding, width: 260).accessibilityLabel("Read aloud model")
+    }
+
+    private var voiceMenu: some View {
+        ObMenu(options: voices.isEmpty ? [("", "No voices downloaded")] : voices, selection: voiceBinding, width: 260, maxListHeight: 420)
+            .disabled(currentModel.isEmpty).accessibilityLabel("Read aloud voice")
     }
 
     private var own: String { voice ?? "" }
