@@ -266,7 +266,7 @@ private struct KeepMenu: View {
     /// right, at least 32 tall.
     private var face: some View {
         HStack(spacing: 0) {
-            Text(label(shown)).font(Ob.sans(14)).lineLimit(1)
+            Text(label(shown)).font(Ob.sans(14)).lineLimit(1).fixedSize()
             Spacer(minLength: 8)
             Image(systemName: "chevron.down").font(.system(size: 11, weight: .regular)).foregroundStyle(ob.ink.opacity(enabled ? 0.62 : 0.36))
                 .padding(.trailing, 10)
@@ -274,7 +274,8 @@ private struct KeepMenu: View {
         // Disabled (Recordings with the recordings switch off): Fluent's TextFillColorDisabled.
         .foregroundStyle(ob.ink.opacity(enabled ? 1 : 0.36))
         .padding(EdgeInsets(top: 5 + Ob.border, leading: 12 + Ob.border, bottom: 7 + Ob.border, trailing: Ob.border))
-        .frame(width: 240)
+        // Width 240, wider when the choice needs it.
+        .frame(minWidth: 240)
         .frame(minHeight: 32)
         .background { FluentComboFace(hover: hover || open, focused: focused || keyFocused) }
         .contentShape(Rectangle())
@@ -342,7 +343,7 @@ private struct KeepMenu: View {
                         case .heading(let text):
                             // A disabled ComboBoxItem: FontSize 10, Cascadia Mono, Margin 0,4,0,0 (in place of the
                             // item's own 5,2), in Fluent's disabled text colour; not hit by the pointer.
-                            Text(text).font(Ob.mono(10)).foregroundStyle(ob.ink.opacity(0.36)).lineLimit(1)
+                            Text(text).font(Ob.mono(10)).foregroundStyle(ob.ink.opacity(0.36)).fixedSize(horizontal: false, vertical: true)
                                 .padding(EdgeInsets(top: 5, leading: 11, bottom: 7, trailing: 11))
                                 .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
                                 .padding(.top, 4)

@@ -105,6 +105,16 @@ struct ObMenu<Value: Hashable>: View {
 
     private var current: String { options.first { $0.0 == selection }?.1 ?? noSelection }
 
+    #if os(macOS)
+    /// The open list's width for its longest choice (DropDownRow's 14 pt text, 11 + 11 inside and 5 + 5 around it), so
+    /// no choice is cut: the list is at least as wide as the box, and wider when a choice needs it.
+    private var listWidth: CGFloat {
+        let font = NSFont.systemFont(ofSize: 14)
+        let widest = options.map { ($0.1 as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
+        return (widest + 32 + 4).rounded(.up)
+    }
+    #endif
+
     var body: some View {
         #if os(macOS)
         Button { toggle() } label: { face }
@@ -115,14 +125,14 @@ struct ObMenu<Value: Hashable>: View {
                 key(press)
             }
             // (Not in the debug snapshots: the image renderer can't draw the AppKit anchor.)
-            .background { if !PageScroll<EmptyView>.flat { DropDownPanel(isPresented: $open, maxHeight: maxListHeight) { list } } }
+            .background { if !PageScroll<EmptyView>.flat { DropDownPanel(isPresented: $open, maxHeight: maxListHeight, minWidth: listWidth) { list } } }
             .onHover { hover = $0 }
             // No hand: the Windows app leaves its ComboBoxes WPF's arrow (no Cursor set). No label of its own either: the
             // page names the box (AutomationProperties.Name, `.accessibilityLabel` at the call), and the box reads its
             // choice as its value; a box the page doesn't name reads the choice shown.
             .accessibilityValue(current)
             .accessibilityAddTraits(.isButton)
-            .fixedSize(horizontal: width == nil ? false : true, vertical: true)
+            .fixedSize(horizontal: false, vertical: true)
         #else
         Menu {
             ForEach(options, id: \.0) { value, label in
@@ -136,13 +146,14 @@ struct ObMenu<Value: Hashable>: View {
             .menuStyle(.button)
             .buttonStyle(.plain)
             .menuIndicator(.hidden)
-            .fixedSize(horizontal: width == nil ? false : true, vertical: true)
+            .fixedSize(horizontal: false, vertical: true)
         #endif
     }
 
     private var face: some View {
         HStack(spacing: 0) {
-            Text(current).font(Ob.sans(14)).lineLimit(1)
+            // The whole choice shows: the box grows past its width for a long one rather than cutting it.
+            Text(current).font(Ob.sans(14)).lineLimit(1).fixedSize()
             Spacer(minLength: 8)
             Image(systemName: "chevron.down").font(.system(size: 11, weight: .regular)).foregroundStyle(ob.ink.opacity(0.62))
                 .padding(.trailing, 10)
@@ -150,8 +161,9 @@ struct ObMenu<Value: Hashable>: View {
         .foregroundStyle(ob.ink)
         .padding(EdgeInsets(top: 5 + Ob.border, leading: 12 + Ob.border, bottom: 7 + Ob.border, trailing: Ob.border))
         .frame(minHeight: 32)
-        // A given width is the combo's own (WPF ComboBox Width), not just a cap.
-        .frame(minWidth: width, maxWidth: width ?? .infinity)
+        // A given width is the combo's own (WPF ComboBox Width): narrower only where the page has less room, and never
+        // narrower than the choice shown, wider when the choice needs it.
+        .modifier(MenuWidth(width: width))
         .background { FluentComboFace(hover: hover || open, focused: focused || keyFocused) }
         .contentShape(Rectangle())
     }
@@ -220,6 +232,31 @@ struct ObMenu<Value: Hashable>: View {
     #endif
 }
 
+/// ObMenu's width: `width` when there is room, less where the page is narrower, never less than the face's own (the
+/// choice shown whole); flexible when no width is given.
+private struct MenuWidth: ViewModifier {
+    var width: CGFloat?
+
+    func body(content: Content) -> some View {
+        if let width { PreferredWidth(width: width) { content } } else { content.frame(maxWidth: .infinity) }
+    }
+}
+
+private struct PreferredWidth: Layout {
+    var width: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let v = subviews.first else { return .zero }
+        let own = v.sizeThatFits(.unspecified)
+        let w = max(own.width, min(width, proposal.width ?? width))
+        return CGSize(width: w, height: v.sizeThatFits(ProposedViewSize(width: w, height: nil)).height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
+    }
+}
+
 #if os(macOS)
 /// One choice in the open list (Fluent's ComboBoxItem): 14 pt, Margin 5,2 with 4-pt corners, a wash under the pointer
 /// or the keys, and on the chosen one the wash and a 3×16 pill in the accent fill (ink in Oberton's theme).
@@ -255,6 +292,8 @@ struct DropDownRow: View {
 struct DropDownPanel<Content: View>: NSViewRepresentable {
     @Binding var isPresented: Bool
     var maxHeight: CGFloat?
+    /// The list's own width when that is more than the box's.
+    var minWidth: CGFloat = 0
     @ViewBuilder var content: Content
     @Environment(\.ob) private var ob
 
@@ -268,7 +307,7 @@ struct DropDownPanel<Content: View>: NSViewRepresentable {
                 .background(RoundedRectangle(cornerRadius: 8).fill(ob.dark ? Color(hex: 0x2C2C2C) : Color(hex: 0xF9F9F9)))
                 .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.black.opacity(ob.dark ? 0.2 : 0.06), lineWidth: 1))
                 .clipShape(RoundedRectangle(cornerRadius: 8)))
-            c.show(face, below: anchor, maxHeight: maxHeight)
+            c.show(face, below: anchor, maxHeight: maxHeight, minWidth: minWidth)
         } else {
             c.hide()
         }
@@ -283,15 +322,16 @@ struct DropDownPanel<Content: View>: NSViewRepresentable {
         private var panel: NSPanel?
         private var monitors: [Any] = []
 
-        func show(_ content: AnyView, below anchor: NSView, maxHeight: CGFloat?) {
+        func show(_ content: AnyView, below anchor: NSView, maxHeight: CGFloat?, minWidth: CGFloat) {
             guard let parent = anchor.window else { return }
             let box = parent.convertToScreen(anchor.convert(anchor.bounds, to: nil))
             let screen = (parent.screen ?? NSScreen.main)?.visibleFrame ?? .infinite
             let cap = maxHeight ?? (parent.screen ?? NSScreen.main).map { $0.frame.height / 3 } ?? 360
-            let host = NSHostingView(rootView: AnyView(content.frame(width: box.width)))
+            let width = min(max(box.width, minWidth), screen.width - 16)
+            let host = NSHostingView(rootView: AnyView(content.frame(width: width)))
             let natural = host.fittingSize.height
             let height = min(natural, cap)
-            host.rootView = AnyView(content.frame(width: box.width, height: height))
+            host.rootView = AnyView(content.frame(width: width, height: height))
             let panel = self.panel ?? {
                 let p = NSPanel(contentRect: .zero, styleMask: [.nonactivatingPanel, .borderless], backing: .buffered, defer: true)
                 p.isOpaque = false
@@ -302,7 +342,7 @@ struct DropDownPanel<Content: View>: NSViewRepresentable {
                 return p
             }()
             panel.contentView = host
-            var frame = CGRect(x: box.minX, y: box.minY - 4 - height, width: box.width, height: height)
+            var frame = CGRect(x: min(box.minX, screen.maxX - 8 - width), y: box.minY - 4 - height, width: width, height: height)
             if frame.minY < screen.minY { frame.origin.y = box.maxY + 4 }
             panel.setFrame(frame, display: true)
             guard self.panel == nil else { return }
@@ -624,7 +664,7 @@ struct ThreeBoxes: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 0) {
                 Readout(title).noWrap() // cut at the column, no "…"
-                if let meta { Readout(meta, size: 10).lineLimit(1).padding(.leading, 8) }
+                if let meta { Readout(meta, size: 10).fixedSize(horizontal: false, vertical: true).padding(.leading, 8) }
                 Spacer(minLength: 0)
                 TextCopyButton(text: copy, enabled: copyEnabled).padding(.leading, 10).help(copyHelp).accessibilityLabel(copyName)
             }

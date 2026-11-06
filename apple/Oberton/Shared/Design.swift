@@ -277,7 +277,8 @@ struct PageTitle<Trailing: View>: View {
             // Decor.cs PageHeader: the title at the top of the row, cut with "…"; the decor 14 after it and 2 above the
             // row's bottom; the readout right-aligned, 16 from the rest and 6 above the bottom.
             HeaderRow(decorGap: 14, decorBottom: 2, trailingGap: 16, trailingBottom: 6) {
-                Text(title.uppercased()).font(Ob.mono(size, .bold)).lineLimit(1).truncationMode(.tail)
+                // Windows cuts a long title with "…"; the Mac wraps it so the whole title shows.
+                Text(title.uppercased()).font(Ob.mono(size, .bold)).fixedSize(horizontal: false, vertical: true)
                     .layoutValue(key: HeaderRow.RoleKey.self, value: .title)
                 if let japanese {
                     Decor(japanese, size: size - 4, color: ob.divider, weight: .bold).noWrap()
@@ -387,9 +388,10 @@ extension View {
         return self.lineSpacing(extra).padding(.bottom, extra)
     }
 
-    /// A WPF TextBlock without TextTrimming (NoWrap): one line at its own width, cut off where the room ends, no "…".
+    /// A WPF TextBlock without TextTrimming (NoWrap): one line at its own width. Where Windows then cuts it off at the
+    /// end of the room, the Mac wraps it onto another line instead, so every word shows.
     func noWrap() -> some View {
-        NoWrapLine { self.lineLimit(1) }.clipped()
+        NoWrapLine { self.fixedSize(horizontal: false, vertical: true) }
     }
 }
 
@@ -398,12 +400,13 @@ private struct NoWrapLine: Layout {
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         guard let v = subviews.first else { return .zero }
         let ideal = v.sizeThatFits(.unspecified)
-        return CGSize(width: min(ideal.width, proposal.width ?? ideal.width), height: ideal.height)
+        let width = min(ideal.width, proposal.width ?? ideal.width)
+        return width >= ideal.width ? ideal : v.sizeThatFits(ProposedViewSize(width: width, height: nil))
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         guard let v = subviews.first else { return }
-        v.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(v.sizeThatFits(.unspecified)))
+        v.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(width: bounds.width, height: nil))
     }
 }
 
@@ -687,11 +690,13 @@ struct KeyChips: View {
 
     var body: some View {
         // DashboardPage.SignalPath's chips: corner radius 9, padding 8,1, and a "+" readout 4 either side.
+        // Never wrapped: the chips keep one line at their own width (F7).
         HStack(spacing: 0) {
             ForEach(Array(hotkey.split(separator: "+").enumerated()), id: \.offset) { i, part in
                 if i > 0 { Readout("+").padding(.horizontal, 4) }
                 Text(part.trimmingCharacters(in: .whitespaces).uppercased())
                     .font(Ob.mono(size))
+                    .lineLimit(1).fixedSize()
                     .padding(.horizontal, 8 + Ob.border).padding(.vertical, 1 + Ob.border)
                     .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(ob.ink, lineWidth: Ob.border))
             }

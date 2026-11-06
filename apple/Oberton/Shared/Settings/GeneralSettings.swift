@@ -55,8 +55,7 @@ struct GeneralSection: View {
 
             FieldLabel("Text insertion method").padding(.top, 4)
             ObMenu(options: [(InsertionMode.auto, "Auto"), (.typing, "Typing"), (.clipboard, "Clipboard")],
-                   selection: $model.settings.insertion)
-                .frame(width: 220)
+                   selection: $model.settings.insertion, width: 220)
                 .accessibilityLabel("Text insertion method") // AutomationProperties.Name
             Caption("Auto pastes the text (your clipboard is saved and restored afterwards), the most reliable method in every kind of app. Typing sends keystrokes instead and never touches the clipboard, but is slower. Typing is also used automatically if pasting fails. Per-app overrides: appOverrides (by bundle ID) in settings.json.", bottom: 0)
                 .padding(.top, 6) // Margin 0,6,0,0: nothing below

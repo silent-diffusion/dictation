@@ -31,8 +31,7 @@ struct UnloadingSection: View {
 
             FieldLabel("Unload a model after it has been unused for").padding(.top, -8)
             ObMenu(options: choices.isEmpty ? Self.choices(for: model.settings.unloadAfterMinutes) : choices,
-                   selection: $model.settings.unloadAfterMinutes)
-                .frame(width: 240)
+                   selection: $model.settings.unloadAfterMinutes, width: 240)
                 .accessibilityLabel("Unload after")
                 .onAppear { choices = Self.choices(for: model.settings.unloadAfterMinutes) }
             Caption("Applies to the speech recognition model, the local AI model and the Read aloud voice. \"Immediately after use\" frees them a few seconds after each dictation or reading ends (they stay loaded while in use).", bottom: 0)
