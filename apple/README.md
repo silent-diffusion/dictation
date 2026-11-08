@@ -120,8 +120,10 @@ xcodebuild -project Oberton.xcodeproj -scheme "Oberton Direct" -destination 'pla
 
 1. Once: a *Developer ID Application* certificate for your team in the login keychain, and notarization credentials in
    the keychain: `xcrun notarytool store-credentials oberton-notary --apple-id <Apple ID> --team-id <team>` (it asks for an
-   app-specific password). The script also takes an App Store Connect API key or an Apple ID from the environment
-   (`NOTARY_KEY`/`NOTARY_KEY_ID`/`NOTARY_ISSUER`, or `NOTARY_APPLE_ID`/`NOTARY_PASSWORD`); credentials are never written to the repo.
+   app-specific password and keeps it there). The script prefers an App Store Connect API key when
+   `NOTARY_KEY`/`NOTARY_KEY_ID`/`NOTARY_ISSUER` are set, else that keychain profile (`NOTARY_PROFILE`, default
+   `oberton-notary`). A password is never put on a command line: `NOTARY_PASSWORD` is refused. Credentials are never
+   written to the repo.
 2. The update signing key (done): an EdDSA key pair made with Sparkle's `generate_keys` (in DerivedData,
    `SourcePackages/artifacts/sparkle/Sparkle/bin`). The **public** key is `OBERTON_SPARKLE_PUBLIC_KEY` in
    `Direct.xcconfig` (it becomes `SUPublicEDKey` in `Info-Direct.plist`). The **private** key exists only in the login

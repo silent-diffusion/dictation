@@ -6,12 +6,14 @@
 #   scripts/export-direct.sh --no-notarize    stop after the signed export (to check the signing)
 #
 # Needs: DEVELOPMENT_TEAM in Local.xcconfig and a "Developer ID Application" certificate for that team in the login
-# keychain. Notarization credentials are read, never stored here, from one of:
+# keychain. Notarization credentials are read, never stored here, and never put on a command line (where `ps` would
+# show them to other users of this Mac). In this order:
+#   NOTARY_KEY, NOTARY_KEY_ID, NOTARY_ISSUER    an App Store Connect API key (.p8 path, key ID, issuer ID): preferred
 #   NOTARY_PROFILE=<name>     a notarytool keychain profile, made once with
 #                             xcrun notarytool store-credentials <name> --apple-id <id> --team-id <team>
-#                             (it asks for an app-specific password and keeps it in the keychain); default "oberton-notary"
-#   NOTARY_KEY, NOTARY_KEY_ID, NOTARY_ISSUER    an App Store Connect API key (.p8 path, key ID, issuer ID)
-#   NOTARY_APPLE_ID, NOTARY_PASSWORD            an Apple ID and an app-specific password (the team from Local.xcconfig)
+#                             (it asks for the app-specific password itself and keeps it in the keychain);
+#                             default "oberton-notary"
+# An Apple ID password in the environment (NOTARY_PASSWORD) is refused: store it in a keychain profile instead.
 set -euo pipefail
 
 cd "${0:A:h}/.."
@@ -83,10 +85,15 @@ ditto -c -k --sequesterRsrc --keepParent "$app" "$zip"
 
 credentials=()
 if [[ -n "${NOTARY_KEY:-}" && -n "${NOTARY_KEY_ID:-}" && -n "${NOTARY_ISSUER:-}" ]]; then
+    # The key file's path and IDs only; the private key stays in its file.
     credentials=(--key "$NOTARY_KEY" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER")
-elif [[ -n "${NOTARY_APPLE_ID:-}" && -n "${NOTARY_PASSWORD:-}" ]]; then
-    credentials=(--apple-id "$NOTARY_APPLE_ID" --password "$NOTARY_PASSWORD" --team-id "$team")
+elif [[ -n "${NOTARY_PASSWORD:-}" ]]; then
+    print -u2 "NOTARY_PASSWORD is set, but a password is never passed on the command line (other users could see it in ps)."
+    print -u2 "Store it once in a keychain profile instead, then run this again without NOTARY_PASSWORD:"
+    print -u2 "  xcrun notarytool store-credentials ${NOTARY_PROFILE:-oberton-notary} --apple-id <Apple ID> --team-id $team"
+    exit 1
 else
+    # notarytool reads the password from the keychain itself (it says so if the profile doesn't exist yet).
     credentials=(--keychain-profile "${NOTARY_PROFILE:-oberton-notary}")
 fi
 print "Notarizing (this takes a few minutes)…"
