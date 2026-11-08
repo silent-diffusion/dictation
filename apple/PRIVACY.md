@@ -61,8 +61,8 @@ Oberton pastes your dictation through the clipboard when typing it isn't possibl
 
 - **Mac:** the dictation is marked as temporary and concealed, so clipboard managers that follow the common convention
   leave it out of their history.
-- **iPhone and iPad:** the text you copy is kept on this device only (not shared through Universal Clipboard) and
-  removed from the clipboard after a while.
+- **iPhone and iPad:** a dictation is copied for you to paste. It stays on this device only (not shared through
+  Universal Clipboard) and leaves the clipboard after 2 minutes; text you copy with a COPY button leaves it after 10.
 
 ## What goes over the internet, and when
 
