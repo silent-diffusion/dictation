@@ -908,10 +908,24 @@ enum Clipboard {
         NSPasteboard.general.clearContents()
         return NSPasteboard.general.setString(s, forType: .string)
         #else
-        UIPasteboard.general.string = s
+        copyOnThisDevice(s, for: copyLasts)
         return true
         #endif
     }
+
+    #if os(iOS)
+    /// A dictation put on the clipboard for the user to paste: gone after 2 minutes.
+    static let dictationLasts: TimeInterval = 120
+    /// What a COPY button copies (the user asked for it, and may paste it a little later): gone after 10 minutes.
+    static let copyLasts: TimeInterval = 600
+
+    /// The text on this iPhone's clipboard only: never sent to the user's other devices over Universal Clipboard, and
+    /// cleared by the system after `lasts` seconds, so a transcript doesn't linger.
+    static func copyOnThisDevice(_ s: String, for lasts: TimeInterval) {
+        UIPasteboard.general.setItems([["public.utf8-plain-text": s]],
+                                      options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(lasts)])
+    }
+    #endif
 }
 
 /// COPY that flashes what happened for 1.5 s: COPIED ✓, NOTHING YET, or BUSY, TRY AGAIN (DashboardPage.CopyShown).

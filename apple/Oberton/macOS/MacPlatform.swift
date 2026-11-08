@@ -482,8 +482,10 @@ final class MacPlatform: PlatformServices {
     private func put(_ text: String, on pb: NSPasteboard) -> Bool {
         pb.clearContents()
         guard pb.setString(text, forType: .string) else { return false }
-        // Clipboard managers that follow nspasteboard.org leave the temporary text out of their history.
+        // Clipboard managers that follow nspasteboard.org leave the temporary text out of their history (Transient), and
+        // those that only honour Concealed don't show or keep it either.
         pb.setString("", forType: NSPasteboard.PasteboardType("org.nspasteboard.TransientType"))
+        pb.setString("", forType: NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType"))
         return true
     }
 

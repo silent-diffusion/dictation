@@ -12,7 +12,7 @@ final class PhonePlatform: PlatformServices {
     func captureTarget() {}
 
     func insert(_ text: String) async throws -> String {
-        UIPasteboard.general.string = text
+        Clipboard.copyOnThisDevice(text, for: Clipboard.dictationLasts)
         UINotificationFeedbackGenerator().notificationOccurred(.success)
         return "Copied, ready to paste"
     }
