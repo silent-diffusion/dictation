@@ -62,14 +62,32 @@ public enum Microphones {
     }
     #endif
 
-    /// Tap the microphone (bus 0 of the input node, in its own format). The input device may have changed its format a
-    /// moment ago (a Bluetooth headset switching to its microphone mode, or another engine opening it at another rate)
-    /// with the engine not caught up yet: a tap then raises an Objective-C exception, which ends the app. So this waits
-    /// up to a second for the engine to catch up, and reports a failure as an error.
-    public static func tap(_ node: AVAudioInputNode, bufferSize: AVAudioFrameCount,
-                           block: @escaping (AVAudioPCMBuffer, AVAudioTime) -> Void) throws {
-        func pending() -> Bool { node.inputFormat(forBus: 0).sampleRate != node.outputFormat(forBus: 0).sampleRate }
-        for _ in 0..<20 where pending() { Thread.sleep(forTimeInterval: 0.05) }
+    /// The input device may have changed its format a moment ago (a Bluetooth headset switching to its microphone mode,
+    /// or another engine opening it at another rate) with the engine not caught up yet: a tap then raises an
+    /// Objective-C exception, which ends the app. True while that is so.
+    static func formatPending(_ node: AVAudioInputNode) -> Bool {
+        node.inputFormat(forBus: 0).sampleRate != node.outputFormat(forBus: 0).sampleRate
+    }
+
+    /// Waits up to a second (20 × 50 ms) for the engine to catch up with the input device's format, suspending rather
+    /// than blocking the thread: the main thread keeps drawing and taking keys meanwhile. True when it caught up.
+    public static func settle(_ node: AVAudioInputNode) async -> Bool {
+        await waitUntil { !formatPending(node) }
+    }
+
+    /// `ready` checked now and then every `every`, at most `tries` times in all; true as soon as it holds.
+    static func waitUntil(tries: Int = 20, every: Duration = .milliseconds(50), _ ready: () -> Bool) async -> Bool {
+        for i in 0..<tries {
+            if ready() { return true }
+            if i < tries - 1 { try? await Task.sleep(for: every) }
+        }
+        return ready()
+    }
+
+    /// Tap the microphone (bus 0 of the input node, in its own format) once `settle` has waited for the engine to
+    /// catch up; a device still switching over is reported as an error instead of ending the app.
+    public static func installTap(_ node: AVAudioInputNode, bufferSize: AVAudioFrameCount,
+                                  block: @escaping (AVAudioPCMBuffer, AVAudioTime) -> Void) throws {
         node.removeTap(onBus: 0)
         // Windows has two messages for a microphone that won't start (MicCapture): none found, and one that won't
         // open. A device still switching over, or giving no format at all, is one that won't open.
@@ -80,8 +98,16 @@ public enum Microphones {
             return
         }
         #endif
-        guard !pending() else { throw busy }
+        guard !formatPending(node) else { throw busy }
         node.installTap(onBus: 0, bufferSize: bufferSize, format: nil, block: block)
+    }
+
+    /// `settle` and `installTap` in one, blocking the calling thread while it waits (up to a second). Only for callers
+    /// that can't wait asynchronously yet (Extended Notes' recorder); everything else uses the two steps above.
+    public static func tap(_ node: AVAudioInputNode, bufferSize: AVAudioFrameCount,
+                           block: @escaping (AVAudioPCMBuffer, AVAudioTime) -> Void) throws {
+        for _ in 0..<20 where formatPending(node) { Thread.sleep(forTimeInterval: 0.05) }
+        try installTap(node, bufferSize: bufferSize, block: block)
     }
 
     #if os(macOS)
@@ -145,8 +171,9 @@ public final class MicrophoneMeter: @unchecked Sendable {
 
     public init() {}
 
-    /// Start metering the named microphone (nil: the system default). Throws a message for the page's hint.
-    public func start(microphone: String?) throws {
+    /// Start metering the named microphone (nil: the system default). Throws a message for the page's hint. Waits (without
+    /// blocking) for a microphone still switching formats; stopped meanwhile, it doesn't start.
+    @MainActor public func start(microphone: String?) async throws {
         Self.owner = ObjectIdentifier(self)
         halt()
         #if os(iOS)
@@ -158,7 +185,9 @@ public final class MicrophoneMeter: @unchecked Sendable {
         let node = engine.inputNode
         let format = node.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else { throw UserFacingError(LiveTranscriber.noMicrophone) }
-        try Microphones.tap(node, bufferSize: 2048) { [weak self] buffer, _ in
+        _ = await Microphones.settle(node)
+        guard Self.owner == ObjectIdentifier(self) else { return }
+        try Microphones.installTap(node, bufferSize: 2048) { [weak self] buffer, _ in
             guard let (rms, _) = LiveTranscriber.rms(buffer) else { return }
             // Windows' MicCapture scale, the one a dictation's own level uses too: min(1, √rms · 1.8).
             let level = min(1, rms.squareRoot() * 1.8), cb = self?.onLevel

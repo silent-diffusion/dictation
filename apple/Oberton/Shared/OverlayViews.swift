@@ -101,7 +101,8 @@ struct OverlayPill: View {
             PillContent(phase: phase, profile: profile.name, meterFeed: model.meter, startedAt: model.startedAt,
                         live: live, opacity: opacity, aiModel: Self.chip(model.processor.model(for: profile)),
                         audioSeconds: model.stoppedAt.map { $0.timeIntervalSince(model.startedAt ?? $0) },
-                        loadingSpeech: model.speechLoading, finalPass: model.finalPass, onCancel: { model.cancel() })
+                        loadingSpeech: model.speechLoading, finalPass: model.finalPass, micStatus: model.micStatus,
+                        onCancel: { model.cancel() })
         }
     }
 
@@ -543,6 +544,8 @@ struct PillContent: View {
     var loadingSpeech = false
     /// The text was already typed while speaking: this is the final pass over it.
     var finalPass = false
+    /// The microphone is paused mid-recording (a call, another app): said in place of the words so far.
+    var micStatus: String?
     var onCancel: () -> Void = {}
 
     private var processing: Bool { phase == .processing }
@@ -550,7 +553,9 @@ struct PillContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if phase == .recording || phase == .transcribing {
-                if !live.isEmpty {
+                if phase == .recording, let micStatus {
+                    LiveWords(text: micStatus, color: mutedText)
+                } else if !live.isEmpty {
                     LiveWords(text: live)
                 } else if loadingSpeech {
                     LiveWords(text: "Loading the speech model… keep talking, it will catch up.", color: mutedText)

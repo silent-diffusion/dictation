@@ -54,13 +54,13 @@ extension PlatformServices {
     var selectionUnavailable: String? { nil }
     var nowhereToPaste: Bool { false }
     /// The text left on the clipboard as a last resort, when it couldn't go in: an ordinary copy, so clipboard managers
-    /// keep it too.
+    /// keep it too. On iPhone it stays on this device, for a COPY's 10 minutes (it couldn't go in, so it waits longer).
     func leaveOnClipboard(_ text: String) {
         #if os(macOS)
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
         #else
-        UIPasteboard.general.string = text
+        Clipboard.copyOnThisDevice(text, for: Clipboard.copyLasts)
         #endif
     }
     func waitForPlace(timeout: Duration) async -> Bool { false }
@@ -69,7 +69,7 @@ extension PlatformServices {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
         #else
-        UIPasteboard.general.string = text
+        Clipboard.copyOnThisDevice(text, for: Clipboard.dictationLasts)
         #endif
     }
 }
@@ -201,6 +201,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var overlayNotice: OverlayNotice?
     /// The speech model is still loading while recording goes on (it catches up on what was said).
     @Published private(set) var speechLoading = false
+    /// A call or another app has the microphone mid-recording (iPhone and iPad): the pill says so; nil otherwise.
+    @Published private(set) var micStatus: String?
     /// Settings › Speech recognition's status line ("Speech: Ready · …"), and whether it is a good one.
     @Published private(set) var speechStatus = "Speech: starting…"
     @Published private(set) var speechOK = false
@@ -370,6 +372,24 @@ final class AppModel: ObservableObject {
             #endif
         }
         transcriber.onAudio = { [historyAudio] in historyAudio.append($0) }
+        // A call, another app or a new headset mid-recording: paused with the words so far kept, then on through the
+        // microphone there is now; if it isn't given back, the dictation finishes with what was said.
+        transcriber.onInterruption = { [weak self] action in
+            guard let self, self.phase == .recording else { return }
+            switch action {
+            case .pause:
+                self.level = 0
+                self.micStatus = AudioInterruptions.status(for: .pause)
+            case .restart:
+                self.micStatus = nil
+            case .finish:
+                self.micStatus = nil
+                self.stop()
+                if let text = AudioInterruptions.status(for: .finish) { self.notify(text, level: .warning) }
+            case .nothing:
+                break
+            }
+        }
         // Type as you speak: finished pieces are typed in order; the running guess too, for a profile without AI.
         transcriber.onPiece = { [weak self] piece in
             guard let self, self.phase == .recording || self.phase == .transcribing else { return }
@@ -477,6 +497,7 @@ final class AppModel: ObservableObject {
     /// Starting a dictation leaves Read aloud reading, as on Windows (DictationController.StartAsync never touches it).
     func start() {
         dictationNumber += 1
+        micStatus = nil
         platform?.captureTarget(readContext: settings.matchSurroundingText)
         insertionContext = nil
         finalPass = false
@@ -530,8 +551,25 @@ final class AppModel: ObservableObject {
         let isLive = live != nil
 
         // Start listening right away. If the speech model isn't loaded (first use, or let go after a while), it loads
-        // meanwhile and catches up on what was said.
-        do { try transcriber.startRecording(microphone: settings.microphoneName, evenOut: settings.evenOutVolume) } catch { fail(error); return }
+        // meanwhile and catches up on what was said. A microphone still switching formats (a Bluetooth headset going
+        // to its microphone mode) is waited for without holding up the main thread: STARTING meanwhile, as on Windows.
+        phase = .starting
+        let number = dictationNumber
+        let microphone = settings.microphoneName, evenOut = settings.evenOutVolume
+        work = Task { [weak self, transcriber] in
+            do { try await transcriber.startRecording(microphone: microphone, evenOut: evenOut) } catch {
+                // Cancelled while the microphone opened (or a new dictation took over): nothing to say.
+                guard let self, self.dictationNumber == number, self.phase == .starting, !(error is CancellationError) else { return }
+                self.fail(error)
+                return
+            }
+            guard let self, self.dictationNumber == number, self.phase == .starting else { return }
+            self.recordingStarted(profile: profile, isLive: isLive)
+        }
+    }
+
+    /// The microphone is open: the speech engine starts (or keeps loading), and the recording limit's timer with it.
+    private func recordingStarted(profile: Profile, isLive: Bool) {
         startedAt = Date()
         phase = .recording
         speechLoading = !speechWarm
@@ -571,6 +609,7 @@ final class AppModel: ObservableObject {
 
     func stop() {
         guard phase == .recording else { return }
+        micStatus = nil
         limitTimer?.invalidate()
         transcriber.stopRecording()
         stoppedAt = Date()

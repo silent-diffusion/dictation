@@ -60,12 +60,15 @@ struct MicrophoneSection: View {
         #endif
         let m = MicrophoneMeter()
         m.onLevel = { meterLevel = $0 }
-        do {
-            try m.start(microphone: model.settings.microphoneName)
-            meter = m
-            problem = nil
-        } catch {
-            problem = error.localizedDescription
+        meter = m
+        let name = model.settings.microphoneName
+        Task { @MainActor in
+            do {
+                try await m.start(microphone: name)
+                if meter === m { problem = nil }
+            } catch {
+                if meter === m { problem = error.localizedDescription; meter = nil }
+            }
         }
     }
 

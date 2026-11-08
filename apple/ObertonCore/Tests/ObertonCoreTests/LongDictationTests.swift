@@ -97,7 +97,7 @@ import Testing
             var live: [String] = []
             t.onText = { if recording { live.append($0) } }
             LiveTranscriber.fakeAudio = clip
-            try t.startRecording(microphone: nil, evenOut: false)
+            try await t.startRecording(microphone: nil, evenOut: false)
             if apple {
                 try await t.startRecognizer(locale: Locale(identifier: "en-US"), vocabulary: [])
             } else {

@@ -48,7 +48,7 @@ import Testing
                     var partials: [String] = []
                     t.onText = { partials.append($0) }
                     LiveTranscriber.fakeAudio = clip
-                    try t.startRecording(microphone: nil, evenOut: settings.evenOutVolume)
+                    try await t.startRecording(microphone: nil, evenOut: settings.evenOutVolume)
                     try await t.startWhisper(model: model, language: settings.whisperLanguage, prompt: settings.vocabularyHint)
                     try await Task.sleep(for: .seconds(seconds + 0.3))
                     t.stopRecording()

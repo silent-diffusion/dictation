@@ -264,6 +264,8 @@ enum OverlaySnapshots {
             ("pill-recording", room, AnyView(PillContent(phase: .recording, profile: "Light Cleanup", meter: meter, startedAt: .now - 7, opacity: opacity))),
             ("pill-recording-silent", room, AnyView(PillContent(phase: .recording, profile: "Light Cleanup", meter: [Double](repeating: 0, count: 22), startedAt: .now - 7, opacity: opacity))),
             ("pill-recording-loading", room, AnyView(PillContent(phase: .recording, profile: "Light Cleanup", startedAt: .now - 3, opacity: opacity, loadingSpeech: true))),
+            ("pill-recording-paused", room, AnyView(PillContent(phase: .recording, profile: "Light Cleanup", startedAt: .now - 3, live: "Some words said before the call",
+                                                                 opacity: opacity, micStatus: AudioInterruptions.status(for: .pause)))),
             ("pill-transcribing", room, AnyView(PillContent(phase: .transcribing, profile: "Light Cleanup", opacity: opacity, audioSeconds: 7.4))),
             ("pill-transcribing-loading", room, AnyView(PillContent(phase: .transcribing, profile: "Light Cleanup", opacity: opacity, audioSeconds: 3, loadingSpeech: true))),
             ("pill-processing", room, AnyView(PillContent(phase: .processing, profile: "Light Cleanup", live: entry.transcription, opacity: opacity, aiModel: model8b))),

@@ -13,7 +13,7 @@ enum StressTest {
             Log.info("Stress: \(rounds) rounds")
             for round in 1...rounds {
                 Log.info("Stress: round \(round)")
-                meter()
+                await meter()
                 await dictation(model, round: round)
                 if round % 3 == 0 { await notes(model, round: round) }
             }
@@ -27,10 +27,10 @@ enum StressTest {
     }
 
     /// The Microphone page opens, closes, and opens again with another microphone.
-    private static func meter() {
+    private static func meter() async {
         for name in [nil] + Microphones.names.prefix(2).map(Optional.some) {
             let m = MicrophoneMeter()
-            try? m.start(microphone: name)
+            try? await m.start(microphone: name)
         }
     }
 
@@ -69,7 +69,7 @@ enum StressTest {
         }
         await pause(0.5...2)
         await dictation(model, round: round + 1) // a dictation pauses the session
-        meter()
+        await meter()
         await model.notes.stop()
     }
 }

@@ -62,6 +62,14 @@ public final class LiveTranscriber: @unchecked Sendable {
     private var peakLevel: Float = 0
     private var silentFrames = 0
     private var sawSignal = false
+    /// A call, another app or a new route took the microphone mid-recording (`AudioInterruptions`): the main actor's.
+    @MainActor private var interruptions: AudioInterruptions?
+    @MainActor private var interrupted = false
+    @MainActor private var microphoneName: String?
+    @MainActor private var tapRate: Double = 0
+    /// The microphone was paused (`.pause`), opened again (`.restart`) or lost for good (`.finish`) mid-recording; the
+    /// recording so far is kept in every case. On the main actor.
+    @MainActor public var onInterruption: ((AudioInterruptions.Action) -> Void)?
 
     public init() {}
 
@@ -150,20 +158,23 @@ public final class LiveTranscriber: @unchecked Sendable {
 
     /// Start listening now. Audio is kept until `startRecognizer` has the recognizer ready. `microphone`: a device name
     /// from `Microphones.names`, nil for the system default. `evenOut`: level the volume before the recognizer hears it.
-    @MainActor public func startRecording(microphone: String?, evenOut: Bool) throws {
+    /// Waits (without blocking the main thread) for a microphone still switching formats; cancelled or started again
+    /// meanwhile, it throws `CancellationError` without opening the microphone.
+    @MainActor public func startRecording(microphone: String?, evenOut: Bool) async throws {
         #if os(iOS)
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playAndRecord, mode: .measurement, options: [.duckOthers, .defaultToSpeaker, .allowBluetoothHFP])
         try session.setActive(true, options: .notifyOthersOnDeactivation)
         #endif
         Microphones.use(microphone, on: engine)
-        lock.withLock {
+        let mine: Int = lock.withLock {
             generation += 1
             pieces = []; volatile = ""; heardWords = []; waiting = []; streaming = false
             guessSentAt = .distantPast; guessWaiting = nil; guessTimer = false; failure = nil
             live = false; stopping = false; heldText = ""; heldEnd = 0; pieceEnd = 0; tail = ""
             peakLevel = 0; silentFrames = 0; sawSignal = false
             self.evenOut = evenOut
+            return generation
         }
         #if DEBUG
         if let url = Self.fakeAudio { try playFake(url, evenOut: evenOut); return }
@@ -173,9 +184,13 @@ public final class LiveTranscriber: @unchecked Sendable {
         guard micFormat.sampleRate > 0, micFormat.channelCount > 0 else {
             throw UserFacingError(Self.noMicrophone)
         }
-        let leveller = evenOut ? VolumeLeveller(sampleRate: micFormat.sampleRate) : nil
+        _ = await Microphones.settle(node)
+        guard lock.withLock({ generation == mine }) else { throw CancellationError() }
+        // The rate the tap will deliver, now that the engine has caught up with the device.
+        tapRate = node.outputFormat(forBus: 0).sampleRate
+        let leveller = evenOut ? VolumeLeveller(sampleRate: tapRate) : nil
         lock.withLock { self.leveller = leveller }
-        try Microphones.tap(node, bufferSize: 4096) { [weak self] buffer, _ in
+        try Microphones.installTap(node, bufferSize: 4096) { [weak self] buffer, _ in
             self?.capture(buffer)
         }
         engine.prepare()
@@ -183,6 +198,72 @@ public final class LiveTranscriber: @unchecked Sendable {
             node.removeTap(onBus: 0)
             throw UserFacingError(Self.micWontOpen)
         }
+        microphoneName = microphone
+        interrupted = false
+        interruptions = AudioInterruptions(engine: engine) { [weak self] event in self?.handle(event, mine: mine) }
+    }
+
+    /// A call, another app or a route change took the microphone: pause (the recording so far stays), open it again
+    /// through the route there is now, or give up and let the caller finish with what was said.
+    @MainActor private func handle(_ event: AudioInterruptions.Event, mine: Int) {
+        guard lock.withLock({ generation == mine && !stopping }) else { return }
+        let action = AudioInterruptions.action(for: event, running: engine.isRunning, interrupted: interrupted)
+        switch action {
+        case .nothing: return
+        case .pause:
+            interrupted = true
+            CoreLog.info("Dictation: the microphone was taken by a call or another app; paused")
+            onInterruption?(.pause)
+        case .finish:
+            interrupted = false
+            CoreLog.info("Dictation: the microphone wasn't given back; finishing with what was said")
+            onInterruption?(.finish)
+        case .restart:
+            interrupted = false
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                do {
+                    guard try await reopen(mine) else { return }
+                    CoreLog.info("Dictation: the microphone is open again")
+                    onInterruption?(.restart)
+                } catch {
+                    CoreLog.warn("Dictation: the microphone couldn't be opened again (\(error.localizedDescription)); finishing with what was said")
+                    onInterruption?(.finish)
+                }
+            }
+        }
+    }
+
+    /// The microphone again, through the input there is now, for the same recording. False: the recording ended
+    /// meanwhile.
+    @MainActor private func reopen(_ mine: Int) async throws -> Bool {
+        #if os(iOS)
+        try AVAudioSession.sharedInstance().setActive(true, options: .notifyOthersOnDeactivation)
+        #endif
+        if engine.isRunning { engine.stop() }
+        let node = engine.inputNode
+        node.removeTap(onBus: 0)
+        Microphones.use(microphoneName, on: engine)
+        let format = node.outputFormat(forBus: 0)
+        guard format.sampleRate > 0, format.channelCount > 0 else { throw UserFacingError(Self.noMicrophone) }
+        _ = await Microphones.settle(node)
+        guard lock.withLock({ generation == mine && !stopping }) else { return false }
+        // Another device may run at another rate: the leveller starts afresh at it (the recognizer's converter follows
+        // the buffers' format by itself).
+        let rate = node.outputFormat(forBus: 0).sampleRate
+        if rate != tapRate {
+            tapRate = rate
+            lock.withLock { if leveller != nil { leveller = VolumeLeveller(sampleRate: rate) } }
+        }
+        try Microphones.installTap(node, bufferSize: 4096) { [weak self] buffer, _ in
+            self?.capture(buffer)
+        }
+        engine.prepare()
+        do { try engine.start() } catch {
+            node.removeTap(onBus: 0)
+            throw UserFacingError(Self.micWontOpen)
+        }
+        return true
     }
 
     /// Get the recognizer ready (downloading and loading its model if needed), then hand it everything recorded so far.
@@ -507,6 +588,9 @@ public final class LiveTranscriber: @unchecked Sendable {
     #endif
 
     @MainActor private func stopAudio() {
+        interruptions?.cancel()
+        interruptions = nil
+        interrupted = false
         #if DEBUG
         fakeTask?.cancel()
         fakeTask = nil
