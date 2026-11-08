@@ -8,10 +8,16 @@ import ObertonCore
 /// frees everything 3 s after a dictation ends or the player closes. The speech model never goes while Extended Notes
 /// needs it, and the voice never while the player shows, its DONE card included (Windows' ReaderWindow.IsBusy =
 /// visible); `AppModel.unloadNow` checks both too. Each model loads again by itself the next time it's needed.
+///
+/// The system's memory pressure (the Mac's, and the iPhone's before jetsam ends the app) also lets models go at once,
+/// whatever their idle time: a warning frees the speech model and the voice as the idle timer would (unless Settings
+/// says to keep them loaded); a critical warning frees them, and the AI model too, whatever the setting, since the
+/// alternative is the system ending Oberton. The same guards apply: nothing in use goes.
 @MainActor
 final class ModelUnloader {
     private weak var model: AppModel?
     private var timer: Timer?
+    private var pressure: DispatchSourceMemoryPressure?
     private var soon: Task<Void, Never>?
     private var watches: Set<AnyCancellable> = []
 
@@ -20,6 +26,14 @@ final class ModelUnloader {
         timer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
             Task { @MainActor in await self?.unloadIdleModels() }
         }
+        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
+        source.setEventHandler { [weak self, weak source] in
+            guard let event = source?.data else { return }
+            let critical = event.contains(.critical)
+            Task { @MainActor in await self?.unloadUnderPressure(critical: critical) }
+        }
+        source.resume()
+        pressure = source
         model.$phase.map(\.isBusy).removeDuplicates().dropFirst()
             .sink { [weak self] busy in if !busy { self?.unloadSoonIfImmediate() } }
             .store(in: &watches)
@@ -46,6 +60,17 @@ final class ModelUnloader {
         if !model.reader.isShowing, model.reader.isLoaded, Date.now.timeIntervalSince(SpeechVoices.shared.lastUsed) > idle {
             _ = await model.unloadNow(speech: false, ai: false, voice: true)
         }
+    }
+
+    /// The system is short of memory: free the models not in use now (see the type's note).
+    private func unloadUnderPressure(critical: Bool) async {
+        guard let model else { return }
+        guard critical || model.settings.unloadAfterMinutes != 0 else { return } // "never unload" holds for a warning
+        let speech = !model.notes.needsModels && !model.phase.isBusy && model.speechLoaded
+        let voice = !model.reader.isShowing && model.reader.isLoaded
+        guard speech || voice || critical else { return }
+        let result = await model.unloadNow(speech: speech, ai: critical, voice: voice)
+        Log.info("Memory pressure (\(critical ? "critical" : "warning")): \(result)")
     }
 
     /// "Immediately after use": a few seconds after a dictation or a reading ends, free every model that isn't in use.
