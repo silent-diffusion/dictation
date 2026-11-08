@@ -298,11 +298,16 @@ extension Updater: SPUUserDriver {
         if expectedBytes > 0 { progress = min(1, Double(receivedBytes) / Double(expectedBytes)) }
     }
 
+    /// The download is in; Sparkle unpacks it next, and says how far it is: the bar starts again for that, with its
+    /// own line, so it never sits full while work still goes on (real progress, never a timer).
     func showDownloadDidStartExtractingUpdate() {
-        progress = 1
+        status = "Unpacking the update…"
+        progress = 0
     }
 
-    func showExtractionReceivedProgress(_ progress: Double) {}
+    func showExtractionReceivedProgress(_ progress: Double) {
+        self.progress = min(1, max(0, progress))
+    }
 
     func showReady(toInstallAndRelaunch reply: @escaping (SPUUserUpdateChoice) -> Void) {
         status = "Installing… Oberton will restart by itself."
