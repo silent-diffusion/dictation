@@ -1,4 +1,8 @@
 import Foundation
+#if os(macOS)
+import CryptoKit
+import Security
+#endif
 
 /// The local AI runtime (Windows' OllamaHost and RuntimeInstaller step 3). Ollama answering at the address in Settings
 /// is used as it is, whoever started it. Outside the App Store sandbox (the direct download), Oberton can also install
@@ -9,6 +13,11 @@ public enum OllamaRuntime {
     /// The same release the Windows app bundles.
     public static let version = "0.35.1"
     static let download = URL(string: "https://github.com/ollama/ollama/releases/download/v\(version)/ollama-darwin.tgz")!
+    /// The SHA-256 of `ollama-darwin.tgz` for each pinned release (as GitHub lists it for the asset, and checked against
+    /// a download). A version without one is never installed.
+    static let sha256 = ["0.35.1": "3137dbf28948ee844e0fb3e584d9b5de6879d73d9f0cb7eff3ad64930601d307"]
+    /// The Developer ID team that signs Ollama's macOS builds ("Infra Technologies, Inc").
+    static let teamID = "3MU9H2V9Y9"
 
     public static var dir: URL { AppPaths.dataDir.appending(path: "runtime/ollama", directoryHint: .isDirectory) }
     static var executable: URL { dir.appending(path: "ollama") }
@@ -81,6 +90,13 @@ public enum OllamaRuntime {
             throw UserFacingError("Downloading the AI runtime (Ollama) failed. Check your internet connection and try again.")
         }
         progress(nil)
+        // Nothing from the download is unpacked, let alone run, unless it is exactly the pinned file.
+        do {
+            try RuntimeIntegrity.checkSHA256(of: tgz, expected: sha256[version])
+        } catch {
+            CoreLog.error("The AI runtime download was refused: \(error)")
+            throw UserFacingError(RuntimeIntegrity.refusedDownload)
+        }
         unpacking()
         let tmp = AppPaths.dataDir.appending(path: "runtime/ollama-tmp", directoryHint: .isDirectory)
         try? fm.removeItem(at: tmp)
@@ -93,6 +109,15 @@ public enum OllamaRuntime {
         guard tar.terminationStatus == 0, fm.isExecutableFile(atPath: tmp.appending(path: "ollama").path) else {
             try? fm.removeItem(at: tmp)
             throw UserFacingError("Unpacking the AI runtime (Ollama) failed. Try again.")
+        }
+        // Every program and library in it signed by Ollama's developer, and no link pointing out of the folder, before
+        // it takes the place of the copy there now.
+        do {
+            try RuntimeIntegrity.checkSignatures(in: tmp, team: teamID)
+        } catch {
+            try? fm.removeItem(at: tmp)
+            CoreLog.error("The AI runtime was refused: \(error)")
+            throw UserFacingError(RuntimeIntegrity.refusedSignature)
         }
         try? fm.removeItem(at: dir)
         try fm.moveItem(at: tmp, to: dir)
@@ -112,6 +137,12 @@ public enum OllamaRuntime {
         private var process: Process?
 
         func start(endpoint: URL, keepAlive: String) async throws {
+            // The program about to run is still the one Ollama's developer signed (nothing replaced it since install).
+            let check = RuntimeIntegrity.checkSignature(of: OllamaRuntime.executable, team: OllamaRuntime.teamID)
+            guard check == errSecSuccess else {
+                CoreLog.error("The AI runtime wasn't started: its signature didn't check out (\(check))")
+                throw UserFacingError(RuntimeIntegrity.refusedSignature)
+            }
             // Through a small shell that ends `ollama serve` when Oberton goes, also when it crashes (Windows puts the
             // runtime in a job object that dies with the app).
             let p = Process()
@@ -178,6 +209,97 @@ public enum OllamaRuntime {
 }
 
 #if os(macOS)
+/// Checks on the AI runtime Oberton downloads and runs (security audit 2026-11-07): the archive's SHA-256 against the
+/// pinned one, and each program's code signature against Ollama's Developer ID. Fails closed.
+enum RuntimeIntegrity {
+    static let refusedDownload = "The downloaded AI runtime (Ollama) isn't the file this version of Oberton expects, so it wasn't installed. Try again later; if it keeps happening, the download is being changed on the way."
+    static let refusedSignature = "The AI runtime (Ollama) isn't signed by Ollama's developer, so Oberton won't run it. Install it again from Settings › Models."
+
+    enum Problem: Error, CustomStringConvertible, Equatable {
+        case noPinnedHash
+        case hashMismatch(actual: String)
+        case badSignature(file: String, status: OSStatus)
+        case linkOutside(file: String)
+
+        var description: String {
+            switch self {
+            case .noPinnedHash: "no SHA-256 is pinned for this version"
+            case .hashMismatch(let actual): "SHA-256 \(actual) isn't the pinned one"
+            case .badSignature(let file, let status): "\(file): code signature check failed (\(status))"
+            case .linkOutside(let file): "\(file): a link pointing out of the folder"
+            }
+        }
+    }
+
+    /// The file's SHA-256, in lower-case hex, read a megabyte at a time.
+    static func sha256(of file: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: file)
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        while let chunk = try handle.read(upToCount: 1 << 20), !chunk.isEmpty { hasher.update(data: chunk) }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func checkSHA256(of file: URL, expected: String?) throws {
+        guard let expected else { throw Problem.noPinnedHash }
+        let actual = try sha256(of: file)
+        guard actual == expected.lowercased() else { throw Problem.hashMismatch(actual: actual) }
+    }
+
+    /// Developer ID Application, signed by that team: what `codesign` shows as Ollama's designated requirement.
+    static func requirement(team: String) -> String {
+        "anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists"
+            + " and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = \"\(team)\""
+    }
+
+    /// One file's signature: valid (every architecture, strictly) and from `team`. errSecSuccess when it is.
+    static func checkSignature(of file: URL, team: String) -> OSStatus {
+        var code: SecStaticCode?
+        var status = SecStaticCodeCreateWithPath(file as CFURL, [], &code)
+        guard status == errSecSuccess, let code else { return status }
+        var req: SecRequirement?
+        status = SecRequirementCreateWithString(requirement(team: team) as CFString, [], &req)
+        guard status == errSecSuccess, let req else { return status }
+        let flags = SecCSFlags(rawValue: kSecCSCheckAllArchitectures | kSecCSStrictValidate)
+        return SecStaticCodeCheckValidity(code, flags, req)
+    }
+
+    /// Every Mach-O file under `dir` (programs, .dylib, .so, in subfolders too) signed by `team`, and every symbolic
+    /// link resolving inside `dir`.
+    static func checkSignatures(in dir: URL, team: String) throws {
+        let root = dir.resolvingSymlinksInPath().standardizedFileURL.path
+        let keys: [URLResourceKey] = [.isSymbolicLinkKey, .isRegularFileKey]
+        guard let walk = FileManager.default.enumerator(at: dir, includingPropertiesForKeys: keys) else { return }
+        for case let url as URL in walk {
+            let values = try url.resourceValues(forKeys: Set(keys))
+            // Its path inside `dir` ("mlx_metal_v3/libmlx.dylib"), from the resolved folder it sits in.
+            let parent = url.deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL.path
+            let name = (parent == root ? "" : String(parent.dropFirst(root.count + 1)) + "/") + url.lastPathComponent
+            if values.isSymbolicLink == true {
+                // Where the link says it points (whether or not that exists), from the folder it sits in; a link to
+                // another link inside is checked when that one comes up.
+                let written = try FileManager.default.destinationOfSymbolicLink(atPath: url.path)
+                let target = (written.hasPrefix("/") ? URL(fileURLWithPath: written) : URL(fileURLWithPath: parent).appending(path: written))
+                    .standardizedFileURL.path
+                guard target == root || target.hasPrefix(root + "/") else { throw Problem.linkOutside(file: name) }
+                continue
+            }
+            guard values.isRegularFile == true, isMachO(url) else { continue }
+            let status = checkSignature(of: url, team: team)
+            guard status == errSecSuccess else { throw Problem.badSignature(file: name, status: status) }
+        }
+    }
+
+    /// A Mach-O file (thin or universal), by its first four bytes.
+    static func isMachO(_ file: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: file) else { return false }
+        defer { try? handle.close() }
+        guard let head = try? handle.read(upToCount: 4), head.count == 4 else { return false }
+        let magic = head.withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }
+        return [0xFEEDFACE, 0xFEEDFACF, 0xCEFAEDFE, 0xCFFAEDFE, 0xCAFEBABE, 0xBEBAFECA, 0xCAFEBABF, 0xBFBAFECA].contains(magic)
+    }
+}
+
 /// Bytes from a pipe as whole lines.
 final class LineSplitter: @unchecked Sendable {
     private let lock = NSLock()
