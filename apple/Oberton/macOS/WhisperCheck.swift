@@ -87,7 +87,8 @@ enum WhisperCheck {
             }
             try? FileManager.default.removeItem(at: wav)
             // The scratch data folder (settings, history) goes too.
-            if ProcessInfo.processInfo.environment["OBERTON_DATA_DIR"] != nil { try? FileManager.default.removeItem(at: AppPaths.dataDir) }
+            // Only a folder OBERTON_DATA_DIR really moved the data to: never the user's own.
+            if AppPaths.isOverridden { try? FileManager.default.removeItem(at: AppPaths.dataDir) }
             Log.info("WhisperCheck: done; \(id) downloaded now = \(WhisperModels.isDownloaded(id)), setting back to \"\(before)\"")
             exit(0)
         }

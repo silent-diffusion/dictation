@@ -298,14 +298,24 @@ extension AppSettings {
     }
 }
 
-/// The app's data folder: Application Support/Oberton (inside the sandbox container on the App Store build), or the
-/// folder OBERTON_DATA_DIR names (Windows' DICTATION_ROOT; test runs keep their history and notes out of the user's own).
+/// The app's data folder: Application Support/Oberton (inside the sandbox container on the App Store build), or, in a
+/// DEBUG build only, the folder OBERTON_DATA_DIR names (Windows' DICTATION_ROOT; test runs and snapshots keep their
+/// history and notes out of the user's own). A Release build ignores the variable, so whoever can set Oberton's
+/// environment can't move where the direct download finds and runs its own `ollama` (security audit 2026-11-07).
 public enum AppPaths {
-    /// OBERTON_DATA_DIR is set: the data lives somewhere else than usual.
-    public static var isOverridden: Bool { ProcessInfo.processInfo.environment["OBERTON_DATA_DIR"]?.isEmpty == false }
+    /// The folder OBERTON_DATA_DIR names, when this build honours it.
+    static var override: String? {
+        #if DEBUG
+        if let dir = ProcessInfo.processInfo.environment["OBERTON_DATA_DIR"], !dir.isEmpty { return dir }
+        #endif
+        return nil
+    }
+
+    /// OBERTON_DATA_DIR is set (and honoured): the data lives somewhere else than usual.
+    public static var isOverridden: Bool { override != nil }
 
     public static var dataDir: URL {
-        if let dir = ProcessInfo.processInfo.environment["OBERTON_DATA_DIR"], !dir.isEmpty {
+        if let dir = override {
             let url = URL(fileURLWithPath: dir, isDirectory: true)
             try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
             return url
