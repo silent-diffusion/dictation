@@ -86,6 +86,10 @@ grants, the sandbox container, settings or Keychain items with the installed App
 those grants to the bundle ID and the signature; CI checks the IDs with `scripts/check-bundle-ids.sh`).
 Left to do: register the bundle ID and create the app in App Store Connect, a privacy policy URL, then *Product › Archive* and upload for TestFlight.
 
+**Privacy policy:** [PRIVACY.md](PRIVACY.md) covers the Mac and iPhone app (on-device speech and AI, opt-in cloud AI,
+what is stored where and how to delete it, the clipboard, network use). Its GitHub URL, once pushed, can serve as App
+Store Connect's privacy policy URL. Keep it in step with the code when data handling changes.
+
 ## The direct download (Developer ID)
 
 The Mac app also ships outside the App Store, as Windows does: the **Oberton Direct** scheme (its own target, sharing
