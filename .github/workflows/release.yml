@@ -52,8 +52,14 @@ jobs:
           & $iscc "/DMyAppVersion=$env:VERSION" "/DSourceDir=..\publish" installer\LocalDictation.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
 
+      # The installer's SHA-256 goes with it (sha256sum format): the app's updater runs the installer only if it matches
+      # this, or GitHub's own digest of the asset.
       - name: Create GitHub release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "v$env:VERSION" "dist/Oberton-Setup-$env:VERSION.exe" --target "$env:GITHUB_SHA" --title "Oberton $env:VERSION" --generate-notes
+        run: |
+          $exe = "dist/Oberton-Setup-$env:VERSION.exe"
+          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText("$exe.sha256", "$hash  Oberton-Setup-$env:VERSION.exe`n")
+          gh release create "v$env:VERSION" $exe "$exe.sha256" --target "$env:GITHUB_SHA" --title "Oberton $env:VERSION" --generate-notes

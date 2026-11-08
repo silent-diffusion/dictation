@@ -19,11 +19,16 @@ public sealed record SetupProgress(int Step, int TotalSteps, string Title, doubl
 /// </summary>
 public sealed class RuntimeInstaller
 {
-    // Pinned, tested versions. Bump deliberately.
+    // Pinned, tested versions. Bump deliberately, and the SHA-256 with each: a download is unpacked only if it matches.
+    // Each hash is the one its project publishes (uv's .sha256, python-build-standalone's SHA256SUMS, Ollama's
+    // sha256sum.txt), which is also GitHub's digest of the asset.
     const string UvUrl = "https://github.com/astral-sh/uv/releases/download/0.12.22/uv-x86_64-pc-windows-msvc.zip";
+    internal const string UvSha256 = "ea1397797a0ca15f63516dd0f49c2dde9776db9be5861cab152ebe8ad199894d";
     // Standalone CPython (the build uv itself uses): a plain folder, no virtualenv and no links, so it is relocatable.
     const string PythonUrl = "https://github.com/astral-sh/python-build-standalone/releases/download/20261003/cpython-3.12.15%2B20261003-x86_64-pc-windows-msvc-install_only.tar.gz";
+    internal const string PythonSha256 = "4b6f0beebbb695a0f3ea237b8c3eaa5bd424f47a7bc25b2fbe3a43390c770f08";
     const string OllamaUrl = "https://github.com/ollama/ollama/releases/download/v0.35.1/ollama-windows-amd64.zip";
+    internal const string OllamaSha256 = "dc50b9ca7f9023c86525012632cd1615b093d0407987444a7f62ecab617e8e93";
     const int Steps = 6;
     // Read aloud: Kokoro v1.0 (Apache 2.0), full-precision model for the best voice quality.
     const string KokoroModelUrl = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx";
@@ -132,7 +137,7 @@ public sealed class RuntimeInstaller
         if (!File.Exists(UvExe))
         {
             var zip = Path.Combine(AppPaths.RuntimeDir, "uv.zip");
-            await DownloadAsync(UvUrl, zip, f => Report(progress, 1, "Downloading Python tools", f, ""), ct);
+            await DownloadAsync(UvUrl, zip, f => Report(progress, 1, "Downloading Python tools", f, ""), ct, UvSha256);
             ZipFile.ExtractToDirectory(zip, Path.GetDirectoryName(UvExe)!, true);
             File.Delete(zip);
         }
@@ -142,7 +147,7 @@ public sealed class RuntimeInstaller
         if (!File.Exists(AppPaths.PythonExe))
         {
             var tgz = Path.Combine(AppPaths.RuntimeDir, "python.tar.gz");
-            await DownloadAsync(PythonUrl, tgz, f => Report(progress, 2, "Downloading Python", f, ""), ct);
+            await DownloadAsync(PythonUrl, tgz, f => Report(progress, 2, "Downloading Python", f, ""), ct, PythonSha256);
             Report(progress, 2, "Unpacking Python", null, "");
             var tmp = Path.Combine(AppPaths.RuntimeDir, "py-tmp");
             if (Directory.Exists(tmp)) Directory.Delete(tmp, true);
@@ -174,7 +179,7 @@ public sealed class RuntimeInstaller
         if (!File.Exists(AppPaths.OllamaExe))
         {
             var zip = Path.Combine(AppPaths.RuntimeDir, "ollama.zip");
-            await DownloadAsync(OllamaUrl, zip, f => Report(progress, 3, "Downloading the AI runtime (Ollama)", f, ""), ct);
+            await DownloadAsync(OllamaUrl, zip, f => Report(progress, 3, "Downloading the AI runtime (Ollama)", f, ""), ct, OllamaSha256);
             Report(progress, 3, "Unpacking the AI runtime", null, "");
             var dest = Path.Combine(AppPaths.RuntimeDir, "ollama");
             await Task.Run(() => ZipFile.ExtractToDirectory(zip, dest, true), ct);
@@ -233,7 +238,7 @@ public sealed class RuntimeInstaller
         if (!File.Exists(UvExe))
         {
             var zip = Path.Combine(AppPaths.RuntimeDir, "uv.zip");
-            await DownloadAsync(UvUrl, zip, progress, ct);
+            await DownloadAsync(UvUrl, zip, progress, ct, UvSha256);
             ZipFile.ExtractToDirectory(zip, Path.GetDirectoryName(UvExe)!, true);
             File.Delete(zip);
         }
@@ -332,7 +337,9 @@ public sealed class RuntimeInstaller
             Directory.GetFiles(d, "model.bin", SearchOption.AllDirectories).Length > 0);
     }
 
-    async Task DownloadAsync(string url, string target, Action<double?> progress, CancellationToken ct)
+    /// <param name="sha256">For a runtime that is unpacked and run: the pinned hash the download must have; it is checked
+    /// before the file takes its name (so a bad one is never unpacked) and deleted when it doesn't match.</param>
+    async Task DownloadAsync(string url, string target, Action<double?> progress, CancellationToken ct, string? sha256 = null)
     {
         try
         {
@@ -353,12 +360,29 @@ public sealed class RuntimeInstaller
                     if (done - lastReport > 1 << 20) { lastReport = done; progress(total > 0 ? (double)done / total.Value : null); }
                 }
             }
+            if (sha256 != null)
+            {
+                progress(null); // checking a large download takes a few seconds
+                await Task.Run(() => Verify(part, sha256, Path.GetFileName(new Uri(url).LocalPath)), ct);
+            }
             File.Move(part, target, true);
         }
         catch (HttpRequestException e)
         {
             throw new UserFacingException("A download failed. Check your internet connection and click Retry.", e);
         }
+    }
+
+    /// <summary>A download whose SHA-256 isn't <paramref name="sha256"/> is deleted and not used.</summary>
+    internal static void Verify(string path, string sha256, string what)
+    {
+        var actual = Checksum.Sha256(path);
+        if (actual == Checksum.Normalize(sha256)) return;
+        try { File.Delete(path); } catch (Exception e) { Log.Warn($"Could not delete {path}: {e.Message}"); }
+        Log.Warn($"Download check failed: {what} has SHA-256 {actual}, expected {sha256}; deleted");
+        throw new UserFacingException($"The download of {what} isn't the file Oberton expects (its checksum doesn't match), so " +
+                                      "it was deleted and not installed. Click Retry; if it keeps happening, something on this network (a proxy or " +
+                                      "security software) may be changing downloads.");
     }
 
     /// <summary>Run a command-line tool; progress is estimated from how much its target folder has grown.</summary>
