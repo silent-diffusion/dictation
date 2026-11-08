@@ -54,8 +54,18 @@ final class NotesRecorder: ObservableObject {
     var seconds: Double { feed.seconds }
     /// Recording, or redoing a step: the speech recognizer and the AI model are in use, so nothing may unload them.
     var needsModels: Bool { current != nil || redoing != nil }
-    /// Not recording right now: paused by the user, or while a dictation runs.
-    var isPaused: Bool { userPaused || dictating }
+    /// Not recording right now: paused by the user, while a dictation runs, or while the audio is interrupted.
+    var isPaused: Bool { userPaused || dictating || interrupted }
+    /// iOS: a call, Siri or another app took the audio (an AVAudioSession interruption). Recording is held, everything
+    /// so far kept, until it ends.
+    @Published private(set) var interrupted = false
+    /// A line for the session page about the microphone: an interruption, a microphone that changed or went away. Nil
+    /// while all is well.
+    @Published private(set) var audioNote: String?
+    private var audioObservers: [NSObjectProtocol] = []
+    /// What the session listens to (the microphone is restarted only when it is part of it).
+    private var listening = NotesSource.mic
+    private var noteClear: Task<Void, Never>?
 
     private let feed = NotesFeed()
     private let engine = AVAudioEngine()
@@ -184,7 +194,16 @@ final class NotesRecorder: ObservableObject {
             }
         }
         #endif
+        listening = source
+        watchAudio()
         guard source == .mic || source == .both else { return }
+        try startMic(both: source == .both)
+    }
+
+    /// The microphone into the recording (mixed with the Mac's audio when `both`): at the start, and again after an
+    /// interruption or a change of microphone.
+    private func startMic(both: Bool) throws {
+        let feed = self.feed
         // The microphone chosen in Settings › Microphone, as dictation uses (the system default when none is).
         Microphones.use(settings().microphoneName, on: engine)
         let input = engine.inputNode
@@ -194,7 +213,6 @@ final class NotesRecorder: ObservableObject {
             throw UserFacingError(Self.noMicrophone)
         }
         micConverter = converter
-        let both = source == .both
         var tapConverter = converter // the tap's own (its thread only), made again if the microphone's format changes
         try Microphones.tap(input, bufferSize: 4096) { buffer, _ in
             if tapConverter.inputFormat != buffer.format, let c = AVAudioConverter(from: buffer.format, to: target) { tapConverter = c }
@@ -218,6 +236,11 @@ final class NotesRecorder: ObservableObject {
     #endif
 
     private func stopAudio() {
+        audioObservers.forEach(NotificationCenter.default.removeObserver)
+        audioObservers = []
+        interrupted = false
+        noteClear?.cancel()
+        audioNote = nil
         if engine.isRunning { engine.stop() }
         engine.inputNode.removeTap(onBus: 0)
         micConverter = nil
@@ -228,6 +251,134 @@ final class NotesRecorder: ObservableObject {
         computerAudio = nil
         #else
         LiveTranscriber.audioSessionHeld = false
+        #endif
+    }
+
+    // MARK: Interruptions and changes of microphone
+
+    /// Watches for what stops the microphone mid-session (as Read aloud watches its output): the engine's configuration
+    /// changing (a microphone plugged in or out, another one picked), and on iOS an interruption (a call, Siri, another
+    /// app's audio) and the route changing (headphones out). The recording so far is always kept.
+    private func watchAudio() {
+        audioObservers.forEach(NotificationCenter.default.removeObserver)
+        audioObservers = [NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.microphoneChanged() }
+        }]
+        #if os(iOS)
+        audioObservers.append(NotificationCenter.default.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
+            guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+                  let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+            let options = AVAudioSession.InterruptionOptions(rawValue: note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0)
+            MainActor.assumeIsolated {
+                if type == .began { self?.interruptionBegan() } else { self?.interruptionEnded(resume: options.contains(.shouldResume)) }
+            }
+        })
+        audioObservers.append(NotificationCenter.default.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] note in
+            guard let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
+                  let reason = AVAudioSession.RouteChangeReason(rawValue: raw),
+                  reason == .oldDeviceUnavailable || reason == .newDeviceAvailable else { return }
+            MainActor.assumeIsolated { self?.microphoneChanged() }
+        })
+        #endif
+    }
+
+    #if os(iOS)
+    private func interruptionBegan() {
+        guard current != nil, !isFinishing, !interrupted else { return }
+        interrupted = true
+        feed.setPaused(isPaused)
+        saveNow()
+        show("Paused: a call or another app is using the audio. Everything so far is kept, and recording carries on when it's over.")
+        Log.info("Extended notes: interrupted (audio session)")
+    }
+
+    private func interruptionEnded(resume: Bool) {
+        guard interrupted else { return }
+        interrupted = false
+        do { try AVAudioSession.sharedInstance().setActive(true) } catch {
+            Log.warn("Extended notes: the audio session didn't come back: " + error.localizedDescription)
+        }
+        let running = listening == .computer || engine.isRunning || restartMic()
+        if running && resume {
+            feed.setPaused(isPaused)
+            show(nil)
+            Log.info("Extended notes: recording again after the interruption")
+        } else {
+            // iOS didn't say to carry on (or the microphone won't start): held as a pause of the user's, so Resume
+            // carries on.
+            userPaused = true
+            feed.setPaused(isPaused)
+            show(running ? "Paused after the interruption. Press Resume to carry on recording."
+                         : "The microphone didn't come back after the interruption. Everything so far is kept; press Resume to try again.")
+            Log.info("Extended notes: held after the interruption" + (running ? "" : " (the microphone didn't restart)"))
+        }
+    }
+    #endif
+
+    /// The microphone changed or went away. A running engine carries on as it is; a stopped one is started again on
+    /// whatever microphone there is now. With none, the session pauses (Resume tries again).
+    private func microphoneChanged() {
+        guard current != nil, !isFinishing, !interrupted, listening != .computer else { return }
+        if engine.isRunning {
+            if let name = inputName { show("The microphone changed: recording goes on with \(name).", clearAfter: 8) }
+            return
+        }
+        if restartMic() {
+            show("The microphone changed: recording goes on" + (inputName.map { " with \($0)." } ?? "."), clearAfter: 8)
+            Log.info("Extended notes: the microphone changed; recording again")
+        } else {
+            userPaused = true
+            feed.setPaused(isPaused)
+            keepSoFar()
+            show("The microphone went away. Everything so far is kept; connect one and press Resume.")
+            Log.warn("Extended notes: the microphone went away; paused")
+        }
+    }
+
+    /// The microphone again, on a fresh tap; false if it won't start.
+    private func restartMic() -> Bool {
+        guard listening != .computer else { return true }
+        if engine.isRunning { engine.stop() }
+        engine.inputNode.removeTap(onBus: 0)
+        do {
+            try startMic(both: listening == .both)
+            return true
+        } catch {
+            Log.warn("Extended notes: the microphone didn't start again: " + error.localizedDescription)
+            return false
+        }
+    }
+
+    /// The input in use, by name (iOS: "iPhone Microphone", "AirPods Pro"); nil on the Mac, where Settings › Microphone
+    /// names it.
+    private var inputName: String? {
+        #if os(iOS)
+        AVAudioSession.sharedInstance().currentRoute.inputs.first?.portName
+        #else
+        nil
+        #endif
+    }
+
+    private func show(_ note: String?, clearAfter seconds: Double? = nil) {
+        noteClear?.cancel()
+        audioNote = note
+        guard let seconds, note != nil else { return }
+        noteClear = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(seconds))
+            guard !Task.isCancelled else { return }
+            self?.audioNote = nil
+        }
+    }
+
+    /// What is recorded and typed so far, written now.
+    private func keepSoFar() {
+        #if os(iOS)
+        saveNow()
+        #else
+        guard let s = current else { return }
+        feed.flush()
+        s.seconds = feed.seconds
+        store.saveNow(s)
         #endif
     }
 
@@ -557,6 +708,12 @@ final class NotesRecorder: ObservableObject {
 
     func resume() {
         guard isRecording, userPaused else { return }
+        // After an interruption or a lost microphone the engine may be stopped: started again first.
+        if listening != .computer, !engine.isRunning, !restartMic() {
+            show("The microphone still won't start. Connect one, or check that Oberton may use it, then press Resume.")
+            return
+        }
+        show(nil)
         userPaused = false
         feed.setPaused(isPaused)
         Log.info("Extended notes: resumed")

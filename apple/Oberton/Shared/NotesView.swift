@@ -377,6 +377,13 @@ struct NoteSessionView: View {
             NotesPipelineView(steps: live ? NotesSteps.live(model, chosen: session.source) : NotesSteps.redo(model, session),
                               open: [.transcribe, .transcribe, .format, .summary].map { step in { ask(step) } })
                 .padding(.bottom, 8)
+            // An interruption (a call), or a microphone that changed or went away, while this session records.
+            if live, let note = notes.audioNote {
+                Text(note).font(Ob.sans(12)).foregroundStyle(ob.accent)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.bottom, 8)
+                    .accessibilityAddTraits(.updatesFrequently)
+            }
             // The hint is docked right. Where Windows lets the pills give way when the row is too narrow, the Mac moves
             // the hint under the pills instead, so every tab and the whole hint show.
             ViewThatFits(in: .horizontal) {
@@ -1282,7 +1289,7 @@ enum NotesSteps {
         let listen: PipeStep, speechStep: PipeStep
         if let live = n.current {
             listen = n.isFinishing ? PipeStep(label: "LISTEN", title: source, status: "stopped", state: .ok)
-                : n.isPaused ? PipeStep(label: "LISTEN", title: source, status: n.userPaused ? "paused" : "paused while you dictate", state: .ok)
+                : n.isPaused ? PipeStep(label: "LISTEN", title: source, status: n.interrupted ? "interrupted" : n.userPaused ? "paused" : "paused while you dictate", state: .ok)
                 : PipeStep(label: "LISTEN", title: source, status: "recording", state: .busy)
             speechStep = n.isFinishing ? PipeStep(label: "SPEECH", title: speech, status: "the last piece…", state: .busy)
                 : n.isPaused ? PipeStep(label: "SPEECH", title: speech, status: "waiting", state: .ok)
