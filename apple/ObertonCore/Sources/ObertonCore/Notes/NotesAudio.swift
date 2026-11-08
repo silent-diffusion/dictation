@@ -62,7 +62,9 @@ public final class WavWriter: @unchecked Sendable {
     private let lock = NSLock()
 
     public init(url: URL) throws {
-        FileManager.default.createFile(atPath: url.path, contents: WavWriter.header(dataBytes: 0))
+        FileManager.default.createFile(atPath: url.path, contents: WavWriter.header(dataBytes: 0), attributes: NotesFiles.attributes)
+        // Protected on iOS and left out of backups (NotesFiles).
+        NotesFiles.protectRecording(url)
         handle = try FileHandle(forWritingTo: url)
         try handle.seekToEnd()
     }

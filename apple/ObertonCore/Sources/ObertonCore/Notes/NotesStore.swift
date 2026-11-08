@@ -57,6 +57,13 @@ public final class NotesStore: @unchecked Sendable {
             // A file holding only "null" is skipped without a word, as JsonStore.Load returns null for it.
             guard let s = read else { continue }
             s.folder = folder
+            // Sessions from before NotesFiles: their folder gets the protection class and their recording leaves the
+            // backups, once (setting them again later changes nothing).
+            NotesFiles.protect(folder)
+            if let audio = s.audioURL, FileManager.default.fileExists(atPath: audio.path),
+               (try? audio.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup) != true {
+                NotesFiles.protectRecording(audio)
+            }
             if !s.finished {
                 // Oberton quit (or crashed) while it recorded: everything up to the last save is kept.
                 s.finished = true
@@ -95,7 +102,7 @@ public final class NotesStore: @unchecked Sendable {
         while FileManager.default.fileExists(atPath: folder.path) {
             folder = dir.appending(path: f.string(from: now) + "-\(n)", directoryHint: .isDirectory); n += 1
         }
-        if disk { try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true) }
+        if disk { try NotesFiles.makeFolder(folder) } // protected on iOS (NotesFiles)
         let s = NoteSession()
         s.started = now
         s.source = source
@@ -114,7 +121,7 @@ public final class NotesStore: @unchecked Sendable {
     public func save(_ s: NoteSession) {
         guard disk, let folder = s.folder, let data = Self.encode(s) else { return }
         writes.async {
-            do { try data.write(to: folder.appending(path: "session.json"), options: .atomic) } catch {
+            do { try data.write(to: folder.appending(path: "session.json"), options: NotesFiles.writeOptions) } catch {
                 CoreLog.warn("Extended notes: saving failed: " + error.localizedDescription)
             }
         }
@@ -126,7 +133,7 @@ public final class NotesStore: @unchecked Sendable {
     public func saveNow(_ s: NoteSession) {
         guard disk, let folder = s.folder, let data = Self.encode(s) else { return }
         writes.sync {
-            do { try data.write(to: folder.appending(path: "session.json"), options: .atomic) } catch {
+            do { try data.write(to: folder.appending(path: "session.json"), options: NotesFiles.writeOptions) } catch {
                 CoreLog.warn("Extended notes: saving at exit failed: " + error.localizedDescription)
             }
         }
@@ -196,8 +203,8 @@ public final class NotesStore: @unchecked Sendable {
                 if FileManager.default.fileExists(atPath: draftURL.path) { try FileManager.default.removeItem(at: draftURL) }
                 return
             }
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            try Data(text.utf8).write(to: draftURL, options: .atomic)
+            try NotesFiles.makeFolder(dir)
+            try Data(text.utf8).write(to: draftURL, options: NotesFiles.writeOptions)
         } catch {
             CoreLog.warn("Extended notes: saving the draft failed: " + error.localizedDescription)
         }
@@ -323,8 +330,8 @@ public final class NotesUsage: @unchecked Sendable {
         data.days[i].sources[s.source.rawValue, default: 0] += 1
         guard let url else { return }
         do {
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try NotesStore.encoder.encode(data).write(to: url, options: .atomic)
+            try NotesFiles.makeFolder(url.deletingLastPathComponent())
+            try NotesStore.encoder.encode(data).write(to: url, options: NotesFiles.writeOptions)
         } catch {
             CoreLog.warn("Extended notes: saving the counts failed: " + error.localizedDescription)
         }
