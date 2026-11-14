@@ -436,15 +436,21 @@ public final class LiveTranscriber: @unchecked Sendable {
 
     /// The meter's levels for a buffer, one per 50 ms of it, on Windows' scale (MicCapture: `min(1, √rms · 1.8)`, about
     /// 20 a second); the overlay takes √ again.
-    static func meterLevels(_ buffer: AVAudioPCMBuffer) -> [Float] {
-        guard let data = buffer.floatChannelData?[0], buffer.frameLength > 0 else { return [] }
+    static func meterLevels(_ buffer: AVAudioPCMBuffer) -> [Float] { measure(buffer)?.levels ?? [] }
+
+    /// The meter's levels and the buffer's loudest sample, in one walk over it (the audio thread does this for every
+    /// buffer). nil for an empty buffer.
+    static func measure(_ buffer: AVAudioPCMBuffer) -> (levels: [Float], peak: Float)? {
+        guard let data = buffer.floatChannelData?[0], buffer.frameLength > 0 else { return nil }
         let n = Int(buffer.frameLength), step = max(1, Int(buffer.format.sampleRate * 0.05))
-        return stride(from: 0, to: n, by: step).map { start in
+        var peak: Float = 0
+        let levels = stride(from: 0, to: n, by: step).map { start -> Float in
             let end = min(n, start + step)
             var sum: Float = 0
-            for i in start..<end { sum += data[i] * data[i] }
+            for i in start..<end { sum += data[i] * data[i]; peak = max(peak, abs(data[i])) }
             return speechLevel(rms: (sum / Float(end - start)).squareRoot())
         }
+        return (levels, peak)
     }
 
     static func rms(_ buffer: AVAudioPCMBuffer) -> (rms: Float, peak: Float)? {
@@ -458,11 +464,10 @@ public final class LiveTranscriber: @unchecked Sendable {
     private func capture(_ tap: AVAudioPCMBuffer) {
         guard let buffer = Self.copy(tap) else { return }
         var silent = false
-        if let (rms, peak) = Self.rms(buffer) {
-            let meter = Self.meterLevels(buffer)
+        if let (meter, peak) = Self.measure(buffer) {
             silent = lock.withLock {
                 // The loudest of the meter's 50 ms levels, as Windows takes its peak from MicCapture's levels.
-                peakLevel = max(peakLevel, meter.max() ?? Self.speechLevel(rms: rms))
+                peakLevel = max(peakLevel, meter.max() ?? 0)
                 if peak > 0 { sawSignal = true; return false }
                 guard !sawSignal else { return false }
                 silentFrames += Int(buffer.frameLength)
