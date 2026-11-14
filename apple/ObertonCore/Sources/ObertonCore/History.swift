@@ -221,11 +221,13 @@ public final class HistoryStore {
         }
         entry.folder = folder
         do {
-            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            // On the iPhone the folder and its files carry an explicit data-protection class (NotesFiles: iOS's own
+            // default, made explicit so it can't change with an entitlement). History stays in backups, as PRIVACY.md says.
+            try NotesFiles.makeFolder(folder)
             try writeJSON(entry, to: folder)
             if let pcm, !pcm.isEmpty, let url = entry.audioURL {
-                try WavFile.data(pcm: pcm).write(to: url, options: .atomic)
-                if !words.isEmpty, let w = entry.wordsURL, let data = try? JSONEncoder().encode(words) { try? data.write(to: w, options: .atomic) }
+                try WavFile.data(pcm: pcm).write(to: url, options: NotesFiles.writeOptions)
+                if !words.isEmpty, let w = entry.wordsURL, let data = try? JSONEncoder().encode(words) { try? data.write(to: w, options: NotesFiles.writeOptions) }
             }
         } catch {
             CoreLog.error("Saving a dictation to History failed: \(error)")
@@ -244,7 +246,7 @@ public final class HistoryStore {
     }
 
     private func writeJSON(_ entry: HistoryEntry, to folder: URL) throws {
-        try Self.encoder.encode(entry).write(to: folder.appending(path: "entry.json"), options: .atomic)
+        try Self.encoder.encode(entry).write(to: folder.appending(path: "entry.json"), options: NotesFiles.writeOptions)
     }
 
     /// How many dictations keeping the newest `limit` or the last `days` days would delete now (for the confirmation).
