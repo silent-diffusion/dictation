@@ -11,9 +11,9 @@ public enum CoreLog {
     /// Tests catch the lines here instead of writing them to the data folder.
     nonisolated(unsafe) static var sink: ((String, String) -> Void)?
 
-    public static func info(_ message: String) { append("INFO", message); logger.info("\(message, privacy: .public)") }
-    public static func warn(_ message: String) { append("WARN", message); logger.warning("\(message, privacy: .public)") }
-    public static func error(_ message: String) { append("ERROR", message); logger.error("\(message, privacy: .public)") }
+    public static func info(_ message: String) { append("INFO", message); logger.info("\(scrubbed(message), privacy: .public)") }
+    public static func warn(_ message: String) { append("WARN", message); logger.warning("\(scrubbed(message), privacy: .public)") }
+    public static func error(_ message: String) { append("ERROR", message); logger.error("\(scrubbed(message), privacy: .public)") }
 
     /// logs/ in the data folder.
     public static var dir: URL {
@@ -31,15 +31,17 @@ public enum CoreLog {
         return f
     }()
 
+    /// `message` with the home folder written "~": paths in messages would carry the account name. For the file and
+    /// the system log alike (the system log's lines are public, and a sysdiagnose carries them off the Mac).
+    public static func scrubbed(_ message: String, home: String = NSHomeDirectory()) -> String {
+        guard home.count > 3 else { return message }
+        return message.replacingOccurrences(of: home.hasSuffix("/") ? String(home.dropLast()) : home, with: "~", options: .caseInsensitive)
+    }
+
     /// One line in the file (the system log is the caller's).
     public static func append(_ level: String, _ message: String) {
         if let sink { sink(level, message); return }
-        // Paths in messages would carry the account name.
-        let home = NSHomeDirectory()
-        var message = message
-        if home.count > 3 {
-            message = message.replacingOccurrences(of: home.hasSuffix("/") ? String(home.dropLast()) : home, with: "~", options: .caseInsensitive)
-        }
+        let message = scrubbed(message)
         lock.withLock {
             let line = "\(stamp.string(from: .now)) \(level.padding(toLength: 5, withPad: " ", startingAt: 0)) \(message)\n"
             let url = file

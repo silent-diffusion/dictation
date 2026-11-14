@@ -11,9 +11,9 @@ enum Log {
     static var dir: URL { CoreLog.dir }
     static var file: URL { CoreLog.file }
 
-    static func info(_ message: String) { CoreLog.append("INFO", message); logger.info("\(message, privacy: .public)") }
-    static func warn(_ message: String) { CoreLog.append("WARN", message); logger.warning("\(message, privacy: .public)") }
-    static func error(_ message: String) { CoreLog.append("ERROR", message); logger.error("\(message, privacy: .public)") }
+    static func info(_ message: String) { CoreLog.append("INFO", message); logger.info("\(CoreLog.scrubbed(message), privacy: .public)") }
+    static func warn(_ message: String) { CoreLog.append("WARN", message); logger.warning("\(CoreLog.scrubbed(message), privacy: .public)") }
+    static func error(_ message: String) { CoreLog.append("ERROR", message); logger.error("\(CoreLog.scrubbed(message), privacy: .public)") }
     /// "message: the error", as Windows' Log.Error(m, e).
     static func error(_ message: String, _ error: Error) { self.error("\(message): \(error)") }
 }
