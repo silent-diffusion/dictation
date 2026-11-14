@@ -19,6 +19,8 @@
 	<string>$(OBERTON_APPCAST_URL)</string>
 	<key>SUPublicEDKey</key>
 	<string>$(OBERTON_SPARKLE_PUBLIC_KEY)</string>
+	<key>SUVerifyUpdateBeforeExtraction</key>
+	<true/>
 	<key>SUEnableAutomaticChecks</key>
 	<false/>
 	<key>SUAllowsAutomaticUpdates</key>
