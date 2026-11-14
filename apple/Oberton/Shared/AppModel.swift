@@ -309,6 +309,7 @@ final class AppModel: ObservableObject {
         step("History (\(history.count) dictations)")
         settings = loadedSettings
         let notesStore = NotesStore(dir: Self.snapshotMode ? nil : NotesStore.defaultDir)
+        if !Self.snapshotMode { TempFiles.sweep() } // recordings a crash left in the temporary folder
         step("Extended Notes sessions")
         // The dashboard notepad became Extended Notes' draft (notes/draft.txt): moved there once.
         let movesNotepad = !Self.snapshotMode && !loadedSettings.notepad.isEmpty
