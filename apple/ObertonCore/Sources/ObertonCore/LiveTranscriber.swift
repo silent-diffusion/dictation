@@ -631,6 +631,10 @@ final class WhisperDictation: @unchecked Sendable {
     /// there is this much in all (0.5 s).
     static let partialNew = 0.6, partialFirst = 0.5
     static let partialWindow = 28 * 16_000
+    /// Whether a partial decode is due: 0.6 s of new audio since the last one, and half a second in all.
+    static func partialDue(count: Int, last: Int) -> Bool {
+        Double(count - last) >= 16_000 * partialNew && Double(count) >= 16_000 * partialFirst
+    }
 
     private let model: String, language: String?, prompt: String, even: Bool, live: Bool
     private let onText: (String) -> Void
@@ -675,8 +679,10 @@ final class WhisperDictation: @unchecked Sendable {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(250))
                 guard let self, !Task.isCancelled else { return }
+                // The count first: the last 28 s (up to 1.8 MB) are copied, under the lock the audio thread appends
+                // with, only when a decode is due, not on every quarter second.
+                guard Self.partialDue(count: self.lock.withLock { self.samples.count }, last: last) else { continue }
                 let (count, tail) = self.lock.withLock { (self.samples.count, Array(self.samples.suffix(Self.partialWindow))) }
-                guard Double(count - last) >= 16_000 * Self.partialNew, Double(count) >= 16_000 * Self.partialFirst else { continue }
                 last = count
                 let heard: String
                 do {
