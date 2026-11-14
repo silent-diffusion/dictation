@@ -41,14 +41,19 @@ On the Mac, Settings › Advanced › *Open data folder* shows it.
 | **Extended Notes sessions:** transcript, formatted text, summary, your own notes and the recording | `notes/<date>/session.json` and `audio.wav` | Until you delete the session |
 | **Counts:** words dictated per day, per app and per site; the most used words and phrases; Extended Notes' daily totals | `usage.json`, `words.json`, `notes/usage.json` | Until you reset them (Settings › History resets the dictation counts and the word tally; the notes totals go with the data folder) |
 | **Settings and profiles** | `settings.json`, `profiles.json` | While Oberton is installed |
-| **Log:** what Oberton did (starts, errors, timings; never what you said) | `logs/dictation.log` and one older copy, 2 MB each | Rolls over by itself |
+| **Log:** what Oberton did (starts, errors, timings, the names of the app you dictated into and of a microphone that wasn't found; never what you said) | `logs/dictation.log` and one older copy, 2 MB each | Rolls over by itself |
 | **Downloaded models and voices** | `models/` | Until you remove them in Settings › Models |
 
 **Window titles (direct download only).** History notes the title of the window you dictated into (for example a
 browser tab's title), so you can see where text went and Analytics can count sites. The App Store build doesn't read
 window titles at all.
 
-**On iPhone and iPad,** Extended Notes files are encrypted by iOS until the device is first unlocked after a restart,
+**Temporary copies.** A few copies of recordings live for a moment in the system's temporary folder, outside the data
+folder: the levelled copy Extended Notes plays back, the copy a History *Run again* reads, and on the Mac the file put
+on the clipboard by *Copy recording*. They are removed when they are no longer needed, and whatever a crash leaves
+behind is removed the next time Oberton starts (the clipboard copy a day later, so it can still be pasted).
+
+**On iPhone and iPad,** History and Extended Notes files are encrypted by iOS until the device is first unlocked after a restart,
 and Extended Notes recordings are left out of iCloud and computer backups (they can hold other people's voices and are
 large). Your notes' text, and History, are backed up with the rest of your device.
 
