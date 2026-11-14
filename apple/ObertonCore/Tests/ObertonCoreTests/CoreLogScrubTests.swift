@@ -16,3 +16,13 @@ import Testing
         #expect(CoreLog.scrubbed("a/b/c", home: "/") == "a/b/c")
     }
 }
+
+/// A message that can echo what was said (a cloud service's error text) never reaches the log.
+@Suite struct UserFacingErrorLogTests {
+    @Test func logWordsReplaceTheMessageWhenGiven() {
+        let echo = UserFacingError("Claude returned an error: invalid text 'my secret words'", log: "Claude returned an error (400)")
+        #expect(echo.message.contains("my secret words"))
+        #expect(echo.forLog == "Claude returned an error (400)")
+        #expect(UserFacingError("The cloud model took too long to respond.").forLog == "The cloud model took too long to respond.")
+    }
+}

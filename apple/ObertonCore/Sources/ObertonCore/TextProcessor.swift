@@ -87,7 +87,7 @@ public struct TextProcessor: Sendable {
         let message: String
         if let e = error as? UserFacingError {
             message = e.message
-            CoreLog.warn("AI edit failed: " + message)
+            CoreLog.warn("AI edit failed: " + e.forLog)
         } else {
             // Windows shows its own words only for a UserFacingException; anything else is logged and named generically.
             message = somethingWentWrong

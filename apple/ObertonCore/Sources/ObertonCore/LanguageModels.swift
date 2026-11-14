@@ -7,7 +7,12 @@ import Metal
 /// An error worth showing to the user as it is.
 public struct UserFacingError: LocalizedError, Sendable {
     public var message: String
-    public init(_ message: String) { self.message = message }
+    /// What the log gets instead of `message`, when the message can carry what was said (a cloud service's error text
+    /// can echo the request). nil: the message itself.
+    public var logMessage: String?
+    public init(_ message: String, log: String? = nil) { self.message = message; logMessage = log }
+    /// The words for the log: never the user's text.
+    public var forLog: String { logMessage ?? message }
     public var errorDescription: String? { message }
 }
 
@@ -684,7 +689,7 @@ public struct CloudBackend: LanguageModelBackend {
             if status == 401 || status == 403 { throw UserFacingError("\(label) rejected the API key. Check it under Settings › Cloud AI.") }
             var detail = ((json?["error"] as? [String: Any])?["message"] as? String) ?? String(decoding: data, as: UTF8.self)
             if detail.count > 200 { detail = String(detail.prefix(200)) + "…" }
-            throw UserFacingError("\(label) returned an error: \(detail)")
+            throw UserFacingError("\(label) returned an error: \(detail)", log: "\(label) returned an error (\(status))")
         }
         guard json != nil else { throw UserFacingError("\(label) sent an empty reply.") }
         if id.provider == .anthropic {

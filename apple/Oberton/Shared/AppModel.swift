@@ -918,7 +918,7 @@ final class AppModel: ObservableObject {
         phase = .idle
         aiNotice = nil
         if let error = error as? UserFacingError {
-            Log.warn("Dictation failed: " + error.message)
+            Log.warn("Dictation failed: " + error.forLog)
             notice(error.message, kind: .error)
         } else {
             Log.error("Dictation failed: \(error)")

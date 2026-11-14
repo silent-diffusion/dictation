@@ -61,7 +61,7 @@ public enum HistoryRerun {
                 if result.modified { aiEdit = result.text }
                 if result.safetyNet { safetyNet = true; warning = result.warning }
             } catch let e as UserFacingError where !Task.isCancelled {
-                CoreLog.warn("History: the AI step of running a dictation again failed: " + e.message)
+                CoreLog.warn("History: the AI step of running a dictation again failed: " + e.forLog)
                 warning = e.message + " The transcription was kept as heard."
             }
         }
