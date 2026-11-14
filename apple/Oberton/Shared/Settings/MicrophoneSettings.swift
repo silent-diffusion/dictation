@@ -20,8 +20,7 @@ struct MicrophoneSection: View {
             ObMenu(options: [(Self.systemDefault, "(System default microphone)")] + devices.map { ($0, $0) }, selection: choice, width: 400)
             FieldLabel("Input level")
             // While a dictation records, its own level shows; otherwise the page's meter (as Windows' AudioPage).
-            FluentMeter(fraction: Double(model.phase == .recording ? model.level : meterLevel)).frame(width: 400, height: 10)
-                .accessibilityLabel("Input level")
+            InputLevelMeter(dictation: model.inputLevel, recording: model.phase == .recording, pageLevel: meterLevel)
             Caption(problem ?? "Speak to see the meter move. If it stays flat, choose another microphone or check \(privacyPlace).", bottom: 0)
                 .padding(.top, 8)
         }
@@ -101,5 +100,18 @@ struct FluentMeter: View {
             .frame(width: inner.width, height: inner.height)
             .offset(x: 1, y: 1)
         }
+    }
+}
+
+/// The page's level bar. It alone watches the dictation's level, so the 20 changes a second redraw this bar and
+/// nothing else.
+private struct InputLevelMeter: View {
+    @ObservedObject var dictation: InputLevel
+    let recording: Bool
+    let pageLevel: Float
+
+    var body: some View {
+        FluentMeter(fraction: Double(recording ? dictation.value : pageLevel)).frame(width: 400, height: 10)
+            .accessibilityLabel("Input level")
     }
 }

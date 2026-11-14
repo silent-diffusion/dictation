@@ -159,7 +159,10 @@ final class AppModel: ObservableObject {
     /// Type as you speak: the pieces handed out so far (Windows' `_pieces`), for the words shown after the stop and for
     /// stitching the final text (`LiveStitch`).
     private var livePieces: [String] = []
-    @Published private(set) var level: Float = 0
+    /// The microphone's level while a dictation records, for Settings › Microphone. Its own object: it changes about
+    /// 20 times a second, and as a published value of the model every one of those redrew every view that watches the
+    /// model (Analytics, History, the dashboard).
+    let inputLevel = InputLevel()
     /// The overlay's level meter, running while recording (its own object, so its 20 redraws a second don't redraw
     /// everything that watches the model).
     let meter = LevelMeter()
@@ -361,7 +364,7 @@ final class AppModel: ObservableObject {
         }
         transcriber.onLevel = { [weak self] level in
             guard let self else { return }
-            self.level = level
+            inputLevel.value = level
             if phase == .recording { meter.hear(level) }
         }
         transcriber.onSilence = { [weak self] in
@@ -379,7 +382,7 @@ final class AppModel: ObservableObject {
             guard let self, self.phase == .recording else { return }
             switch action {
             case .pause:
-                self.level = 0
+                self.inputLevel.value = 0
                 self.micStatus = AudioInterruptions.status(for: .pause)
             case .restart:
                 self.micStatus = nil
@@ -617,7 +620,7 @@ final class AppModel: ObservableObject {
         finishClock.restart()
         let seconds = (stoppedAt ?? Date()).timeIntervalSince(startedAt ?? Date())
         phase = .transcribing
-        level = 0
+        inputLevel.value = 0
         let engine = engineTask
         work = Task {
             // If the model was still loading, it now catches up on the whole recording.
@@ -711,7 +714,7 @@ final class AppModel: ObservableObject {
             live = nil
             if phase != .inserting { Task { await typed.removeTyped() } } else { typed.stop() }
         }
-        level = 0
+        inputLevel.value = 0
         phase = .idle
     }
 
@@ -845,7 +848,7 @@ final class AppModel: ObservableObject {
             entry.turnaroundSeconds = finishClock.elapsed
             entry.wasInserted = false
             record(entry)
-            level = 0
+            inputLevel.value = 0
             phase = .idle
             // Shown, not logged: Windows' controller raises the notice and writes no log line for it (SYS-011).
             notice(message, kind: .warning)
@@ -914,7 +917,7 @@ final class AppModel: ObservableObject {
         limitTimer = nil
         live?.stop() // whatever was typed live stays
         live = nil
-        level = 0
+        inputLevel.value = 0
         phase = .idle
         aiNotice = nil
         if let error = error as? UserFacingError {
@@ -1796,4 +1799,10 @@ final class LevelMeter: ObservableObject {
     func tick() {
         if state.tick() { columns = state.columns }
     }
+}
+
+/// The microphone's level while a dictation records (0…1), watched only by the page that draws it.
+@MainActor
+final class InputLevel: ObservableObject {
+    @Published var value: Float = 0
 }
