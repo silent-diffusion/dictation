@@ -249,6 +249,9 @@ final class MarkdownStyler {
     }
 
     /// Style the text; `open` is the line being edited. Returns whether anything was restyled.
+    /// A code fence's line, compiled once (styling runs on every edit).
+    private static let fence = try! NSRegularExpression(pattern: #"^\s*```"#)
+
     @discardableResult
     func apply(_ storage: NSTextStorage, open: Int?) -> Bool {
         let ns = storage.string as NSString
@@ -256,9 +259,8 @@ final class MarkdownStyler {
         var info = [LineInfo](repeating: LineInfo(), count: lines.count)
         var spans = [[NotesMarkdown.Span]](repeating: [], count: lines.count)
         var blocks = [NotesMarkdown.Block?](repeating: nil, count: lines.count)
-        let fence = try! NSRegularExpression(pattern: #"^\s*```"#)
         func isFence(_ i: Int) -> Bool {
-            i < lines.count && fence.firstMatch(in: storage.string, range: lines[i].content) != nil
+            i < lines.count && Self.fence.firstMatch(in: storage.string, range: lines[i].content) != nil
         }
         for b in NotesMarkdown.parse(storage.string, escapesApart: true) { // rendered in place: each span at its own characters
             let first = Self.lineIndex(lines, b.offset)
