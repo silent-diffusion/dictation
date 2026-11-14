@@ -148,7 +148,7 @@ public enum OllamaRuntime {
             let p = Process()
             p.executableURL = URL(fileURLWithPath: "/bin/sh")
             p.arguments = ["-c", Self.watchdog, "oberton-ollama", OllamaRuntime.executable.path, String(getpid())]
-            var env = ProcessInfo.processInfo.environment
+            var env = Self.withoutOllamaSettings(ProcessInfo.processInfo.environment)
             env["OLLAMA_HOST"] = "127.0.0.1:\(endpoint.port ?? 11434)"
             env["OLLAMA_MODELS"] = OllamaRuntime.modelsDir.path
             env["OLLAMA_NO_CLOUD"] = "1"
@@ -179,6 +179,13 @@ public enum OllamaRuntime {
                 try await Task.sleep(for: .milliseconds(500))
             }
             throw UserFacingError(OllamaRuntime.didntStart)
+        }
+
+        /// The environment `ollama serve` starts from: Oberton's own, without any OLLAMA_ setting it inherited. Oberton
+        /// sets the ones it means (host, models folder, no cloud, keep-alive); an inherited OLLAMA_DEBUG would make
+        /// the runtime log prompts (its output goes into Oberton's log), and OLLAMA_ORIGINS would open it to web pages.
+        static func withoutOllamaSettings(_ env: [String: String]) -> [String: String] {
+            env.filter { !$0.key.uppercased().hasPrefix("OLLAMA_") }
         }
 
         /// `sh -c <this> oberton-ollama <ollama> <oberton's pid>`: runs `ollama serve`, and stops it when Oberton is

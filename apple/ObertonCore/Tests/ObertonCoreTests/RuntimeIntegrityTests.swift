@@ -99,6 +99,11 @@ import Testing
         try RuntimeIntegrity.checkSignatures(in: dir, team: OllamaRuntime.teamID)
     }
 
+    @Test func theRuntimeStartsWithoutInheritedOllamaSettings() {
+        let env = OllamaRuntime.Host.withoutOllamaSettings(["PATH": "/usr/bin", "OLLAMA_DEBUG": "1", "ollama_origins": "*", "HOME": "/home/x"])
+        #expect(env == ["PATH": "/usr/bin", "HOME": "/home/x"])
+    }
+
     @Test func aFolderThatCannotBeReadFailsTheCheck() throws {
         let dir = try scratch()
         defer { try? FileManager.default.removeItem(at: dir) }
