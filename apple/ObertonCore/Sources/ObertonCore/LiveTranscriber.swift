@@ -112,9 +112,39 @@ public final class LiveTranscriber: @unchecked Sendable {
         }
         let module = SpeechTranscriber(locale: supported, preset: .progressiveTranscription)
         if let request = try await AssetInventory.assetInstallationRequest(supporting: [module]) {
-            try await request.downloadAndInstall()
+            // After the first-run setup too (the language was changed, or the system removed the model), the wait is
+            // shown with its real progress: the fraction the system reports, read every 200 ms as `download` does.
+            let report = downloadLock.withLock { downloadReport }
+            let watch = Task { @MainActor in
+                while !Task.isCancelled {
+                    let p = request.progress
+                    report?(p.totalUnitCount > 0 ? p.fractionCompleted : nil, false)
+                    try? await Task.sleep(for: .milliseconds(200))
+                }
+            }
+            do { try await request.downloadAndInstall() } catch {
+                watch.cancel()
+                await report?(nil, true)
+                throw error
+            }
+            watch.cancel()
+            await report?(1, true)
         }
         return supported
+    }
+
+    private static let downloadLock = NSLock()
+    nonisolated(unsafe) private static var downloadReport: (@MainActor (_ fraction: Double?, _ finished: Bool) -> Void)?
+
+    /// Who hears about a speech-model download that `prepare` had to start (dictation, Extended Notes, a History
+    /// re-run, the warm-up): the fraction done (nil while unknown) while it runs, then once more with `finished`.
+    public static func onModelDownload(_ report: (@MainActor (_ fraction: Double?, _ finished: Bool) -> Void)?) {
+        downloadLock.withLock { downloadReport = report }
+    }
+
+    /// The status line's words for a download in progress: "Speech: Downloading the speech model (Apple Speech) 42%…".
+    public static func downloadStatus(_ fraction: Double?) -> String {
+        "Speech: Downloading the speech model (Apple Speech)" + (fraction.map { " \(Int((max(0, min(1, $0)) * 100).rounded(.down)))%" } ?? "") + "…"
     }
 
     /// The first-run setup: download the speech model for this language if it isn't on the device yet, reporting the

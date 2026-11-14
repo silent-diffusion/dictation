@@ -208,6 +208,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var micStatus: String?
     /// Settings › Speech recognition's status line ("Speech: Ready · …"), and whether it is a good one.
     @Published private(set) var speechStatus = "Speech: starting…"
+    /// The status line's words before a speech-model download took it over.
+    private var statusBeforeDownload: String?
     @Published private(set) var speechOK = false
     /// The Whisper model downloading now (Settings › Speech recognition and Models), how far it got (nil while
     /// unknown), and the last download's problem.
@@ -366,6 +368,19 @@ final class AppModel: ObservableObject {
             guard let self else { return }
             inputLevel.value = level
             if phase == .recording { meter.hear(level) }
+        }
+        // A speech model the system has to download again (the language changed, or it was removed): the status line
+        // counts it up, and gets its words back when it ends (what follows, ready or an error, sets its own).
+        LiveTranscriber.onModelDownload { [weak self] fraction, finished in
+            guard let self else { return }
+            if finished {
+                if let before = statusBeforeDownload, speechStatus.hasPrefix(LiveTranscriber.downloadStatus(nil).dropLast()) { speechStatus = before }
+                statusBeforeDownload = nil
+                return
+            }
+            if statusBeforeDownload == nil { statusBeforeDownload = speechStatus }
+            let status = LiveTranscriber.downloadStatus(fraction)
+            if speechStatus != status { speechStatus = status }
         }
         transcriber.onSilence = { [weak self] in
             guard self?.phase == .recording else { return }

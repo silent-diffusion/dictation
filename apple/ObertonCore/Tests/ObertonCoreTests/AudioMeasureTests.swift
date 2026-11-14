@@ -35,3 +35,13 @@ import Testing
         #expect(WhisperDictation.partialDue(count: max(new, first) + new, last: max(new, first)))
     }
 }
+
+/// A speech-model download after setup counts up in the status line with the system's real fraction.
+@Suite struct SpeechDownloadStatusTests {
+    @Test func theStatusLineCountsUp() {
+        #expect(LiveTranscriber.downloadStatus(nil) == "Speech: Downloading the speech model (Apple Speech)…")
+        #expect(LiveTranscriber.downloadStatus(0) == "Speech: Downloading the speech model (Apple Speech) 0%…")
+        #expect(LiveTranscriber.downloadStatus(0.429) == "Speech: Downloading the speech model (Apple Speech) 42%…")
+        #expect(LiveTranscriber.downloadStatus(1.2) == "Speech: Downloading the speech model (Apple Speech) 100%…")
+    }
+}
