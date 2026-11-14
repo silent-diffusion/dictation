@@ -402,12 +402,15 @@ public enum KeyStore {
     public static func set(_ provider: ModelID.Provider, _ key: String?) {
         let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
                                 kSecAttrAccount as String: provider.rawValue]
-        SecItemDelete(q as CFDictionary)
+        let removed = SecItemDelete(q as CFDictionary)
+        if removed != errSecSuccess, removed != errSecItemNotFound { CoreLog.warn("Keychain: removing the \(provider.rawValue) key failed (\(removed))") }
         // As Windows' SecretStore.Protect: trimmed of spaces and line breaks (a pasted key often ends in one), blank = none.
         guard let key = key?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty else { return }
         var add = q
         add[kSecValueData as String] = Data(key.utf8)
         add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        SecItemAdd(add as CFDictionary, nil)
+        // The status only, never the key: a save that failed would otherwise look like a key that was saved.
+        let added = SecItemAdd(add as CFDictionary, nil)
+        if added != errSecSuccess { CoreLog.error("Keychain: saving the \(provider.rawValue) key failed (\(added))") }
     }
 }
