@@ -742,6 +742,24 @@ final class ConnectWatch: NSObject, URLSessionTaskDelegate, @unchecked Sendable 
 
     func urlSession(_ session: URLSession, didCreateTask task: URLSessionTask) { lock.withLock { self.task = task } }
 
+    /// A redirect is followed only to the same host, and never from https down to http: the request carries the
+    /// dictation and the user's key, and they go to the service the user chose, not wherever it points next. A
+    /// refused redirect leaves the 3xx reply as the answer, which is shown as the service's error.
+    static func follows(redirectTo new: URL?, from old: URL?) -> Bool {
+        guard let new, let old, let newHost = new.host?.lowercased(), newHost == old.host?.lowercased() else { return false }
+        return !(old.scheme?.lowercased() == "https" && new.scheme?.lowercased() != "https")
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
+        if Self.follows(redirectTo: request.url, from: task.currentRequest?.url ?? response.url) {
+            completionHandler(request)
+        } else {
+            CoreLog.warn("A cloud request was redirected to another host; not followed")
+            completionHandler(nil)
+        }
+    }
+
     var connected: Bool {
         lock.withLock { task.map { $0.countOfBytesSent > 0 || $0.countOfBytesReceived > 0 || $0.response != nil } ?? false }
     }
