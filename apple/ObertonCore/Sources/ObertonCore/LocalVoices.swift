@@ -275,6 +275,8 @@ enum NPZ {
         let magic = Data([0x93]) + "NUMPY".data(using: .ascii)!
         guard let m = file.range(of: magic, in: at.upperBound..<min(file.count, at.upperBound + 512)) else { return nil }
         let base = m.lowerBound
+        // A cut-off or damaged file is "no such array" (the voice then fails with its own message), never a crash.
+        guard base + 12 <= file.count else { return nil }
         let major = file[base + 6]
         let headerLength: Int
         let start: Int
@@ -285,10 +287,16 @@ enum NPZ {
             headerLength = Int(file[base + 8]) | Int(file[base + 9]) << 8 | Int(file[base + 10]) << 16 | Int(file[base + 11]) << 24
             start = base + 12 + headerLength
         }
+        guard start <= file.count else { return nil }
         let header = String(decoding: file[(start - headerLength)..<start], as: UTF8.self)
         guard header.contains("<f4"), !header.contains("'fortran_order': True"),
               let shape = header.range(of: #"\(([0-9, ]*)\)"#, options: .regularExpression) else { return nil }
-        let count = header[shape].split(whereSeparator: { !$0.isNumber }).compactMap { Int($0) }.reduce(1, *)
+        var count = 1
+        for n in header[shape].split(whereSeparator: { !$0.isNumber }).compactMap({ Int($0) }) {
+            let (product, overflow) = count.multipliedReportingOverflow(by: n)
+            guard !overflow, product <= file.count else { return nil } // more values than the file has bytes
+            count = product
+        }
         guard start + count * 4 <= file.count else { return nil }
         return OnnxEnvironment.floats(file[start..<(start + count * 4)])
     }

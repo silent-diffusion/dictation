@@ -204,6 +204,19 @@ import Testing
         let file = Data("PK\u{3}\u{4}junk".utf8) + "af_test.npy".data(using: .utf8)! + Data(count: 20) + npy
         #expect(NPZ.array(named: "af_test.npy", in: file) == [1, 2, 3, 4])
         #expect(NPZ.array(named: "af_other.npy", in: file) == nil)
+        // A cut-off or damaged voices file is "no such array", never a crash: cut at every length, a header length
+        // that points past the end, and a shape too large to multiply.
+        for cut in 0..<file.count { _ = NPZ.array(named: "af_test.npy", in: file.prefix(cut)) }
+        let at = file.range(of: Data([0x93]) + "NUMPY".data(using: .ascii)!)!.lowerBound
+        var long = file
+        long[at + 8] = 0xFF; long[at + 9] = 0xFF
+        #expect(NPZ.array(named: "af_test.npy", in: long) == nil)
+        let huge = file.prefix(at) + npy.prefix(10)
+            + Data("{'descr': '<f4', 'shape': (9223372036854775807, 9223372036854775807), }".utf8)
+        var hugeFile = Data(huge)
+        hugeFile[at + 8] = UInt8(hugeFile.count - at - 10)
+        hugeFile[at + 9] = 0
+        #expect(NPZ.array(named: "af_test.npy", in: hugeFile) == nil)
     }
 
     @Test func kokoroTokensAndChunks() {
