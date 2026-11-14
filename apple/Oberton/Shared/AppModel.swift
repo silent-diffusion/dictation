@@ -1363,7 +1363,15 @@ final class AppModel: ObservableObject {
     }
 
     /// The debug snapshots run outside the sandbox: they must never write to the real data folder.
-    static var snapshotMode: Bool { ProcessInfo.processInfo.environment["OBERTON_SNAPSHOT"] != nil }
+    /// DEBUG builds only: a release build ignores OBERTON_SNAPSHOT (as it does OBERTON_DATA_DIR), so nothing set in
+    /// its environment can skip the setup or move History to a temporary folder.
+    static var snapshotMode: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.environment["OBERTON_SNAPSHOT"] != nil
+        #else
+        false
+        #endif
+    }
 
     #if DEBUG
     /// Snapshot mode only: made-up counts so the Analytics charts aren't empty. Kept in memory, never saved.

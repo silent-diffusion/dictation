@@ -948,7 +948,7 @@ struct CopyButton: View {
 /// A page's scrolling area. (The debug snapshots lay pages out flat, since the image renderer can't draw scroll views.)
 struct PageScroll<Content: View>: View {
     @ViewBuilder var content: Content
-    static var flat: Bool { ProcessInfo.processInfo.environment["OBERTON_SNAPSHOT"] != nil }
+    static var flat: Bool { AppModel.snapshotMode }
 
     var body: some View {
         if Self.flat { content.fixedSize(horizontal: false, vertical: true).frame(maxHeight: .infinity, alignment: .top) } else { ScrollView { content } }

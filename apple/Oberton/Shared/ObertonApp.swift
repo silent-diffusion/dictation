@@ -150,8 +150,12 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, N
 
     /// A DEBUG run that draws or checks something and quits (snapshots, stress and live checks): no start-up card.
     private static var debugRun: Bool {
+        #if DEBUG
         let env = ProcessInfo.processInfo.environment
         return ["OBERTON_SNAPSHOT", "OBERTON_STRESS", "OBERTON_WHISPER_CHECK", "OBERTON_WORDS_CHECK", "OBERTON_LIVE_CHECK"].contains { env[$0] != nil }
+        #else
+        return false
+        #endif
     }
 
     /// CloseSplash: fades out over 250 ms.
