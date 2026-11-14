@@ -99,6 +99,24 @@ import Testing
         try RuntimeIntegrity.checkSignatures(in: dir, team: OllamaRuntime.teamID)
     }
 
+    @Test func aFolderThatCannotBeReadFailsTheCheck() throws {
+        let dir = try scratch()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        // No folder at all: nothing was checked, so nothing passes.
+        #expect(throws: RuntimeIntegrity.Problem.self) {
+            try RuntimeIntegrity.checkSignatures(in: dir.appending(path: "missing"), team: OllamaRuntime.teamID)
+        }
+        // A subfolder the walk can't open could hide an unsigned library.
+        let hidden = dir.appending(path: "hidden", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: hidden, withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: hidden.appending(path: "lib.dylib"))
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: hidden.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: hidden.path) }
+        #expect(throws: RuntimeIntegrity.Problem.unreadable(file: "hidden")) {
+            try RuntimeIntegrity.checkSignatures(in: dir, team: OllamaRuntime.teamID)
+        }
+    }
+
     /// The real release passes: `OBERTON_OLLAMA_TEST_DIR=<the unpacked ollama-darwin.tgz> swift test --filter RuntimeIntegrityTests`.
     @Test(.enabled(if: ProcessInfo.processInfo.environment["OBERTON_OLLAMA_TEST_DIR"] != nil))
     func theRealReleasePasses() throws {

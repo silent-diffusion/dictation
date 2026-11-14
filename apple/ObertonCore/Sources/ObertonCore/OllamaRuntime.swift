@@ -220,6 +220,7 @@ enum RuntimeIntegrity {
         case hashMismatch(actual: String)
         case badSignature(file: String, status: OSStatus)
         case linkOutside(file: String)
+        case unreadable(file: String)
 
         var description: String {
             switch self {
@@ -227,6 +228,7 @@ enum RuntimeIntegrity {
             case .hashMismatch(let actual): "SHA-256 \(actual) isn't the pinned one"
             case .badSignature(let file, let status): "\(file): code signature check failed (\(status))"
             case .linkOutside(let file): "\(file): a link pointing out of the folder"
+            case .unreadable(let file): "\(file): couldn't be read, so its signature wasn't checked"
             }
         }
     }
@@ -269,7 +271,13 @@ enum RuntimeIntegrity {
     static func checkSignatures(in dir: URL, team: String) throws {
         let root = dir.resolvingSymlinksInPath().standardizedFileURL.path
         let keys: [URLResourceKey] = [.isSymbolicLinkKey, .isRegularFileKey]
-        guard let walk = FileManager.default.enumerator(at: dir, includingPropertiesForKeys: keys) else { return }
+        // Fails closed: a folder that can't be walked, or a part of it that can't be read, is a failed check, not
+        // an empty one.
+        var unreadable: String?
+        guard let walk = FileManager.default.enumerator(at: dir, includingPropertiesForKeys: keys, errorHandler: { url, _ in
+            unreadable = unreadable ?? url.lastPathComponent
+            return true
+        }) else { throw Problem.unreadable(file: dir.lastPathComponent) }
         for case let url as URL in walk {
             let values = try url.resourceValues(forKeys: Set(keys))
             // Its path inside `dir` ("mlx_metal_v3/libmlx.dylib"), from the resolved folder it sits in.
@@ -288,6 +296,7 @@ enum RuntimeIntegrity {
             let status = checkSignature(of: url, team: team)
             guard status == errSecSuccess else { throw Problem.badSignature(file: name, status: status) }
         }
+        if let unreadable { throw Problem.unreadable(file: unreadable) }
     }
 
     /// A Mach-O file (thin or universal), by its first four bytes.
