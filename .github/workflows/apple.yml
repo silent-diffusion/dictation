@@ -1,0 +1,37 @@
+name: Apple
+
+on:
+  push:
+    branches: [main]
+    paths: ['apple/**', '.github/workflows/apple.yml']
+  pull_request:
+    paths: ['apple/**', '.github/workflows/apple.yml']
+
+jobs:
+  build-and-test:
+    runs-on: macos-26
+    defaults:
+      run:
+        working-directory: apple
+    steps:
+      - uses: actions/checkout@v5
+      - name: Use the newest Xcode
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          xcodebuild -version
+          swift --version
+      - name: Test the core
+        run: swift test --package-path ObertonCore
+      # No signing in CI: the development team lives in Local.xcconfig, which isn't in the repo.
+      - name: Build for macOS
+        run: xcodebuild -project Oberton.xcodeproj -scheme Oberton -destination 'generic/platform=macOS' -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
+      - name: Build for iOS Simulator
+        run: xcodebuild -project Oberton.xcodeproj -scheme Oberton -destination 'generic/platform=iOS Simulator' -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
+      # The direct download (Developer ID, not sandboxed, Sparkle), unsigned here as well. Same build folder: the packages are
+      # built once; its Oberton.app replaces the App Store one there.
+      - name: Build the direct download for macOS
+        run: xcodebuild -project Oberton.xcodeproj -scheme "Oberton Direct" -destination 'generic/platform=macOS' -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
+      - name: Check the direct build's Info.plist
+        run: scripts/check-direct-plist.sh
+      - name: Check the bundle IDs (Debug is com.silentdiffusion.oberton.dev)
+        run: scripts/check-bundle-ids.sh
